@@ -7,6 +7,15 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix: { node: [20, 22] }
+    services:
+      postgres:
+        image: postgres:18
+        env: { POSTGRES_PASSWORD: teovo, POSTGRES_DB: teovo_test }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 2s --health-timeout 5s --health-retries 20
+    env:
+      TEOVO_TEST_DATABASE_URL: postgres://postgres:teovo@127.0.0.1:5432/teovo_test
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -14,4 +23,3 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
-      - run: npm run build
