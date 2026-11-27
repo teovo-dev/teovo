@@ -1,47 +1,94 @@
-/* Optional defaults for @teovo/react. Every rule targets a tv- class, so the app's own styles win easily. */
-.tv-panel { display: flex; flex-direction: column; height: 100%; font: inherit; }
+/*
+ * Optional defaults for @teovo/react. Every colour, the corner radius and the font are CSS variables, so an app can
+ * theme the panel with the `theme` prop or its own CSS: .tv-panel { --tv-accent: #0f766e; }
+ */
+.tv-panel, .tv-sheet-root {
+  --tv-accent: #4f46e5;
+  --tv-accent-text: #ffffff;
+  --tv-bg: #ffffff;
+  --tv-fg: #111827;
+  --tv-muted: #6b7280;
+  --tv-border: #e5e7eb;
+  --tv-user-bg: #eef2ff;
+  --tv-error: #b91c1c;
+  --tv-ok: #047857;
+  --tv-radius: 12px;
+  --tv-font: inherit;
+}
+@media (prefers-color-scheme: dark) {
+  .tv-panel:not([data-theme='light']), .tv-sheet-root:not([data-theme='light']) {
+    --tv-bg: #111827; --tv-fg: #f3f4f6; --tv-muted: #9ca3af; --tv-border: #374151; --tv-user-bg: #1e1b4b; --tv-error: #f87171; --tv-ok: #34d399;
+  }
+}
+.tv-panel[data-theme='dark'], .tv-sheet-root[data-theme='dark'] {
+  --tv-bg: #111827; --tv-fg: #f3f4f6; --tv-muted: #9ca3af; --tv-border: #374151; --tv-user-bg: #1e1b4b; --tv-error: #f87171; --tv-ok: #34d399;
+}
+
+.tv-panel { display: flex; flex-direction: column; height: 100%; min-height: 0; font-family: var(--tv-font); color: var(--tv-fg); background: var(--tv-bg); }
+.tv-panel button { font: inherit; }
 .tv-messages { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding: 12px; }
 .tv-message { display: flex; flex-direction: column; gap: 8px; max-width: 90%; }
-.tv-user { align-self: flex-end; background: #eef2ff; border-radius: 12px; padding: 8px 12px; }
+.tv-user { align-self: flex-end; background: var(--tv-user-bg); border-radius: var(--tv-radius); padding: 8px 12px; }
 .tv-assistant { align-self: flex-start; }
 .tv-text { white-space: pre-wrap; }
-.tv-step, .tv-thinking { color: #6b7280; font-size: 0.875em; }
-.tv-error { color: #b91c1c; font-size: 0.875em; }
-.tv-card { border: 1px solid #d1d5db; border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
-.tv-card-title { font-weight: 600; }
-.tv-card-diff th { text-align: left; font-weight: 400; color: #6b7280; padding-right: 8px; }
+.tv-md { white-space: normal; }
+.tv-md p { margin: 0 0 8px; }
+.tv-md p:last-child { margin-bottom: 0; }
+.tv-md ul, .tv-md ol { margin: 0 0 8px; padding-left: 20px; }
+.tv-md code { font-family: ui-monospace, monospace; font-size: 0.9em; background: var(--tv-user-bg); padding: 1px 4px; border-radius: 4px; }
+.tv-md pre { overflow-x: auto; background: var(--tv-user-bg); padding: 8px; border-radius: 8px; }
+.tv-md a { color: var(--tv-accent); }
+.tv-step, .tv-thinking { color: var(--tv-muted); font-size: 0.875em; }
+.tv-error { color: var(--tv-error); font-size: 0.875em; }
+
+.tv-card, .tv-view { border: 1px solid var(--tv-border); border-radius: var(--tv-radius); padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.tv-card-title, .tv-view-title { font-weight: 600; }
+.tv-card-diff th { text-align: left; font-weight: 400; color: var(--tv-muted); padding-right: 8px; }
 .tv-card-buttons { display: flex; gap: 8px; }
-.tv-card-done { color: #047857; font-size: 0.875em; }
-.tv-action { align-self: flex-start; }
-.tv-input { display: flex; gap: 8px; padding: 12px; border-top: 1px solid #e5e7eb; }
-.tv-input textarea { flex: 1; resize: none; font: inherit; }
-@media (prefers-color-scheme: dark) {
-  .tv-user { background: #1e1b4b; }
-  .tv-card, .tv-input { border-color: #374151; }
+.tv-card-buttons button:first-child, .tv-form button[type='submit'], .tv-input button[type='submit'] {
+  background: var(--tv-accent); color: var(--tv-accent-text); border: 0; border-radius: calc(var(--tv-radius) - 4px); padding: 6px 12px; cursor: pointer;
 }
+.tv-card-done { color: var(--tv-ok); font-size: 0.875em; display: flex; gap: 8px; align-items: center; }
+.tv-action { align-self: flex-start; }
+
 .tv-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px; }
-.tv-chip { border: 1px solid #d1d5db; border-radius: 999px; padding: 4px 10px; background: none; font: inherit; font-size: 0.875em; cursor: pointer; }
-.tv-threads { list-style: none; margin: 0; padding: 8px; display: flex; flex-direction: column; gap: 2px; }
-.tv-threads li { display: flex; align-items: center; gap: 4px; }
-.tv-thread { flex: 1; text-align: left; background: none; border: 0; padding: 8px; border-radius: 8px; font: inherit; cursor: pointer; }
-.tv-threads li[aria-current] .tv-thread { background: #eef2ff; }
-.tv-thread-remove { background: none; border: 0; color: #6b7280; cursor: pointer; }
-.tv-view { border: 1px solid #e5e7eb; border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
-.tv-view-title { font-weight: 600; }
-.tv-choices-options { display: flex; flex-wrap: wrap; gap: 6px; }
-.tv-table { overflow-x: auto; }
-.tv-table table { border-collapse: collapse; width: 100%; }
-.tv-table th button { background: none; border: 0; font: inherit; font-weight: 600; cursor: pointer; padding: 0; }
-.tv-table th, .tv-table td { text-align: left; padding: 4px 8px; border-bottom: 1px solid #e5e7eb; }
-.tv-record dl { margin: 0; display: grid; gap: 4px; }
-.tv-record dl > div { display: flex; justify-content: space-between; gap: 12px; }
-.tv-record dt { color: #6b7280; }
-.tv-record dd { margin: 0; }
-.tv-form label { display: flex; flex-direction: column; gap: 2px; }
-.tv-form label span { color: #6b7280; font-size: 0.875em; }
+.tv-chip { border: 1px solid var(--tv-border); border-radius: 999px; padding: 4px 10px; background: none; color: inherit; font-size: 0.875em; cursor: pointer; }
+
+.tv-input { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--tv-border); align-items: flex-end; }
+.tv-input textarea { flex: 1; resize: none; font: inherit; color: inherit; background: transparent; border: 1px solid var(--tv-border); border-radius: calc(var(--tv-radius) - 4px); padding: 6px 8px; }
+.tv-mic[aria-pressed='true'] { color: var(--tv-error); }
+
 .tv-pending { list-style: none; display: flex; gap: 6px; margin: 0; padding: 0 12px; }
 .tv-pending li { position: relative; }
 .tv-pending img { width: 56px; height: 56px; object-fit: cover; border-radius: 8px; }
 .tv-pending button { position: absolute; top: -6px; right: -6px; border-radius: 999px; border: 0; width: 20px; height: 20px; cursor: pointer; }
 .tv-attachment { max-width: 220px; max-height: 220px; border-radius: 8px; object-fit: cover; }
-.tv-mic[aria-pressed='true'] { color: #b91c1c; }
+
+.tv-choices-options { display: flex; flex-wrap: wrap; gap: 6px; }
+.tv-table { overflow-x: auto; }
+.tv-table table { border-collapse: collapse; width: 100%; }
+.tv-table th button { background: none; border: 0; color: inherit; font-weight: 600; cursor: pointer; padding: 0; }
+.tv-table th, .tv-table td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--tv-border); }
+.tv-table td[data-format='money'], .tv-table td[data-format='number'] { text-align: right; font-variant-numeric: tabular-nums; }
+.tv-record dl { margin: 0; display: grid; gap: 4px; }
+.tv-record dl > div { display: flex; justify-content: space-between; gap: 12px; }
+.tv-record dt { color: var(--tv-muted); }
+.tv-record dd { margin: 0; }
+.tv-form label { display: flex; flex-direction: column; gap: 2px; }
+.tv-form label span { color: var(--tv-muted); font-size: 0.875em; }
+
+.tv-threads { list-style: none; margin: 0; padding: 8px; display: flex; flex-direction: column; gap: 2px; }
+.tv-threads li { display: flex; align-items: center; gap: 4px; }
+.tv-thread { flex: 1; text-align: left; background: none; border: 0; color: inherit; padding: 8px; border-radius: 8px; font: inherit; cursor: pointer; }
+.tv-threads li[aria-current] .tv-thread { background: var(--tv-user-bg); }
+.tv-thread-remove { background: none; border: 0; color: var(--tv-muted); cursor: pointer; }
+
+/* The sheet: a drawer on the right on wide screens, a bottom sheet on phones. */
+.tv-sheet-open { position: fixed; right: 16px; bottom: 16px; z-index: 1000; background: var(--tv-accent); color: var(--tv-accent-text); border: 0; border-radius: 999px; padding: 12px 18px; font: inherit; cursor: pointer; box-shadow: 0 4px 16px rgb(0 0 0 / 0.2); }
+.tv-sheet-backdrop { position: fixed; inset: 0; z-index: 1000; background: rgb(0 0 0 / 0.3); }
+.tv-sheet { position: fixed; z-index: 1001; top: 0; right: 0; bottom: 0; width: min(420px, 100vw); background: var(--tv-bg); color: var(--tv-fg); display: flex; flex-direction: column; box-shadow: -4px 0 24px rgb(0 0 0 / 0.2); }
+.tv-sheet-close { position: absolute; top: 8px; right: 8px; background: none; border: 0; color: var(--tv-muted); font-size: 1.25em; cursor: pointer; z-index: 1; }
+.tv-sheet > .tv-panel { flex: 1; min-height: 0; }
+@media (max-width: 640px) {
+  .tv-sheet { top: auto; left: 0; width: 100vw; height: 85vh; border-radius: var(--tv-radius) var(--tv-radius) 0 0; box-shadow: 0 -4px 24px rgb(0 0 0 / 0.2); padding-bottom: env(safe-area-inset-bottom); }
+}

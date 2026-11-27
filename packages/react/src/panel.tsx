@@ -1,5 +1,7 @@
 import { useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { readFile, useVoice, type PendingFile } from './input.js'
+import { Markdown } from './markdown.js'
+import { themeStyle, type Theme } from './sheet.js'
 import { useAssistant } from './provider.js'
 import type { Action, Card, CardDecision, Step, TeovoMessage, View } from './types.js'
 import { defaultViews, isCurrent, type ViewComponent } from './views.js'
@@ -8,8 +10,10 @@ export interface AssistantPanelProps {
   /** Shown before the first message. */
   welcome?: ReactNode
   placeholder?: string
-  /** Draw the reply text yourself, e.g. with a Markdown renderer. Default: plain text. */
+  /** Draw the reply text yourself. Default: Teovo's small, HTML-free Markdown for replies, plain text for the user's own. */
   renderText?: (text: string) => ReactNode
+  /** Colours, radius and font as CSS variables; see styles.css. */
+  theme?: Theme
   /** Draw a card yourself. `decide` sends Confirm, Skip or Undo to the server (or the provider's onCard). */
   renderCard?: (card: Card, decide: (d: CardDecision) => void, state: CardState) => ReactNode
   /** Friendly names for tools while they run, e.g. { get_sales: 'Looking at sales' }. */
@@ -66,7 +70,7 @@ export function AssistantPanel(props: AssistantPanelProps) {
   }
 
   return (
-    <section className={`tv-panel ${props.className ?? ''}`} aria-label="Assistant">
+    <section className={`tv-panel ${props.className ?? ''}`} aria-label="Assistant" data-theme={props.theme?.mode} style={themeStyle(props.theme)}>
       <div className="tv-messages" role="log" aria-live="polite">
         {chat.messages.length === 0 && props.welcome ? <div className="tv-welcome">{props.welcome}</div> : null}
         {chat.messages.map((m) => <Message key={m.id} message={m} ask={ask} {...props} />)}
@@ -129,7 +133,11 @@ function Message({ message, ask, ...props }: { message: TeovoMessage; ask: (t: s
   return (
     <div className={`tv-message tv-${message.role}`} data-role={message.role}>
       {message.parts.map((p, i) => {
-        if (p.type === 'text') return p.text ? <div key={i} className="tv-text">{props.renderText ? props.renderText(p.text) : p.text}</div> : null
+        if (p.type === 'text') {
+          if (!p.text) return null
+          const drawn = props.renderText ? props.renderText(p.text) : message.role === 'assistant' ? <Markdown text={p.text} /> : p.text
+          return <div key={i} className="tv-text">{drawn}</div>
+        }
         if (p.type === 'file') {
           return p.mediaType.startsWith('image/')
             ? <img key={i} className="tv-attachment" src={p.url} alt={p.filename ?? 'Picture'} />
