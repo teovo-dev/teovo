@@ -36,6 +36,8 @@ interface AssistantState {
   /** Calls the handler: path under the endpoint, with the provider's headers and fetch. */
   request: (path: string, init?: RequestInit) => Promise<Response>
   setPage: (page: Page | undefined) => void
+  /** The page the assistant is told about with each message (set by useAssistantContext). */
+  page: Page | undefined
   /** Chips and hint for now: the screen's when the chat is idle, the follow-ups after a reply. */
   suggestions: Suggestions
   clearSuggestions: () => void
@@ -80,10 +82,14 @@ export function AssistantProvider(props: AssistantProviderProps) {
     onData: (part) => { if (part.type === 'data-suggestions') setSuggestions(part.data as Suggestions) },
   })
 
-  // The screen's own suggestions: fetched when the panel opens, when the screen changes, and on New chat.
+  // The screen's own suggestions: fetched when the panel opens, when the screen changes (also mid-conversation: the
+  // user moved, so the last reply's follow-ups no longer fit), and on New chat.
   const empty = chat.messages.length === 0
+  const shownFor = useRef<string | null>(null)
   useEffect(() => {
-    if (!empty) return
+    // Not when a conversation merely starts: the reply brings its own follow-ups.
+    if (!empty && shownFor.current === pageKey) return
+    shownFor.current = pageKey
     let live = true
     void (async () => {
       const p = latest.current
@@ -164,8 +170,9 @@ export function AssistantProvider(props: AssistantProviderProps) {
     return body.card ?? {}
   }, [])
 
-  const value = useMemo<AssistantState>(() => ({ chat, threadId, newChat, openThread, submitForm, request, setPage, suggestions, clearSuggestions, decideCard, onAction: props.onAction }),
-    [chat, threadId, newChat, openThread, submitForm, request, setPage, suggestions, clearSuggestions, decideCard, props.onAction])
+  const currentPage = useMemo(() => (pageKey && pageKey !== 'null' ? JSON.parse(pageKey) as Page : undefined), [pageKey])
+  const value = useMemo<AssistantState>(() => ({ chat, threadId, newChat, openThread, submitForm, request, setPage, page: currentPage, suggestions, clearSuggestions, decideCard, onAction: props.onAction }),
+    [chat, threadId, newChat, openThread, submitForm, request, setPage, currentPage, suggestions, clearSuggestions, decideCard, props.onAction])
   return <Ctx.Provider value={value}>{props.children}</Ctx.Provider>
 }
 

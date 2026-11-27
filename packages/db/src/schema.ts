@@ -135,6 +135,11 @@ const proposalSources: Migration = {
   sql: `alter table tv_proposals add column if not exists untrusted_sources jsonb;`,
 }
 
+const proposalFields: Migration = {
+  id: '0006_proposal_fields',
+  sql: `alter table tv_proposals add column if not exists fields jsonb;`,
+}
+
 const formats: Migration = {
   id: '0003_tenant_formats',
   sql: `alter table tv_tenant_settings add column if not exists formats jsonb;`,
@@ -179,7 +184,7 @@ export function migrations(options: SchemaOptions = {}): Migration[] {
   const tables = ['tv_threads', 'tv_messages', 'tv_runs', 'tv_run_steps', 'tv_usage', 'tv_usage_daily', 'tv_budgets', 'tv_tenant_settings']
   if (options.features?.proposals) { list.push(proposals); tables.push('tv_proposals') }
   list.push(formats)
-  if (options.features?.proposals) list.push(proposalSources)
+  if (options.features?.proposals) list.push(proposalSources, proposalFields)
   if (options.features?.files) { list.push(files); tables.push('tv_files') }
   if (options.rls) list.push({ ...rlsMigration(tables, options.rls), id: `0100_rls_${options.features?.proposals ? 'with_proposals' : 'core'}${options.features?.files ? '_files' : ''}` })
   return list

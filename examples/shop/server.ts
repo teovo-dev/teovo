@@ -70,10 +70,15 @@ const teovo = createAssistant({
   ],
   tools: [
     defineTool({
-      name: 'list_orders', kind: 'read', description: 'Orders with what is paid and due. unpaidOnly for those with money due.',
+      name: 'list_orders', kind: 'read', description: 'Orders with what is paid and due, and customer notes. unpaidOnly for those with money due.',
       input: z.object({ unpaidOnly: z.boolean().optional() }),
       run: ({ unpaidOnly }, ctx) => shop.orders.filter((o) => !unpaidOnly || due(o) > 0)
         .map((o) => ({ ...o, due: due(o), note: o.note ? ctx.untrusted(o.note, 'customer note') : undefined })),
+    }),
+    defineTool({
+      name: 'get_order', kind: 'read', description: 'One order: customer, total, paid, due, date and the customer note if any.',
+      input: z.object({ no: z.number() }),
+      run: ({ no }, ctx) => { const o = order(no); return { ...o, due: due(o), note: o.note ? ctx.untrusted(o.note, 'customer note') : undefined } },
     }),
     defineTool({
       name: 'record_payment', kind: 'propose', description: 'Prepare recording a payment against an order.',
@@ -81,13 +86,13 @@ const teovo = createAssistant({
       run: ({ no, amount }) => {
         const o = order(no)
         if (amount > due(o)) throw new Error(`Order #${no} has only ₹${due(o)} due.`)
-        return { kind: 'record_payment', title: `Payment ₹${amount} for order #${no} (${o.customer})`, before: { paid: o.paid }, after: { paid: o.paid + amount }, payload: { no, amount } }
+        return { kind: 'record_payment', title: `Payment ₹${amount} for order #${no} (${o.customer})`, before: { paid: o.paid }, after: { paid: o.paid + amount }, payload: { no, amount }, fields: [{ key: 'paid', label: 'Paid', format: 'money' as const }] }
       },
     }),
     defineTool({
-      name: 'change_total', kind: 'propose', roles: ['owner'], description: 'Prepare changing an order total. Owner only.',
+      name: 'change_total', kind: 'propose', roles: ['owner'], description: 'Prepare changing an order total.',
       input: z.object({ no: z.number(), total: z.number().positive() }),
-      run: ({ no, total }) => ({ kind: 'change_total', title: `Order #${no} total ₹${order(no).total} → ₹${total}`, before: { total: order(no).total }, after: { total }, payload: { no, total } }),
+      run: ({ no, total }) => ({ kind: 'change_total', title: `Order #${no} total ₹${order(no).total} → ₹${total}`, before: { total: order(no).total }, after: { total }, payload: { no, total }, fields: [{ key: 'total', label: 'Total', format: 'money' as const }] }),
     }),
     defineTool({
       name: 'list_expenses', kind: 'read', description: 'Expenses so far.', input: z.object({}), run: () => shop.expenses,
@@ -97,7 +102,10 @@ const teovo = createAssistant({
     expense: {
       fields: ['amount', 'vendor', 'date', 'method'],
       description: 'a new expense; method is Cash or UPI as a select',
-      handle: (v) => ({ kind: 'add_expense', title: `Expense ₹${v.amount} to ${v.vendor ?? 'unknown'}`, after: v, payload: v }),
+      handle: (v) => ({
+        kind: 'add_expense', title: `Expense to ${v.vendor ?? 'unknown'}`, after: v, payload: v,
+        fields: [{ key: 'amount', label: 'Amount', format: 'money' as const }, { key: 'vendor', label: 'Vendor' }, { key: 'date', label: 'Date', format: 'date' as const }, { key: 'method', label: 'Paid by' }],
+      }),
     },
   },
   cards: {
@@ -139,11 +147,13 @@ const teovo = createAssistant({
 })
 
 // ---------- HTTP ----------------------------------------------------------------------------------------------------
-async function toRequest(req: IncomingMessage): Promise<Request> {
+async function toRequest(req: IncomingMessage, res: ServerResponse): Promise<Request> {
   const chunks: Buffer[] = []
   for await (const c of req) chunks.push(c as Buffer)
+  // The browser hanging up (Stop, closing the tab) shows on the response, not the request, whose body is already
+  // read. Passing it on as the request's signal is what makes Teovo stop the model instead of paying for the rest.
   const ac = new AbortController()
-  req.on('close', () => { if (!req.complete) ac.abort() })
+  res.on('close', () => { if (!res.writableFinished) ac.abort() })
   return new Request(`http://localhost${req.url}`, {
     method: req.method, headers: req.headers as Record<string, string>, signal: ac.signal,
     ...(req.method === 'GET' || req.method === 'HEAD' ? {} : { body: Buffer.concat(chunks) }),
@@ -154,14 +164,15 @@ async function send(res: ServerResponse, r: Response) {
   res.writeHead(r.status, Object.fromEntries(r.headers))
   if (!r.body) return res.end()
   const reader = r.body.getReader()
-  for (;;) { const { done, value } = await reader.read(); if (done) break; res.write(value) }
+  res.on('close', () => { void reader.cancel().catch(() => {}) })
+  for (;;) { const { done, value } = await reader.read().catch(() => ({ done: true as const, value: undefined })); if (done) break; res.write(value) }
   res.end()
 }
 
 const port = Number(process.env.PORT ?? 8788)
 createServer(async (req, res) => {
   try {
-    if (req.url?.startsWith('/api/assistant/')) return await send(res, await teovo.fetch(await toRequest(req)))
+    if (req.url?.startsWith('/api/assistant/')) return await send(res, await teovo.fetch(await toRequest(req, res)))
     if (req.url === '/api/shop') {
       res.writeHead(200, { 'content-type': 'application/json' })
       return res.end(JSON.stringify({ orders: shop.orders.map(({ phone: _, ...o }) => ({ ...o, due: due(o as Order) })), expenses: shop.expenses }))

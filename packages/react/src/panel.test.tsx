@@ -49,6 +49,41 @@ async function ask(text: string) {
 
 afterEach(() => { cleanup(); gate = undefined })
 
+describe('card values', () => {
+  it('shows a new record as its values, in the given order, with labels, money and dates in the tenant\'s format', async () => {
+    const s = server([call('add_expense', { amount: 1320 }), say('Ready to confirm.')], true, {}, {
+      formats: { locale: 'en-IN', currency: 'INR', timeZone: 'Asia/Kolkata' },
+      tools: [defineTool({ name: 'add_expense', kind: 'propose', description: 'Add', input: z.object({ amount: z.number() }),
+        run: ({ amount }) => ({ kind: 'add_expense', title: 'Expense to Sharma', after: { vendor: 'Sharma', date: '2026-11-26', amount }, payload: {},
+          fields: [{ key: 'amount', label: 'Amount', format: 'money' as const }, { key: 'vendor', label: 'Vendor' }, { key: 'date', label: 'Date' }] }) })],
+    })
+    mount({ fetch: s.fetch })
+    await ask('add it')
+    const card = await screen.findByRole('group', { name: 'Expense to Sharma' })
+    const rows = Array.from(card.querySelectorAll('tr')).map((r) => Array.from(r.children).map((c) => c.textContent))
+    expect(rows).toEqual([['Amount', '₹1,320.00'], ['Vendor', 'Sharma'], ['Date', '26 Nov 2026']])
+    expect(card.textContent).not.toContain('→')
+  })
+})
+
+describe('page label', () => {
+  function Filtered({ unpaid }: { unpaid: boolean }) { useAssistantContext({ path: '/orders', title: 'Orders', state: { filter: unpaid ? 'unpaid' : null, selected: 0 } }); return null }
+
+  it('shows which page the assistant sees, follows the page, and can be hidden or reworded', async () => {
+    const s = server([])
+    const view = render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><Filtered unpaid /><AssistantPanel /></AssistantProvider>)
+    await waitFor(() => expect(document.querySelector('.tv-page')?.textContent).toBe('On Orders · filter: unpaid · selected: 0'))
+    view.rerender(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><Filtered unpaid={false} /><AssistantPanel /></AssistantProvider>)
+    await waitFor(() => expect(document.querySelector('.tv-page')?.textContent).toBe('On Orders · selected: 0'))
+    view.rerender(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><AssistantPanel /></AssistantProvider>)
+    await waitFor(() => expect(document.querySelector('.tv-page')).toBeNull())   // no page reported: no label
+    view.rerender(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><Screen path="/orders/142" id="142" /><AssistantPanel pageLabel={(p) => `Order #${p.record?.id}`} /></AssistantProvider>)
+    await waitFor(() => expect(document.querySelector('.tv-page')?.textContent).toBe('Order #142'))
+    view.rerender(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><Screen path="/orders/142" id="142" /><AssistantPanel pageLabel={false} /></AssistantProvider>)
+    expect(document.querySelector('.tv-page')).toBeNull()
+  })
+})
+
 describe('AssistantPanel', () => {
   it('sends only the new message, then continues the same thread', async () => {
     const s = server([say('Sales are ₹950.'), say('Yes, today.')])
@@ -71,7 +106,7 @@ describe('AssistantPanel', () => {
     mount({ fetch: server([call('record_payment', { amount: 200 }), say('Ready to confirm.')]).fetch, onCard })
     await ask('paid 200')
     const card = await screen.findByRole('group', { name: 'Payment ₹200' })
-    expect(card.textContent).toContain('paid0→200')
+    expect(card.textContent).toContain('Paid0→200')
     await screen.findByText('Ready to confirm.')
     await userEvent.click(screen.getByRole('button', { name: 'Confirm' }))
     expect(onCard).toHaveBeenCalledWith(expect.objectContaining({ kind: 'record_payment', payload: { amount: 200 }, status: 'shown' }), 'confirm')
@@ -188,6 +223,16 @@ describe('AssistantPanel', () => {
     await screen.findByRole('button', { name: 'On /expenses' })
   })
 
+  it('fetches the new screen\'s chips mid-conversation too, replacing the last reply\'s follow-ups', async () => {
+    const s = server([say('ok')], true, {}, { suggestions: ({ page, after }) => ({ suggestions: [after ? 'Follow-up' : `On ${page?.path ?? 'home'}`] }) })
+    const view = mount({ fetch: s.fetch }, <Screen path="/orders" />)
+    await ask('hello')
+    await screen.findByRole('button', { name: 'Follow-up' })
+    view.rerender(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><Screen path="/orders/142" id="142" /><AssistantPanel /></AssistantProvider>)
+    await screen.findByRole('button', { name: 'On /orders/142' })
+    expect(screen.queryByRole('button', { name: 'Follow-up' })).toBeNull()
+  })
+
   it('lists earlier conversations, opens one, and continues it', async () => {
     const s = server([say('First answer.'), say('Second answer.'), say('Continued.')])
     const view = mount({ fetch: s.fetch })
@@ -260,10 +305,10 @@ describe('AssistantPanel', () => {
     await ask('spent 450 on milk')
     const amount = await screen.findByDisplayValue('450')
     await userEvent.clear(amount)
-    await userEvent.click(screen.getByRole('button', { name: 'Prepare' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Continue' }))
     expect((await screen.findByRole('alert')).textContent).toBe('Amount is required.')
     await userEvent.type(amount, '480')
-    await userEvent.click(screen.getByRole('button', { name: 'Prepare' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Continue' }))
     await screen.findByRole('group', { name: 'Expense ₹480 to Milk depot' })
     expect(screen.getByText('Sent')).toBeTruthy()
     await userEvent.click(screen.getByRole('button', { name: 'Confirm' }))

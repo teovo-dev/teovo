@@ -33,7 +33,7 @@ suite('@teovo/db on Postgres', () => {
     const { query, client } = await freshSchema()
     expect(await migrate(query)).toEqual(['0001_core', '0003_tenant_formats'])
     expect(await missingTables(query, { proposals: true })).toEqual(['tv_proposals'])
-    expect(await migrate(query, { features: { proposals: true } })).toEqual(['0002_proposals', '0004_proposal_sources'])
+    expect(await migrate(query, { features: { proposals: true } })).toEqual(['0002_proposals', '0004_proposal_sources', '0006_proposal_fields'])
     expect(await migrate(query, { features: { proposals: true } })).toEqual([])
     expect(await missingTables(query, { proposals: true })).toEqual([])
     client.release()

@@ -201,7 +201,12 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     const summary = page && config.screen ? await Promise.resolve().then(() => config.screen!(page, ctx)).catch((e) => { config.on?.error?.(e, { identity, threadId: thread.id }); return null }) : null
     const shownSummary = summary === null ? null : String(redact(summary))
     const formats: Formats = { ...DEFAULT_FORMATS, ...config.formats, ...settings.formats }
-    const system = `${instructions}${formatsText(formats, config.now?.() ?? new Date())}${settingsText(settings)}${screensText(config.screens ?? [])}${config.views?.length ? `\n\n${VIEWS_RULE}${formsText(config.forms ?? {})}` : ''}${config.tools.some((t) => t.kind === 'propose') || config.views?.some((v) => v.name === 'form') ? `\n\n${CARDS_RULE}` : ''}\n\n${UNTRUSTED_RULE}${screenText(page, shownSummary, fence)}`
+    // Tools this user's role can't use: named (without their inputs) so the model says who can, instead of "I can't".
+    const otherRoles = config.tools.filter((t) => t.roles && !t.roles.includes(identity.role))
+    const rolesText = otherRoles.length
+      ? `\n\nNot available to this user (role: ${identity.role}): ${otherRoles.map((t) => `${t.description.replace(/\.$/, '')} (${t.roles!.join(' or ')} only)`).join('; ')}. If they ask for one, say who can do it; never try another way.`
+      : ''
+    const system = `${instructions}${formatsText(formats, config.now?.() ?? new Date())}${settingsText(settings)}${rolesText}${screensText(config.screens ?? [])}${config.views?.length ? `\n\n${VIEWS_RULE}${formsText(config.forms ?? {})}` : ''}${config.tools.some((t) => t.kind === 'propose') || config.views?.some((v) => v.name === 'form') ? `\n\n${CARDS_RULE}` : ''}\n\n${UNTRUSTED_RULE}${screenText(page, shownSummary, fence)}`
 
     const stream = createUIMessageStream<UIMessage<{ runId: string; threadId: string; formats: Formats }>>({
       originalMessages: history as UIMessage<{ runId: string; threadId: string; formats: Formats }>[],
@@ -354,7 +359,10 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
       },
       onEnd: async ({ messages }) => {
         const reply = messages.at(-1)
-        if (reply && reply.role === 'assistant') await storage.saveMessages(thread.id, [reply])
+        // A reply the user stopped keeps what was written so far, marked, so a reload shows it was cut short.
+        if (reply && reply.role === 'assistant') {
+          await storage.saveMessages(thread.id, [req.signal.aborted ? { ...reply, metadata: { ...(reply.metadata as object | undefined), stopped: true } } : reply])
+        }
       },
     })
     return createUIMessageStreamResponse({ stream, headers: { 'x-teovo-thread': thread.id } })
@@ -441,7 +449,9 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     let proposal: Proposal
     try { proposal = await handler(checked.values, ctx) } catch (e) { return json(422, { error: e instanceof Error ? e.message : String(e) }) }
     const runId = (message.metadata as { runId?: string } | undefined)?.runId ?? crypto.randomUUID()
-    const card: StoredCard = { ...proposal, id: crypto.randomUUID(), threadId: thread.id, runId, status: 'shown' }
+    // The card shows the form's fields, labels and order, unless the app's handler chose its own.
+    const fields = proposal.fields ?? part.data.data.fields.map((f) => ({ key: f.name, label: f.label, format: f.type === 'date' ? 'date' as const : f.type === 'number' ? 'number' as const : 'text' as const }))
+    const card: StoredCard = { ...proposal, fields, id: crypto.randomUUID(), threadId: thread.id, runId, status: 'shown' }
     await storage.saveCard(card)
     config.on?.card?.(card)
     // The card joins the reply right under its form, so a reopened conversation shows both.

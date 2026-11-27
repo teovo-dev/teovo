@@ -124,6 +124,9 @@ describe('createAssistant', () => {
     const offered = (m.doStreamCalls[0]!.tools ?? []).map((t) => t.name)
     expect(offered).toEqual(expect.arrayContaining(['get_order', 'record_payment', 'open_screen']))
     expect(offered).not.toContain('change_price')
+    // …but it is told the change exists and who may make it, so it says "only the owner can", not "I can't".
+    const system = (m.doStreamCalls[0]!.prompt[0] as { content: string }).content
+    expect(system).toContain('Not available to this user (role: staff): Owner only (owner only).')
   })
 
   it('falls back to the next model when the first fails before saying anything', async () => {

@@ -3,8 +3,8 @@ import { readFile, useVoice, type PendingFile } from './input.js'
 import { Markdown } from './markdown.js'
 import { themeStyle, type Theme } from './sheet.js'
 import { useAssistant } from './provider.js'
-import type { Action, Card, CardDecision, Step, TeovoMessage, View } from './types.js'
-import { defaultViews, isCurrent, type ViewComponent } from './views.js'
+import type { Action, Card, CardDecision, Formats, Page, Step, TeovoMessage, View } from './types.js'
+import { defaultViews, formatValue, isCurrent, type CellFormat, type ViewComponent } from './views.js'
 
 export interface AssistantPanelProps {
   /** Shown before the first message. */
@@ -28,6 +28,11 @@ export interface AssistantPanelProps {
   voiceLang?: string
   /** Show suggestion chips above the input. Default true (they only appear when the server has some). */
   showSuggestions?: boolean
+  /**
+   * The line above the message box that says which page the assistant sees, e.g. "On Orders · filter: unpaid".
+   * Default on, whenever the app reports a page with useAssistantContext. Pass false to hide it, or a function to word it.
+   */
+  pageLabel?: false | ((page: Page) => ReactNode)
   className?: string
 }
 
@@ -35,7 +40,7 @@ export type CardState = { status: 'open' | 'busy' | 'confirmed' | 'skipped' | 'u
 
 /** A ready-made chat panel. Unstyled apart from `tv-` class names; import '@teovo/react/styles.css' for defaults. */
 export function AssistantPanel(props: AssistantPanelProps) {
-  const { chat, newChat, suggestions, clearSuggestions } = useAssistant()
+  const { chat, newChat, suggestions, clearSuggestions, page } = useAssistant()
   const [text, setText] = useState('')
   const busy = chat.status === 'submitted' || chat.status === 'streaming'
   const log = useRef<HTMLDivElement>(null)
@@ -49,6 +54,12 @@ export function AssistantPanel(props: AssistantPanelProps) {
   })
   const hint = suggestions.placeholder
   const [files, setFiles] = useState<PendingFile[]>([])
+  const [stopped, setStopped] = useState<Set<string>>(() => new Set())
+  function stop() {
+    const last = chat.messages.at(-1)
+    if (last?.role === 'assistant') setStopped((s) => new Set(s).add(last.id))
+    void chat.stop()
+  }
   const [fileError, setFileError] = useState<string>()
   const picker = useRef<HTMLInputElement>(null)
   const box = useRef<HTMLTextAreaElement>(null)
@@ -90,8 +101,8 @@ export function AssistantPanel(props: AssistantPanelProps) {
       <div ref={log} className="tv-messages" role="log" aria-live="polite" data-count={count}
         onScroll={(e) => { const el = e.currentTarget; pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40 }}>
         {chat.messages.length === 0 && props.welcome ? <div className="tv-welcome">{props.welcome}</div> : null}
-        {chat.messages.map((m) => <Message key={m.id} message={m} ask={ask} {...props} />)}
-        {chat.status === 'submitted' ? <div className="tv-thinking" role="status" aria-label="Thinking"><span /><span /><span /></div> : null}
+        {chat.messages.map((m) => <Message key={m.id} message={m} ask={ask} stopped={stopped.has(m.id) || m.metadata?.stopped === true} {...props} />)}
+        {busy && !showsSomething(chat.messages.at(-1)) ? <div className="tv-thinking" role="status" aria-label="Thinking"><span /><span /><span /></div> : null}
         {chat.error ? <div className="tv-error" role="alert">{errorText(chat.error)}</div> : null}
       </div>
       {props.showSuggestions !== false && !busy && suggestions.suggestions.length ? (
@@ -111,6 +122,14 @@ export function AssistantPanel(props: AssistantPanelProps) {
       ) : null}
       {fileError || voice.error ? <div className="tv-error" role="alert">{fileError ?? voice.error}</div> : null}
       <form className="tv-input" onSubmit={send}>
+        {page && props.pageLabel !== false && (page.title || page.path) ? (
+          <div className="tv-page" title="The assistant sees this page and answers about it">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9h18" />
+            </svg>
+            <span>{props.pageLabel ? props.pageLabel(page) : pageText(page)}</span>
+          </div>
+        ) : null}
         <div className="tv-composer">
           <textarea
             ref={box}
@@ -142,7 +161,7 @@ export function AssistantPanel(props: AssistantPanelProps) {
               <button type="button" className="tv-icon tv-new" aria-label="New chat" title="Start a new chat" onClick={newChat}>{icons.plus}<span aria-hidden="true">New chat</span></button>
             ) : null}
             {busy
-              ? <button type="button" className="tv-send tv-stop" aria-label="Stop" title="Stop" onClick={() => void chat.stop()}>{icons.stop}</button>
+              ? <button type="button" className="tv-send tv-stop" aria-label="Stop" title="Stop" onClick={stop}>{icons.stop}</button>
               : <button type="submit" className="tv-send" aria-label="Send" title="Send (Enter)" disabled={!text.trim() && !files.length}>{icons.send}</button>}
           </div>
         </div>
@@ -151,7 +170,7 @@ export function AssistantPanel(props: AssistantPanelProps) {
   )
 }
 
-function Message({ message, ask, ...props }: { message: TeovoMessage; ask: (t: string) => void } & AssistantPanelProps) {
+function Message({ message, ask, stopped, ...props }: { message: TeovoMessage; ask: (t: string) => void; stopped?: boolean } & AssistantPanelProps) {
   const { onAction, submitForm, chat } = useAssistant()
   const steps = message.parts.filter((p) => p.type === 'data-step')
   const running = steps.filter((p) => (p.data as Step).state === 'running')
@@ -170,7 +189,7 @@ function Message({ message, ask, ...props }: { message: TeovoMessage; ask: (t: s
               : <img key={i} className="tv-attachment" src={p.url} alt={p.filename ?? 'Picture'} />)
             : <div key={i} className="tv-attachment">{p.filename ?? 'File'}</div>
         }
-        if (p.type === 'data-card') return <CardView key={p.id ?? i} card={p.data as Card} {...props} />
+        if (p.type === 'data-card') return <CardView key={p.id ?? i} card={p.data as Card} formats={message.metadata?.formats} {...props} />
         if (p.type === 'data-view') {
           const v = p.data as View
           const Draw = props.views?.[v.view] ?? defaultViews[v.view]
@@ -189,6 +208,7 @@ function Message({ message, ask, ...props }: { message: TeovoMessage; ask: (t: s
         const name = (p.data as Step).name
         return <div key={p.id} className="tv-step">{props.stepLabels?.[name] ?? `Using ${name.replace(/_/g, ' ')}`}…</div>
       })}
+      {stopped ? <div className="tv-stopped">Stopped</div> : null}
     </div>
   )
 }
@@ -218,7 +238,7 @@ function StoredPicture({ id, alt }: { id: string; alt: string }) {
   return src ? <img className="tv-attachment" src={src} alt={alt} /> : <div className="tv-attachment tv-attachment-loading" aria-label={`Loading ${alt}`} />
 }
 
-function CardView({ card, renderCard }: { card: Card } & AssistantPanelProps) {
+function CardView({ card, renderCard, formats }: { card: Card; formats?: Formats } & AssistantPanelProps) {
   const { decideCard } = useAssistant()
   const [state, setState] = useState<CardState>({ status: FINAL[card.status as keyof typeof FINAL] ?? 'open', reversible: card.reversible })
 
@@ -237,7 +257,15 @@ function CardView({ card, renderCard }: { card: Card } & AssistantPanelProps) {
   }
 
   if (renderCard) return <>{renderCard(card, (d) => void decide(d), state)}</>
-  const keys = [...new Set([...Object.keys(card.before ?? {}), ...Object.keys(card.after ?? {})])]
+  const fields: NonNullable<Card['fields']> = card.fields ?? [...new Set([...Object.keys(card.after ?? {}), ...Object.keys(card.before ?? {})])].map((key) => ({ key }))
+  // A new record has nothing before: show its values, not "— → value" on every row.
+  const isNew = !card.before || Object.values(card.before).every((v) => v === undefined || v === null || v === '')
+  const value = (v: unknown, format?: CellFormat) => {
+    if (v === undefined || v === null || v === '') return '—'
+    if (typeof v === 'object') return JSON.stringify(v)
+    const f = format ?? (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? 'date' : undefined)
+    return formatValue(typeof v === 'boolean' ? String(v) : (v as string | number), f, formats)
+  }
   return (
     <div className="tv-card" data-status={state.status} role="group" aria-label={card.title}>
       <div className="tv-card-title">{card.title}</div>
@@ -246,10 +274,14 @@ function CardView({ card, renderCard }: { card: Card } & AssistantPanelProps) {
           Prepared after reading {card.untrustedSources.join(', ')}. Check it before you confirm.
         </div>
       ) : null}
-      {keys.length ? (
-        <table className="tv-card-diff"><tbody>
-          {keys.map((k) => (
-            <tr key={k}><th scope="row">{k}</th><td>{show(card.before?.[k])}</td><td>→</td><td>{show(card.after?.[k])}</td></tr>
+      {fields.length ? (
+        <table className={`tv-card-diff${isNew ? ' tv-card-new' : ''}`}><tbody>
+          {fields.map((f) => (
+            <tr key={f.key}>
+              <th scope="row">{f.label ?? labelFor(f.key)}</th>
+              {isNew ? <td>{value(card.after?.[f.key], f.format)}</td>
+                : <><td>{value(card.before?.[f.key], f.format)}</td><td aria-label="becomes">→</td><td>{value(card.after?.[f.key], f.format)}</td></>}
+            </tr>
           ))}
         </tbody></table>
       ) : null}
@@ -277,6 +309,29 @@ const icons = {
   send: svg(<path d="M12 19V5M5 12l7-7 7 7" />),
   stop: <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" /></svg>,
   plus: svg(<path d="M12 5v14M5 12h14" />),
+}
+
+/** True when the reply on screen already shows text, a view, a card, a button or a running step. */
+function showsSomething(m: TeovoMessage | undefined): boolean {
+  if (!m || m.role !== 'assistant') return false
+  return m.parts.some((p) => (p.type === 'text' && p.text.trim() !== '') || p.type === 'data-view' || p.type === 'data-card' || p.type === 'data-action'
+    || (p.type === 'data-step' && (p.data as Step).state === 'running'))
+}
+
+/** 'amount_due' → 'Amount due', 'customerName' → 'Customer name'. */
+const labelFor = (key: string) => {
+  const words = key.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').trim().toLowerCase()
+  return words.charAt(0).toUpperCase() + words.slice(1)
+}
+
+/** "On Orders · filter: unpaid", from what the app reported. */
+export function pageText(page: Page): string {
+  const where = page.title || page.path || ''
+  const extra = Object.entries(page.state ?? {})
+    .filter(([, v]) => v !== null && v !== '' && v !== false)
+    .slice(0, 3)
+    .map(([k, v]) => (v === true ? k : `${k}: ${String(v)}`))
+  return [`On ${where}`, ...extra].join(' · ')
 }
 
 const show = (v: unknown) => (v === undefined || v === null ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v))

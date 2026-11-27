@@ -83,6 +83,8 @@ function Record({ part, formats }: ViewProps<{ title: string; fields: { label: s
 
 interface FormField { name: string; label: string; type?: 'text' | 'number' | 'date' | 'select'; value?: string | number | null; options?: string[]; required?: boolean }
 
+// The button always says Continue, whatever the model asked for ("Record expense" would claim it is done): sending
+// the form only prepares a card, which the user then confirms.
 function Form({ part, submit }: ViewProps<{ title: string; fields: FormField[]; submit: { label?: string } }>) {
   const [values, setValues] = useState<Record<string, string>>(() =>
     Object.fromEntries(part.data.fields.map((f) => [f.name, String(part.values?.[f.name] ?? f.value ?? '')])))
@@ -113,7 +115,7 @@ function Form({ part, submit }: ViewProps<{ title: string; fields: FormField[]; 
         </label>
       ))}
       {error ? <div className="tv-error" role="alert">{error}</div> : null}
-      {sent ? <div className="tv-card-done">Sent</div> : <button type="submit" disabled={busy}>{part.data.submit.label ?? 'Prepare'}</button>}
+      {sent ? <div className="tv-card-done">Sent</div> : <button type="submit" disabled={busy}>Continue</button>}
     </form>
   )
 }
