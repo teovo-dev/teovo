@@ -1,5 +1,5 @@
 /** @teovo/server: the assistant's handler, tool loop, cards, limits and logs. */
-export { createAssistant, type AssistantConfig } from './assistant.js'
+export { CARDS_RULE, createAssistant, type AssistantConfig } from './assistant.js'
 export { readPage, screenPath, tidy, type Page, type ScreenFn, type ScreenInfo, type Suggestions, type SuggestionsFn } from './screens.js'
 export { defineTool, toolsFor, type Action, type Identity, type Proposal, type TeovoTool, type ToolContext, type ToolKind } from './tools.js'
 export { memoryStorage, periodKey, type Budget, type CardPatch, type CardStatus, type Period, type RunRecord, type StepRecord, type Storage, type StoredCard, type Thread, type Totals, type Unit, type UsageRow } from './storage.js'

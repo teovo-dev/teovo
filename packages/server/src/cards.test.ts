@@ -150,6 +150,13 @@ describe('cards', () => {
     expect((await oneWay.decide(d.id, 'undo')).status).toBe(409)
   })
 
+  it('tells the model that preparing a card changes nothing', async () => {
+    const a = app()
+    await a.proposed()
+    const system = (a.model.doStreamCalls[0]!.prompt[0] as { content: string }).content
+    expect(system).toContain('Say a change is ready to confirm, never that it is done, recorded or saved')
+  })
+
   it('tells the model in the next message what happened to the card', async () => {
     const a = app()
     const { thread, id } = await a.proposed()

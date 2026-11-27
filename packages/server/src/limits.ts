@@ -31,7 +31,7 @@ export async function checkLimits(storage: Storage, identity: Identity, limits: 
     }
     const used = await storage.usage(identity.tenantId, identity.userId, period)
     for (const scope of ['user', 'tenant'] as const) {
-      for (const unit of ['messages', 'input_tokens', 'output_tokens'] as const) {
+      for (const unit of ['messages', 'input_tokens', 'output_tokens', 'neurons'] as const) {
         const limit = own(scope, unit)
         const n = used[scope][unit] ?? 0
         if (limit !== undefined && n >= limit) return { scope, unit, period, limit, used: n }

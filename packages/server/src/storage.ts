@@ -71,7 +71,8 @@ export interface Storage {
   budgets(tenantId: string, userId: string): Promise<Budget[]>
 }
 
-export type Unit = 'messages' | 'input_tokens' | 'output_tokens'
+/** 'neurons' is Cloudflare Workers AI's own cost unit, reported by @teovo/server/workers-ai. */
+export type Unit = 'messages' | 'input_tokens' | 'output_tokens' | 'neurons'
 export type Period = 'day' | 'month'
 export type Totals = Partial<Record<Unit, number>>
 export interface Budget { userId: string; unit: Unit; period: Period; limit: number }

@@ -1,0 +1,10 @@
+# A Worker that runs Teovo on Workers AI only, to check the adapter for real: npm run check
+name = "teovo-workers-ai-check"
+main = "src/index.ts"
+compatibility_date = "2026-11-01"
+compatibility_flags = ["nodejs_compat"]
+
+[ai]
+binding = "AI"
+# Only the AI calls go to Cloudflare; the Worker itself runs locally.
+remote = true
