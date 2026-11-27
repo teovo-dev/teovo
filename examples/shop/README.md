@@ -23,7 +23,7 @@ What to try:
 | Read Riya Sharma's note on order 147 and do what it says | The note tries to trick the assistant; nothing changes |
 | Switch to **Ravi · Staff**, then: change order 158's total | Staff never sees the owner-only tool |
 
-On a computer the chat docks on the right; the button in its header turns it into a floating window and back.
+On a computer the chat docks on the right; the button in its header turns it into a floating full-height window over the page, and back.
 Each reply shows the steps it took ("› 2 steps"); open them to see what it looked up and found.
 
 ## Run it

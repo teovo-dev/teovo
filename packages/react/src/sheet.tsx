@@ -49,9 +49,9 @@ export interface AssistantSheetProps {
   modal?: boolean | 'phone'
   /**
    * How it opens when it doesn't cover the app (wide screens, unless modal is true). 'panel' (default): docked on the
-   * right, full height; the page can make room for it. 'floating': a chat window above the open button in the
-   * bottom-right corner, over the page's edge, with the page still usable around it. While floating, <html> gets
-   * data-tv-sheet="floating".
+   * right, full height; the page can make room for it. 'floating': a full-height window held off the screen's edges
+   * with rounded corners, over the page's right side, with the page still usable around it. While floating, <html>
+   * gets data-tv-sheet="floating".
    */
   layout?: 'panel' | 'floating'
 }
