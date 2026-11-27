@@ -112,6 +112,34 @@ suite('@teovo/db on Postgres', () => {
     expect(JSON.stringify(msgs[1].parts)).toContain('Ready to confirm.')
     expect(JSON.stringify(msgs[1].parts)).toContain('data-card')
     expect((await query('select title from tv_proposals')).rows).toEqual([{ title: 'Payment ₹200' }])
+    expect((await query('select status, model from tv_runs')).rows).toEqual([{ status: 'done', model: 'mock-model-id' }])
+    expect((await query('select seq, name, output from tv_run_steps')).rows).toEqual([{ seq: 0, name: 'record_payment', output: { kind: 'record_payment', title: 'Payment ₹200', payload: { amount: 200 } } }])
+    client.release()
+  })
+
+  it('keeps usage totals per person and per tenant, reads budgets, and counts running replies', async () => {
+    const { query, client } = await freshSchema()
+    await migrate(query)
+    const s = postgresStorage(query)
+    const t = await s.createThread('shop-1', 'u1')
+    const base = { tenantId: 'shop-1', provider: 'google', model: 'gemini' }
+    await s.addUsage([{ ...base, userId: 'u1', unit: 'messages', amount: 1 }, { ...base, userId: 'u1', unit: 'output_tokens', amount: 30 }])
+    await s.addUsage([{ ...base, userId: 'u2', unit: 'messages', amount: 1 }, { ...base, tenantId: 'shop-2', userId: 'u1', unit: 'messages', amount: 1 }])
+    expect(await s.usage('shop-1', 'u1', 'day')).toEqual({ user: { messages: 1, output_tokens: 30 }, tenant: { messages: 2, output_tokens: 30 } })
+    expect(await s.usage('shop-1', 'u1', 'month')).toEqual({ user: { messages: 1, output_tokens: 30 }, tenant: { messages: 2, output_tokens: 30 } })
+    await query(`update tv_usage_daily set day = day - 40`)
+    expect(await s.usage('shop-1', 'u1', 'month')).toEqual({ user: {}, tenant: {} })
+
+    await query(`insert into tv_budgets (tenant_id, user_id, unit, period, "limit") values ('shop-1', '', 'messages', 'month', 500), ('shop-1', 'u1', 'messages', 'day', 20), ('shop-1', 'u2', 'messages', 'day', 5)`)
+    expect((await s.budgets('shop-1', 'u1')).sort((a, b) => a.limit - b.limit)).toEqual([
+      { userId: 'u1', unit: 'messages', period: 'day', limit: 20 }, { userId: '', unit: 'messages', period: 'month', limit: 500 }])
+
+    await s.startRun({ id: crypto.randomUUID(), threadId: t.id, tenantId: 'shop-1', userId: 'u1' })
+    const done = crypto.randomUUID()
+    await s.startRun({ id: done, threadId: t.id, tenantId: 'shop-1', userId: 'u1' })
+    await s.finishRun(done, { status: 'failed', error: 'down' })
+    expect(await s.runningRuns('shop-1', 'u1', new Date(Date.now() - 60_000))).toBe(1)
+    expect(await s.runningRuns('shop-1', 'u1', new Date(Date.now() + 60_000))).toBe(0)   // older than the cut-off: abandoned
     client.release()
   })
 })
