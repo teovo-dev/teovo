@@ -34,6 +34,8 @@ Options
   --tenant-sql <expr>      For init: SQL that returns the current tenant id as text
   --user-sql <expr>        For init: SQL that returns the current user id as text
   --supabase               For init: use Supabase's auth.uid() for the user
+  --server-only            For init: only the server's own key may use the tables (supabaseStorage); the
+                           browser's database login sees nothing
   --out <file>             For generate: where to write (default: a new file in supabase/migrations if that
                            folder exists, else print)
   --days <n>               For prune
@@ -46,7 +48,7 @@ export async function main(argv: string[], io: Io): Promise<number> {
     args: argv, allowPositionals: true,
     options: {
       url: { type: 'string' }, features: { type: 'string' }, 'tenant-sql': { type: 'string' }, 'user-sql': { type: 'string' },
-      supabase: { type: 'boolean' }, out: { type: 'string' }, days: { type: 'string' }, 'file-days': { type: 'string' }, yes: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
+      supabase: { type: 'boolean' }, 'server-only': { type: 'boolean' }, out: { type: 'string' }, days: { type: 'string' }, 'file-days': { type: 'string' }, yes: { type: 'boolean' }, help: { type: 'boolean', short: 'h' },
     },
   })
   const command = positionals[0]
@@ -74,10 +76,11 @@ export async function main(argv: string[], io: Io): Promise<number> {
         const user = values['user-sql'] ?? (values.supabase ? 'auth.uid()::text' : undefined)
         const tenant = values['tenant-sql']
         if (Boolean(user) !== Boolean(tenant)) throw new UserError('Row-level rules need both --tenant-sql and --user-sql (or --supabase for the user).')
-        const config: CliConfig = { features, ...(user && tenant ? { rls: { tenant, user } } : {}) }
+        if (values['server-only'] && (user || tenant)) throw new UserError('Choose either --server-only or row-level rules (--tenant-sql and --user-sql), not both.')
+        const config: CliConfig = { features, ...(values['server-only'] ? { rls: 'server-only' as const } : user && tenant ? { rls: { tenant, user } } : {}) }
         writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n')
         io.out(`Wrote ${CONFIG_FILE}.`)
-        io.out(config.rls ? 'Row-level rules: on.' : 'Row-level rules: off. Add --tenant-sql and --user-sql to turn them on (recommended when the browser can reach the database).')
+        io.out(config.rls === 'server-only' ? 'Tables: server key only (the browser sees nothing).' : config.rls ? 'Row-level rules: on.' : 'Row-level rules: off. Add --tenant-sql and --user-sql to turn them on (recommended when the browser can reach the database).')
         io.out(existsSync(join(io.cwd, 'supabase', 'migrations')) ? 'Next: npx teovo generate   (adds a migration to supabase/migrations)' : 'Next: npx teovo migrate    (or generate, to keep the SQL with your own migrations)')
         return 0
       }

@@ -30,6 +30,7 @@
     "ai": "^7.0.183"
   },
   "devDependencies": {
+    "@supabase/supabase-js": "^2.109.0",
     "@types/pg": "^8.23.1",
     "pg": "^8.23.1"
   }

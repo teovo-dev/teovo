@@ -11,7 +11,7 @@ export interface SchemaOptions {
    * tv_ table gets rules so a user sees only their own tenant's rows (and only their own threads).
    * Example for scoops on Supabase: { tenant: 'public.current_business_id()::text', user: 'auth.uid()::text' }.
    */
-  rls?: { tenant: string; user: string; roles?: string[] }
+  rls?: { tenant: string; user: string; roles?: string[] } | 'server-only'
 }
 
 const core: Migration = {
@@ -140,6 +140,37 @@ const proposalFields: Migration = {
   sql: `alter table tv_proposals add column if not exists fields jsonb;`,
 }
 
+/**
+ * Two functions for apps that reach the tables through an HTTP API instead of SQL (Supabase's, with
+ * supabaseStorage): adding to a running total, and listing threads by latest activity. Plain SQL apps never call
+ * them. They run as the caller (security invoker), so row-level rules still apply.
+ */
+const apiFunctions: Migration = {
+  id: '0007_api_functions',
+  sql: `
+create or replace function tv_add_usage_daily(p_tenant text, p_user text, p_day date, p_unit text, p_amount numeric)
+returns void language sql security invoker as $$
+  insert into tv_usage_daily (tenant_id, user_id, day, unit, amount) values (p_tenant, p_user, p_day, p_unit, p_amount), (p_tenant, '', p_day, p_unit, p_amount)
+  on conflict (tenant_id, user_id, day, unit) do update set amount = tv_usage_daily.amount + excluded.amount
+$$;
+create or replace function tv_list_threads(p_tenant text, p_user text, p_limit int)
+returns table (id uuid, tenant_id text, user_id text, title text, created_at timestamptz, updated_at timestamptz)
+language sql stable security invoker as $$
+  select t.id, t.tenant_id, t.user_id, t.title, t.created_at,
+         coalesce((select max(m.created_at) from tv_messages m where m.thread_id = t.id), t.created_at) as updated_at
+  from tv_threads t where t.tenant_id = p_tenant and t.user_id = p_user and t.archived_at is null
+  order by 6 desc limit p_limit
+$$;
+revoke all on function tv_add_usage_daily(text, text, date, text, numeric) from public;
+revoke all on function tv_list_threads(text, text, int) from public;`,
+}
+
+/** Pictures kept in an object store (Supabase Storage, R2) only need their owner row here, not the bytes. */
+const fileIndex: Migration = {
+  id: '0008_file_index',
+  sql: `alter table tv_files alter column bytes drop not null;`,
+}
+
 const formats: Migration = {
   id: '0003_tenant_formats',
   sql: `alter table tv_tenant_settings add column if not exists formats jsonb;`,
@@ -162,7 +193,36 @@ create table if not exists tv_files (
 create index if not exists tv_files_age on tv_files (created_at);`,
 }
 
-function rlsMigration(tables: string[], rls: NonNullable<SchemaOptions['rls']>): Migration {
+/**
+ * 'server-only': only the server's own key (which bypasses row-level security) can use the tables. Row-level
+ * security is on with no policies, so a signed-in browser calling the database API directly sees nothing and can
+ * change nothing (it could otherwise delete its usage rows to get past a limit). On Supabase the API roles also
+ * lose the right to call Teovo's functions.
+ */
+function serverOnlyMigration(tables: string[]): Migration {
+  const sql = tables.map((t) => `alter table ${t} enable row level security;`).join('\n') + `
+do $$ begin
+  if exists (select 1 from pg_roles where rolname = 'service_role') then
+    grant all on ${tables.join(', ')} to service_role;
+    perform 1;
+    declare q text; begin
+      for q in select format('grant usage, select on sequence %s to service_role', s.relname) from pg_class s
+        join pg_depend d on d.objid = s.oid join pg_class t on t.oid = d.refobjid
+        where s.relkind = 'S' and t.relname = any(array['${tables.join("','")}']) and t.relnamespace = s.relnamespace
+      loop execute q; end loop;
+    end;
+    grant execute on function tv_add_usage_daily(text, text, date, text, numeric), tv_list_threads(text, text, int) to service_role;
+  end if;
+  if exists (select 1 from pg_roles where rolname = 'anon') then
+    revoke all on ${tables.join(', ')} from anon, authenticated;
+    revoke all on function tv_add_usage_daily(text, text, date, text, numeric) from anon, authenticated;
+    revoke all on function tv_list_threads(text, text, int) from anon, authenticated;
+  end if;
+end $$;`
+  return { id: 'server_only', sql }
+}
+
+function rlsMigration(tables: string[], rls: Exclude<NonNullable<SchemaOptions['rls']>, 'server-only'>): Migration {
   const to = (rls.roles?.length ? rls.roles : ['public']).join(', ')
   const own = `tenant_id = (${rls.tenant}) and user_id = (${rls.user})`
   const viaThread = `exists (select 1 from tv_threads t where t.id = thread_id and t.tenant_id = (${rls.tenant}) and t.user_id = (${rls.user}))`
@@ -186,7 +246,11 @@ export function migrations(options: SchemaOptions = {}): Migration[] {
   list.push(formats)
   if (options.features?.proposals) list.push(proposalSources, proposalFields)
   if (options.features?.files) { list.push(files); tables.push('tv_files') }
-  if (options.rls) list.push({ ...rlsMigration(tables, options.rls), id: `0100_rls_${options.features?.proposals ? 'with_proposals' : 'core'}${options.features?.files ? '_files' : ''}` })
+  list.push(apiFunctions)
+  if (options.features?.files) list.push(fileIndex)
+  const suffix = `${options.features?.proposals ? 'with_proposals' : 'core'}${options.features?.files ? '_files' : ''}`
+  if (options.rls === 'server-only') list.push({ ...serverOnlyMigration(tables), id: `0101_server_only_${suffix}` })
+  else if (options.rls) list.push({ ...rlsMigration(tables, options.rls), id: `0100_rls_${suffix}` })
   return list
 }
 
