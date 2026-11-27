@@ -1,7 +1,8 @@
 import type { LanguageModelV4 } from '@ai-sdk/provider'
 import { convertToModelMessages, createUIMessageStream, createUIMessageStreamResponse, isStepCount, streamText, tool, toUIMessageStream, type ToolSet, type UIMessage } from 'ai'
 import { fallbackModel } from './fallback'
-import type { Storage, StoredCard } from './storage'
+import { checkLimits, limitMessage, type LimitHit, type Limits } from './limits'
+import type { Storage, StoredCard, UsageRow } from './storage'
 import { toolsFor, type Action, type Identity, type Proposal, type TeovoTool, type ToolContext } from './tools'
 import { makeUntrusted, UNTRUSTED_RULE } from './untrusted'
 
@@ -24,14 +25,28 @@ export interface AssistantConfig<DB = unknown> {
   historyMessages?: number
   /** Give up on a model that sends nothing at first, goes quiet, or runs too long. Milliseconds. */
   timeouts?: { firstChunkMs?: number; chunkMs?: number; totalMs?: number }
+  /** Messages and tokens per person and per tenant, checked before every reply. Tenants can set their own in tv_budgets. */
+  limits?: Limits
+  /** Saved on each run, so a change in replies can be traced to a change in instructions. */
+  promptVersion?: string
+  /** Tool inputs and outputs longer than this are cut in the run log (the model still sees all of it). Default 8000 characters. */
+  logLimit?: number
   on?: {
     error?: (error: unknown, ctx: { identity: Identity; threadId: string }) => void
     modelSwitch?: (from: string, error: unknown) => void
     card?: (card: StoredCard) => void
+    limit?: (hit: LimitHit, identity: Identity) => void
+    usage?: (rows: UsageRow[]) => void
   }
 }
 
 const DEFAULT_TIMEOUTS = { firstChunkMs: 30_000, chunkMs: 20_000, totalMs: 120_000 }
+
+function clip(v: unknown, max: number): { value: unknown; truncated: boolean } {
+  if (v === undefined) return { value: undefined, truncated: false }
+  const text = JSON.stringify(v) ?? ''
+  return text.length <= max ? { value: v, truncated: false } : { value: text.slice(0, max), truncated: true }
+}
 
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
@@ -54,6 +69,14 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     }
 
     const { storage } = config
+    // Before anything is saved, so a refused message leaves no empty thread behind.
+    const timeouts = { ...DEFAULT_TIMEOUTS, ...config.timeouts }
+    const hit = await checkLimits(storage, identity, config.limits, timeouts.totalMs * 2)
+    if (hit) {
+      config.on?.limit?.(hit, identity)
+      return json(429, { error: limitMessage(hit), limit: hit })
+    }
+
     const thread = body.threadId
       ? await storage.getThread(identity.tenantId, identity.userId, body.threadId)
       : await storage.createThread(identity.tenantId, identity.userId)
@@ -64,6 +87,10 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
 
     const db = await config.asUser(identity, req)
     const runId = crypto.randomUUID()
+    const first = config.models[0]!
+    await storage.startRun({ id: runId, threadId: thread.id, tenantId: identity.tenantId, userId: identity.userId, model: first.modelId, promptVersion: config.promptVersion })
+    await storage.addUsage([{ tenantId: identity.tenantId, userId: identity.userId, runId, provider: first.provider, model: first.modelId, unit: 'messages', amount: 1 }])
+    let seq = 0
     const nonce = crypto.randomUUID().slice(0, 8)
     const ctx: ToolContext<DB> = { identity, db, untrusted: makeUntrusted(nonce) }
     const instructions = typeof config.instructions === 'function' ? await config.instructions({ identity, page: body.page }) : config.instructions
@@ -81,8 +108,14 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
             inputSchema: t.input,
             execute: async (input: unknown, { toolCallId }: { toolCallId: string }) => {
               writer.write({ type: 'data-step', id: toolCallId, data: { name: t.name, state: 'running' } })
+              const started = Date.now()
+              const step = { runId, seq: seq++, type: 'tool' as const, toolCallId, name: t.name }
+              const max = config.logLimit ?? 8000
+              const logged = clip(input, max)
               try {
                 const out = await t.run(input, ctx)
+                const result = clip(out, max)
+                await storage.saveStep({ ...step, input: logged.value, output: result.value, truncated: logged.truncated || result.truncated, durationMs: Date.now() - started })
                 if (t.kind === 'propose') {
                   const p = out as Proposal
                   const card: StoredCard = { ...p, id: crypto.randomUUID(), threadId: thread.id, runId, status: 'shown' }
@@ -96,6 +129,9 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
                   return 'A button is shown under your reply.'
                 }
                 return out
+              } catch (e) {
+                await storage.saveStep({ ...step, input: logged.value, truncated: logged.truncated, error: e instanceof Error ? e.message : String(e), durationMs: Date.now() - started })
+                throw e
               } finally {
                 writer.write({ type: 'data-step', id: toolCallId, data: { name: t.name, state: 'done' } })
               }
@@ -103,18 +139,42 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
           })
         }
         // Tools only read, propose or offer buttons; none writes during a run, so switching model is always safe.
-        const model = fallbackModel(config.models, () => true, config.on?.modelSwitch)
+        let usedModel = first
+        const model = fallbackModel(config.models, () => true, (from, e) => {
+          const i = config.models.findIndex((m) => m.modelId === from)
+          usedModel = config.models[i + 1] ?? usedModel
+          config.on?.modelSwitch?.(from, e)
+        })
+        let streamError: unknown
         const result = streamText({
+          onError: ({ error }) => { streamError ??= error },
           model,
           system,
           messages: await convertToModelMessages(history),
           tools,
           stopWhen: isStepCount(config.maxSteps ?? 8),
-          timeout: { ...DEFAULT_TIMEOUTS, ...config.timeouts },
+          timeout: timeouts,
           maxRetries: 1,
+          abortSignal: req.signal,
         })
         writer.merge(toUIMessageStream({ stream: result.stream, sendStart: false }))
-        await result.text
+        try {
+          await result.text
+          await finish('done')
+        } catch (e) {
+          await finish(req.signal.aborted ? 'stopped' : 'failed', streamError ?? e)
+          throw e
+        }
+
+        async function finish(status: 'done' | 'failed' | 'stopped', error?: unknown) {
+          await storage.finishRun(runId, { status, model: usedModel.modelId, ...(error ? { error: error instanceof Error ? error.message : String(error) } : {}) })
+          const u = await Promise.resolve(result.totalUsage).catch(() => undefined)
+          const base = { tenantId: identity!.tenantId, userId: identity!.userId, runId, provider: usedModel.provider, model: usedModel.modelId }
+          const rows: UsageRow[] = []
+          if (u?.inputTokens) rows.push({ ...base, unit: 'input_tokens', amount: u.inputTokens })
+          if (u?.outputTokens) rows.push({ ...base, unit: 'output_tokens', amount: u.outputTokens })
+          if (rows.length) { await storage.addUsage(rows); config.on?.usage?.(rows) }
+        }
       },
       onError: (e) => {
         config.on?.error?.(e, { identity, threadId: thread.id })
