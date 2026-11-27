@@ -39,3 +39,9 @@
 .tv-record dd { margin: 0; }
 .tv-form label { display: flex; flex-direction: column; gap: 2px; }
 .tv-form label span { color: #6b7280; font-size: 0.875em; }
+.tv-pending { list-style: none; display: flex; gap: 6px; margin: 0; padding: 0 12px; }
+.tv-pending li { position: relative; }
+.tv-pending img { width: 56px; height: 56px; object-fit: cover; border-radius: 8px; }
+.tv-pending button { position: absolute; top: -6px; right: -6px; border-radius: 999px; border: 0; width: 20px; height: 20px; cursor: pointer; }
+.tv-attachment { max-width: 220px; max-height: 220px; border-radius: 8px; object-fit: cover; }
+.tv-mic[aria-pressed='true'] { color: #b91c1c; }

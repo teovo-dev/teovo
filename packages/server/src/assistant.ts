@@ -9,6 +9,7 @@ import { makeUntrusted, UNTRUSTED_RULE } from './untrusted.js'
 
 import { makeRedactor, type RedactOptions } from './redact.js'
 import { checkForm, type FormData, type FormHandler, type TeovoView } from './views.js'
+import { checkMessage, type AttachmentRules } from './attachments.js'
 import { checkFormats, DEFAULT_FORMATS, formatsText, type Formats } from './formats.js'
 import { DEFAULT_SETTINGS, SettingsError, settingsText, validateSettings } from './settings.js'
 import { readPage, screenText, tidy, type Page, type ScreenFn, type SuggestionsFn } from './screens.js'
@@ -48,6 +49,8 @@ export interface AssistantConfig<DB = unknown> {
   cardRules?: Partial<CardRules>
   /** How dates and money are written, and which day it is: the app's default. Tenants can override it in settings. */
   formats?: Partial<Formats>
+  /** Let users attach pictures (a bill, a screenshot). Off unless given. The model must be able to read images. */
+  attachments?: AttachmentRules
   /** The clock, for tests. */
   now?: () => Date
   /** Views the model can show inside a reply (tables, forms, choices, records). Start from builtinViews. */
@@ -83,6 +86,7 @@ function clip(v: unknown, max: number): { value: unknown; truncated: boolean } {
 /** A conversation's title until something better exists: the start of its first question. */
 function titleFrom(m: UIMessage): string {
   const text = m.parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join(' ').replace(/\s+/g, ' ').trim()
+  if (!text) return 'Picture'
   return text.length > 60 ? `${text.slice(0, 57).trimEnd()}…` : text
 }
 
@@ -109,9 +113,9 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     let body: ChatBody
     try { body = (await req.json()) as ChatBody } catch { return json(400, { error: 'The request was not valid JSON.' }) }
     const message = body.message
-    if (!message || message.role !== 'user' || !Array.isArray(message.parts) || !message.parts.some((p) => p.type === 'text' && p.text.trim())) {
-      return json(400, { error: 'Send one user message with some text.' })
-    }
+    if (!message || message.role !== 'user' || !Array.isArray(message.parts)) return json(400, { error: 'Send one user message with some text.' })
+    const problem = checkMessage(message, config.attachments)
+    if (problem) return json(400, { error: problem })
 
     const { storage } = config
     const settings = (await storage.tenantSettings(identity.tenantId)) ?? DEFAULT_SETTINGS
