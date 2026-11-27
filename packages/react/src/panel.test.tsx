@@ -241,7 +241,7 @@ describe('AssistantPanel', () => {
     mount({ fetch: s.fetch })
     await ask('unpaid?')
     await screen.findByText('Bina')
-    const names = () => [...document.querySelectorAll('.tv-table tbody tr td:first-child')].map((td) => td.textContent)
+    const names = () => Array.from(document.querySelectorAll('.tv-table tbody tr td:first-child')).map((td) => td.textContent)
     expect(names()).toEqual(['Bina', 'Asha', 'Chand'])
     await userEvent.click(screen.getByRole('button', { name: 'Due' }))
     expect(names()).toEqual(['Chand', 'Bina', 'Asha'])
