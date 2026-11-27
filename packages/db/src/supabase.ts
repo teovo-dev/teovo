@@ -78,7 +78,7 @@ export function supabaseStorage(db: SupabaseLike): Storage {
       await ok(db.from('tv_proposals').upsert({
         id: c.id, thread_id: c.threadId, run_id: c.runId, kind: c.kind, title: c.title, before: c.before ?? null, after: c.after ?? null,
         payload: c.payload ?? null, status: c.status, untrusted_sources: c.untrustedSources ?? null, fields: c.fields ?? null,
-      }, { onConflict: 'id' }))
+      }, { onConflict: 'id', ignoreDuplicates: true }))   // the same card saved twice keeps the first (and its decision)
     },
     async getCard(tenantId, userId, id) {
       if (!UUID.test(id)) return null

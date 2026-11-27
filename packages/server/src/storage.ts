@@ -44,6 +44,7 @@ export interface Storage {
   archiveThread(tenantId: string, userId: string, threadId: string): Promise<boolean>
   listMessages(threadId: string): Promise<UIMessage[]>
   saveMessages(threadId: string, messages: UIMessage[]): Promise<void>
+  /** Save a new card. Saving one whose id already exists changes nothing: the first save (and its decision) stands. */
   saveCard(card: StoredCard): Promise<void>
   /** A card, only if it is in one of this person's threads. */
   getCard(tenantId: string, userId: string, id: string): Promise<StoredCard | null>
@@ -136,7 +137,7 @@ export function memoryStorage() {
       const t = threads.get(id)
       if (t) t.updatedAt = new Date().toISOString()
     },
-    async saveCard(card) { cards.set(card.id, structuredClone({ createdAt: new Date().toISOString(), ...card })) },
+    async saveCard(card) { if (!cards.has(card.id)) cards.set(card.id, structuredClone({ createdAt: new Date().toISOString(), ...card })) },
     async getCard(tenantId, userId, id) {
       const c = cards.get(id)
       const t = c && threads.get(c.threadId)

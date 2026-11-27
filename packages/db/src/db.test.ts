@@ -134,6 +134,11 @@ suite('@teovo/db on Postgres', () => {
     expect(await s.updateCard(id, ['confirmed'], { reversible: true, undo: { paymentId: 'p9' } })).toMatchObject({ status: 'confirmed', decidedBy: 'u1', decidedAt: at, reversible: true, undo: { paymentId: 'p9' } })
     expect(await s.updateCard(id, ['confirmed'], { status: 'shown', decidedBy: undefined, decidedAt: undefined })).not.toHaveProperty('decidedBy')
     expect((await s.listCards(t.id)).map((c) => c.status)).toEqual(['shown'])
+
+    // Saving the same card again (a form sent twice) keeps the first and its decision.
+    await s.updateCard(id, ['shown'], { status: 'confirmed', decidedBy: 'u1', decidedAt: at })
+    await s.saveCard({ id, threadId: t.id, runId: crypto.randomUUID(), kind: 'pay', title: 'Pay again', payload: {}, status: 'shown' })
+    expect(await s.getCard('shop-1', 'u1', id)).toMatchObject({ title: 'Pay', status: 'confirmed' })
     client.release()
   })
 
