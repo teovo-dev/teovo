@@ -333,6 +333,19 @@ describe('AssistantPanel', () => {
     expect((await screen.findByRole('note')).textContent).toBe('Prepared after reading customer note. Check it before you confirm.')
   })
 
+  it("sends what the screen shows, and the latest version of it", async () => {
+    function Orders({ filter }: { filter: string }) { useAssistantContext({ path: '/orders', state: { filter, selected: 2 } }); return null }
+    const s = server([say('a'), say('b')])
+    const view = render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><Orders filter="all" /><AssistantPanel /></AssistantProvider>)
+    await ask('x')
+    await screen.findByText('a')
+    expect(s.bodies[0].page).toEqual({ path: '/orders', state: { filter: 'all', selected: 2 } })
+    view.rerender(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><Orders filter="unpaid" /><AssistantPanel /></AssistantProvider>)
+    await ask('y')
+    await screen.findByText('b')
+    expect(s.bodies[1].page.state).toEqual({ filter: 'unpaid', selected: 2 })
+  })
+
   it('lets the app draw its own views', async () => {
     const s = server([call('show_record', { title: 'Order #142', fields: [{ label: 'Total', value: 880 }] }), say('There.')], true, {}, { views: builtinViews })
     render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><AssistantPanel views={{ record: ({ part }) => <p>Custom: {part.data.title}</p> }} /></AssistantProvider>)
