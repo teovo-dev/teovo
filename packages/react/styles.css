@@ -1,0 +1,21 @@
+/* Optional defaults for @teovo/react. Every rule targets a tv- class, so the app's own styles win easily. */
+.tv-panel { display: flex; flex-direction: column; height: 100%; font: inherit; }
+.tv-messages { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding: 12px; }
+.tv-message { display: flex; flex-direction: column; gap: 8px; max-width: 90%; }
+.tv-user { align-self: flex-end; background: #eef2ff; border-radius: 12px; padding: 8px 12px; }
+.tv-assistant { align-self: flex-start; }
+.tv-text { white-space: pre-wrap; }
+.tv-step, .tv-thinking { color: #6b7280; font-size: 0.875em; }
+.tv-error { color: #b91c1c; font-size: 0.875em; }
+.tv-card { border: 1px solid #d1d5db; border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.tv-card-title { font-weight: 600; }
+.tv-card-diff th { text-align: left; font-weight: 400; color: #6b7280; padding-right: 8px; }
+.tv-card-buttons { display: flex; gap: 8px; }
+.tv-card-done { color: #047857; font-size: 0.875em; }
+.tv-action { align-self: flex-start; }
+.tv-input { display: flex; gap: 8px; padding: 12px; border-top: 1px solid #e5e7eb; }
+.tv-input textarea { flex: 1; resize: none; font: inherit; }
+@media (prefers-color-scheme: dark) {
+  .tv-user { background: #1e1b4b; }
+  .tv-card, .tv-input { border-color: #374151; }
+}
