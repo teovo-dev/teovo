@@ -7,6 +7,7 @@ import type { Storage, StoredCard, UsageRow } from './storage.js'
 import { toolsFor, type Action, type Identity, type Proposal, type TeovoTool, type ToolContext } from './tools.js'
 import { makeUntrusted, UNTRUSTED_RULE } from './untrusted.js'
 
+import { makeRedactor, type RedactOptions } from './redact.js'
 import { DEFAULT_SETTINGS, SettingsError, settingsText, validateSettings } from './settings.js'
 import { readPage, screenText, tidy, type Page, type ScreenFn, type SuggestionsFn } from './screens.js'
 export type { Page } from './screens.js'
@@ -38,6 +39,8 @@ export interface AssistantConfig<DB = unknown> {
   cards?: Record<string, CardApplier<any, DB>>
   /** How long a card can be confirmed, and how long after confirming it can be undone. */
   cardRules?: Partial<CardRules>
+  /** Hide fields and patterns (phones, emails, UPI ids, card numbers) from the model and the run log. See redact.ts. */
+  redact?: RedactOptions
   /** Roles that may read and change their tenant's settings (GET/PUT …/settings). Default ['owner', 'admin']. */
   settingsRoles?: readonly string[]
   /** Saved on each run, so a change in replies can be traced to a change in instructions. */
@@ -70,6 +73,8 @@ interface ChatBody { threadId?: string; message?: UIMessage; page?: unknown }
 
 export function createAssistant<DB>(config: AssistantConfig<DB>) {
   if (!config.models.length) throw new Error('createAssistant: at least one model is required')
+
+  const redact = makeRedactor(config.redact)
 
   async function chat(req: Request): Promise<Response> {
     const identity = await config.identify(req)
@@ -113,7 +118,8 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     const page = readPage(body.page)
     const instructions = typeof config.instructions === 'function' ? await config.instructions({ identity, page }) : config.instructions
     const summary = page && config.screen ? await Promise.resolve().then(() => config.screen!(page, ctx)).catch((e) => { config.on?.error?.(e, { identity, threadId: thread.id }); return null }) : null
-    const system = `${instructions}${settingsText(settings)}\n\n${UNTRUSTED_RULE}${screenText(page, summary, ctx.untrusted)}`
+    const shownSummary = summary === null ? null : String(redact(summary))
+    const system = `${instructions}${settingsText(settings)}\n\n${UNTRUSTED_RULE}${screenText(page, shownSummary, ctx.untrusted)}`
 
     const stream = createUIMessageStream<UIMessage<{ runId: string; threadId: string }>>({
       originalMessages: history as UIMessage<{ runId: string; threadId: string }>[],
@@ -132,7 +138,9 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
               const max = config.logLimit ?? 8000
               const logged = clip(input, max)
               try {
-                const out = await t.run(input, ctx)
+                const raw = await t.run(input, ctx)
+                // What a read tool found is what the model sees, so it is what gets hidden. Cards keep their payload.
+                const out = t.kind === 'read' ? redact(raw) : raw
                 const result = clip(out, max)
                 await storage.saveStep({ ...step, input: logged.value, output: result.value, truncated: logged.truncated || result.truncated, durationMs: Date.now() - started })
                 if (t.kind === 'propose') {
