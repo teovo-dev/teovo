@@ -12,11 +12,15 @@ Each phase ends with a test in a real app.
    - Status: done in the scoops repository (10 recorded conversations).
 2. **Build the packages.** The tool loop, the three tool types, cards with undo, screen context, limits, the run log, the tables, the setup command and the panel.
    - Ends when: every v1 row in [features](features.md) is built and tested here.
-   - Status: every v1 row is built, in pull requests 1–10 and 12–21, waiting for review.
+   - Status: done. Every v1 row is built and merged (pull requests 1–33), each checked by hand in the example shop where it can be seen (the "Checked in the app" column).
 3. **Move scoops onto the packages.** Scoops' behaviour does not change; its phase 1 replays still pass. Starts only after phase 2 is finished.
    - Ends when: scoops runs on the packages in production, and a thread opens on a second device.
+   - Status: built in scoops (its pull request 3, stacked on 2): all 10 recorded conversations replay the same, and it was
+     checked locally with Gemini. Waiting until the product is finished: production migrations and the deploy are not done.
 4. **Ready for other businesses (v1.1).**
    - Ends when: a second business uses the assistant in scoops with its own settings, limits and privacy notice.
+   - Status: every v1.1 row is built and merged in Teovo (pull requests 34–39), checked by hand in the example shop;
+     what is left is the test in scoops itself.
 5. **Second app: scobly.** Long runs on a queue, done-checks, the run viewer and trace export.
    - Ends when: scobly's chat runs on the kit with its queue, resume and credit hold intact.
 6. **A new app from day one.**
