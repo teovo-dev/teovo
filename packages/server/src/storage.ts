@@ -2,7 +2,7 @@ import type { UIMessage } from 'ai'
 import type { TenantSettings } from './settings.js'
 import type { Proposal } from './tools.js'
 
-export interface Thread { id: string; tenantId: string; userId: string; title: string | null; createdAt: string }
+export interface Thread { id: string; tenantId: string; userId: string; title: string | null; createdAt: string; updatedAt?: string }
 
 export interface StoredCard extends Proposal {
   id: string
@@ -32,6 +32,11 @@ export type CardPatch = Partial<Pick<StoredCard, 'status' | 'decidedBy' | 'decid
 export interface Storage {
   getThread(tenantId: string, userId: string, threadId: string): Promise<Thread | null>
   createThread(tenantId: string, userId: string): Promise<Thread>
+  /** This person's conversations, most recently active first, archived ones left out. */
+  listThreads(tenantId: string, userId: string, limit: number): Promise<Thread[]>
+  setThreadTitle(threadId: string, title: string): Promise<void>
+  /** Hide a conversation from the list; it can no longer be continued. Returns false if it isn't theirs. */
+  archiveThread(tenantId: string, userId: string, threadId: string): Promise<boolean>
   listMessages(threadId: string): Promise<UIMessage[]>
   saveMessages(threadId: string, messages: UIMessage[]): Promise<void>
   saveCard(card: StoredCard): Promise<void>
@@ -77,8 +82,10 @@ export const periodKey = (period: Period, at = new Date()) => at.toISOString().s
 
 export interface MemoryRun extends RunRecord { status: 'running' | 'done' | 'failed' | 'stopped'; startedAt: Date; error?: string }
 
+const strip = ({ archived: _, ...t }: Thread & { archived?: boolean }): Thread => ({ ...t })
+
 export function memoryStorage() {
-  const threads = new Map<string, Thread>()
+  const threads = new Map<string, Thread & { archived?: boolean }>()
   const messages = new Map<string, UIMessage[]>()
   const cards = new Map<string, StoredCard>()
   const runs = new Map<string, MemoryRun>()
@@ -97,7 +104,18 @@ export function memoryStorage() {
     async saveTenantSettings(tenantId, s) { settings.set(tenantId, structuredClone(s)) },
     async getThread(tenantId, userId, id) {
       const t = threads.get(id)
-      return t && t.tenantId === tenantId && t.userId === userId ? t : null
+      return t && t.tenantId === tenantId && t.userId === userId && !t.archived ? strip(t) : null
+    },
+    async listThreads(tenantId, userId, limit) {
+      return [...threads.values()].filter((t) => t.tenantId === tenantId && t.userId === userId && !t.archived)
+        .sort((a, b) => (b.updatedAt ?? b.createdAt).localeCompare(a.updatedAt ?? a.createdAt)).slice(0, limit).map(strip)
+    },
+    async setThreadTitle(id, title) { const t = threads.get(id); if (t) t.title = title },
+    async archiveThread(tenantId, userId, id) {
+      const t = threads.get(id)
+      if (!t || t.tenantId !== tenantId || t.userId !== userId || t.archived) return false
+      t.archived = true
+      return true
     },
     async createThread(tenantId, userId) {
       const t = { id: crypto.randomUUID(), tenantId, userId, title: null, createdAt: new Date().toISOString() }
@@ -109,6 +127,8 @@ export function memoryStorage() {
       const byId = new Map((messages.get(id) ?? []).map((m) => [m.id, m]))
       for (const m of list) byId.set(m.id, structuredClone(m))
       messages.set(id, [...byId.values()])
+      const t = threads.get(id)
+      if (t) t.updatedAt = new Date().toISOString()
     },
     async saveCard(card) { cards.set(card.id, structuredClone({ createdAt: new Date().toISOString(), ...card })) },
     async getCard(tenantId, userId, id) {

@@ -21,3 +21,8 @@
 }
 .tv-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px; }
 .tv-chip { border: 1px solid #d1d5db; border-radius: 999px; padding: 4px 10px; background: none; font: inherit; font-size: 0.875em; cursor: pointer; }
+.tv-threads { list-style: none; margin: 0; padding: 8px; display: flex; flex-direction: column; gap: 2px; }
+.tv-threads li { display: flex; align-items: center; gap: 4px; }
+.tv-thread { flex: 1; text-align: left; background: none; border: 0; padding: 8px; border-radius: 8px; font: inherit; cursor: pointer; }
+.tv-threads li[aria-current] .tv-thread { background: #eef2ff; }
+.tv-thread-remove { background: none; border: 0; color: #6b7280; cursor: pointer; }

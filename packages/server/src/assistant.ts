@@ -65,6 +65,12 @@ function clip(v: unknown, max: number): { value: unknown; truncated: boolean } {
   return text.length <= max ? { value: v, truncated: false } : { value: text.slice(0, max), truncated: true }
 }
 
+/** A conversation's title until something better exists: the start of its first question. */
+function titleFrom(m: UIMessage): string {
+  const text = m.parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join(' ').replace(/\s+/g, ' ').trim()
+  return text.length > 60 ? `${text.slice(0, 57).trimEnd()}…` : text
+}
+
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 
@@ -103,7 +109,9 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
       : await storage.createThread(identity.tenantId, identity.userId)
     if (!thread) return json(404, { error: 'That conversation was not found.' })   // also when it is someone else's
 
-    const history = [...(await storage.listMessages(thread.id)), message].slice(-(config.historyMessages ?? 30))
+    const earlier = await storage.listMessages(thread.id)
+    if (!earlier.length && !thread.title) await storage.setThreadTitle(thread.id, titleFrom(message))
+    const history = [...earlier, message].slice(-(config.historyMessages ?? 30))
     await storage.saveMessages(thread.id, [message])
 
     const db = await config.asUser(identity, req)
@@ -263,6 +271,29 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     return json(200, { settings: (await config.storage.tenantSettings(identity.tenantId)) ?? DEFAULT_SETTINGS, tools })
   }
 
+  async function threads(req: Request, id?: string, archive = false): Promise<Response> {
+    const identity = await config.identify(req)
+    if (!identity) return json(401, { error: 'Sign in to use the assistant.' })
+    const { storage } = config
+    if (!id) {
+      const limit = Math.min(Math.max(Number(new URL(req.url).searchParams.get('limit')) || 30, 1), 100)
+      const list = await storage.listThreads(identity.tenantId, identity.userId, limit)
+      return json(200, { threads: list.map(({ id, title, createdAt, updatedAt }) => ({ id, title, createdAt, updatedAt: updatedAt ?? createdAt })) })
+    }
+    if (archive) {
+      return (await storage.archiveThread(identity.tenantId, identity.userId, id)) ? json(200, { archived: true }) : json(404, { error: 'That conversation was not found.' })
+    }
+    const thread = await storage.getThread(identity.tenantId, identity.userId, id)
+    if (!thread) return json(404, { error: 'That conversation was not found.' })
+    // Cards come back as they are now (confirmed, undone…), not as they were when first shown.
+    const cards = new Map((await storage.listCards(thread.id)).map((c) => [c.id, publicCard(c)]))
+    const messages = (await storage.listMessages(thread.id)).map((m) => ({
+      ...m,
+      parts: m.parts.map((p) => (p.type === 'data-card' && 'id' in p && p.id && cards.has(p.id) ? { ...p, data: cards.get(p.id) } : p)),
+    }))
+    return json(200, { thread: { id: thread.id, title: thread.title, createdAt: thread.createdAt }, messages })
+  }
+
   async function card(req: Request, id: string, decision: Decision): Promise<Response> {
     const identity = await config.identify(req)
     if (!identity) return json(401, { error: 'Sign in to use the assistant.' })
@@ -281,12 +312,15 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
   }
 
   return {
-    /** Mount under any path, e.g. app.all('/api/assistant/*', teovo.fetch). Handles POST …/chat, GET …/suggestions, GET/PUT …/settings and POST …/cards/:id/(confirm|skip|undo). */
+    /** Mount under any path, e.g. app.all('/api/assistant/*', teovo.fetch). Handles POST …/chat, GET …/threads, GET …/threads/:id, POST …/threads/:id/archive, GET …/suggestions, GET/PUT …/settings and POST …/cards/:id/(confirm|skip|undo). */
     async fetch(req: Request): Promise<Response> {
       const path = new URL(req.url).pathname
       if (req.method === 'POST' && path.endsWith('/chat')) return chat(req)
       if (req.method === 'GET' && path.endsWith('/suggestions')) return suggestions(req)
       if ((req.method === 'GET' || req.method === 'PUT') && path.endsWith('/settings')) return tenantSettings(req)
+      if (req.method === 'GET' && path.endsWith('/threads')) return threads(req)
+      const t = /\/threads\/([0-9a-f-]{36})(\/archive)?$/i.exec(path)
+      if (t && ((req.method === 'GET' && !t[2]) || (req.method === 'POST' && t[2]))) return threads(req, t[1]!.toLowerCase(), Boolean(t[2]))
       const m = /\/cards\/([0-9a-f-]{36})\/(confirm|skip|undo)$/i.exec(path)
       if (req.method === 'POST' && m) return card(req, m[1]!.toLowerCase(), m[2] as Decision)
       return json(404, { error: 'Not found.' })

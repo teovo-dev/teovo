@@ -1,7 +1,7 @@
 import { useChat } from '@ai-sdk/react'
 import { DefaultChatTransport } from 'ai'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import type { Action, Card, CardDecision, Page, Suggestions, TeovoMessage } from './types.js'
+import type { Action, Card, CardDecision, Page, Suggestions, TeovoMessage, ThreadSummary } from './types.js'
 
 export interface AssistantProviderProps {
   /** Where the app mounted the server handler, e.g. '/api/assistant'. The panel posts to `${endpoint}/chat`. */
@@ -29,6 +29,10 @@ interface AssistantState {
   threadId: string | undefined
   /** Start a fresh conversation: clears the messages; the next message creates a new thread. */
   newChat: () => void
+  /** Load an earlier conversation into the panel; the next message continues it. Rejects with the sentence to show. */
+  openThread: (id: string) => Promise<void>
+  /** Calls the handler: path under the endpoint, with the provider's headers and fetch. */
+  request: (path: string, init?: RequestInit) => Promise<Response>
   setPage: (page: Page | undefined) => void
   /** Chips and hint for now: the screen's when the chat is idle, the follow-ups after a reply. */
   suggestions: Suggestions
@@ -95,6 +99,30 @@ export function AssistantProvider(props: AssistantProviderProps) {
     return () => { live = false }
   }, [empty, pageKey, props.endpoint])
 
+  const request = useCallback(async (path: string, init: RequestInit = {}) => {
+    const p = latest.current
+    const h = typeof p.headers === 'function' ? await p.headers() : (p.headers ?? {})
+    return (p.fetch ?? fetch)(`${p.endpoint.replace(/\/$/, '')}${path}`, { ...init, headers: { ...h, ...(init.headers as Record<string, string> | undefined) } })
+  }, [])
+
+  const openThread = useCallback(async (id: string) => {
+    const res = await request(`/threads/${encodeURIComponent(id)}`)
+    const body = (await res.json().catch(() => ({}))) as { messages?: TeovoMessage[]; error?: string }
+    if (!res.ok || !body.messages) throw new Error(body.error ?? 'That conversation could not be opened.')
+    chat.stop()
+    thread.current = id
+    setThreadId(id)
+    chat.setMessages(body.messages)
+  }, [chat, request])
+
+  // Continue the conversation the app passed in, e.g. from the URL.
+  const initial = useRef(props.threadId)
+  useEffect(() => {
+    const id = initial.current
+    initial.current = undefined
+    if (id) openThread(id).catch(() => { thread.current = undefined; setThreadId(undefined) })
+  }, [openThread])
+
   const newChat = useCallback(() => {
     chat.stop()
     thread.current = undefined
@@ -118,8 +146,8 @@ export function AssistantProvider(props: AssistantProviderProps) {
     return body.card ?? {}
   }, [])
 
-  const value = useMemo<AssistantState>(() => ({ chat, threadId, newChat, setPage, suggestions, clearSuggestions, decideCard, onAction: props.onAction }),
-    [chat, threadId, newChat, setPage, suggestions, clearSuggestions, decideCard, props.onAction])
+  const value = useMemo<AssistantState>(() => ({ chat, threadId, newChat, openThread, request, setPage, suggestions, clearSuggestions, decideCard, onAction: props.onAction }),
+    [chat, threadId, newChat, openThread, request, setPage, suggestions, clearSuggestions, decideCard, props.onAction])
   return <Ctx.Provider value={value}>{props.children}</Ctx.Provider>
 }
 
@@ -128,6 +156,29 @@ export function useAssistant(): AssistantState {
   const v = useContext(Ctx)
   if (!v) throw new Error('useAssistant must be used inside <AssistantProvider>')
   return v
+}
+
+/** This person's earlier conversations, newest first. Refreshes when a new conversation starts. */
+export function useThreads(limit = 30) {
+  const { request, threadId } = useAssistant()
+  const [threads, setThreads] = useState<ThreadSummary[]>([])
+  const [error, setError] = useState<string>()
+  const refresh = useCallback(async () => {
+    try {
+      const res = await request(`/threads?limit=${limit}`)
+      const body = (await res.json()) as { threads?: ThreadSummary[]; error?: string }
+      if (!res.ok) throw new Error(body.error ?? 'Could not load conversations.')
+      setThreads(body.threads ?? [])
+      setError(undefined)
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+  }, [request, limit])
+  useEffect(() => { void refresh() }, [refresh, threadId])
+  const archive = useCallback(async (id: string) => {
+    const res = await request(`/threads/${encodeURIComponent(id)}/archive`, { method: 'POST' })
+    if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error ?? 'Could not remove it.')
+    setThreads((t) => t.filter((x) => x.id !== id))
+  }, [request])
+  return { threads, error, refresh, archive }
 }
 
 /**
