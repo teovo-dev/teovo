@@ -31,7 +31,7 @@ suite('@teovo/db on Postgres', () => {
 
   it('creates core tables only, adds a feature later, and never repeats a migration', async () => {
     const { query, client } = await freshSchema()
-    expect(await migrate(query)).toEqual(['0001_core', '0003_tenant_formats', '0007_api_functions', '0009_ratings', '0010_audit_misses'])
+    expect(await migrate(query)).toEqual(['0001_core', '0003_tenant_formats', '0007_api_functions', '0009_ratings', '0010_audit_misses', '0011_privacy_switches'])
     expect(await missingTables(query, { proposals: true })).toEqual(['tv_proposals'])
     expect(await migrate(query, { features: { proposals: true } })).toEqual(['0002_proposals', '0004_proposal_sources', '0006_proposal_fields'])
     expect(await migrate(query, { features: { proposals: true } })).toEqual([])
@@ -221,6 +221,10 @@ suite('@teovo/db on Postgres', () => {
     expect(await s.tenantSettings('shop-1')).toBeNull()
     await s.saveTenantSettings('shop-1', { enabled: true, instructions: 'Closed Sundays', glossary: { khata: 'credit' }, toolsOff: ['get_expenses'], formats: { currency: 'INR' } })
     expect(await s.tenantSettings('shop-1')).toEqual({ enabled: true, instructions: 'Closed Sundays', glossary: { khata: 'credit' }, toolsOff: ['get_expenses'], formats: { currency: 'INR' } })
+    await s.saveTenantSettings('shop-1', { enabled: true, privacy: { notice: 'Sent to Gemini.', pictures: false } })
+    expect(await s.tenantSettings('shop-1')).toEqual({ enabled: true, privacy: { notice: 'Sent to Gemini.', pictures: false } })
+    await s.saveTenantSettings('*', { enabled: true, modelsOff: ['gemini-2.5-flash'] })
+    expect(await s.tenantSettings('*')).toEqual({ enabled: true, modelsOff: ['gemini-2.5-flash'] })
     await s.saveTenantSettings('shop-1', { enabled: false })
     expect(await s.tenantSettings('shop-1')).toEqual({ enabled: false })
     expect(await s.tenantSettings('shop-2')).toBeNull()

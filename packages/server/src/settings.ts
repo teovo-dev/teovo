@@ -13,7 +13,15 @@ export interface TenantSettings {
   toolsOff?: string[]
   /** How this business writes dates and money; any part left out uses the app's default. */
   formats?: Partial<Formats>
+  /** What people are told before they use the assistant, and whether pictures may be sent to the model. */
+  privacy?: { notice?: string; pictures?: boolean }
+  /** Only in the switches row (teovo.setSwitches): models taken out of service for every tenant, by model id. */
+  modelsOff?: string[]
 }
+
+/** Tools Teovo adds itself, which a tenant can also switch off. */
+export const BUILTIN_TOOLS = ['cannot_help']
+const MAX_NOTICE = 2000
 
 export const DEFAULT_SETTINGS: TenantSettings = { enabled: true }
 
@@ -43,7 +51,7 @@ export function validateSettings(raw: unknown, tools: readonly TeovoTool[]): Ten
   }
   if (r.toolsOff !== undefined && r.toolsOff !== null) {
     if (!Array.isArray(r.toolsOff) || r.toolsOff.some((t) => typeof t !== 'string')) throw new SettingsError('toolsOff must be a list of tool names.')
-    const known = new Set(tools.map((t) => t.name))
+    const known = new Set([...tools.map((t) => t.name), ...BUILTIN_TOOLS])
     const unknown = (r.toolsOff as string[]).filter((t) => !known.has(t))
     if (unknown.length) throw new SettingsError(`Unknown tool: ${unknown.join(', ')}.`)
     if (r.toolsOff.length) out.toolsOff = [...new Set(r.toolsOff as string[])]
@@ -61,7 +69,25 @@ export function validateSettings(raw: unknown, tools: readonly TeovoTool[]): Ten
     if (problem) throw new SettingsError(problem)
     if (Object.keys(pick).length) out.formats = pick
   }
+  if (r.privacy !== undefined && r.privacy !== null) {
+    if (typeof r.privacy !== 'object' || Array.isArray(r.privacy)) throw new SettingsError('privacy must be { notice, pictures }.')
+    const pr = r.privacy as Record<string, unknown>
+    const privacy: NonNullable<TenantSettings['privacy']> = {}
+    if (pr.notice !== undefined && pr.notice !== null) {
+      if (typeof pr.notice !== 'string') throw new SettingsError('The notice must be text.')
+      if (pr.notice.trim().length > MAX_NOTICE) throw new SettingsError(`The notice can be at most ${MAX_NOTICE} characters.`)
+      if (pr.notice.trim()) privacy.notice = pr.notice.trim()
+    }
+    if (pr.pictures !== undefined && pr.pictures !== null) privacy.pictures = Boolean(pr.pictures)
+    if (Object.keys(privacy).length) out.privacy = privacy
+  }
   return out
+}
+
+/** A short id for a notice's exact words: accepting one notice doesn't count as accepting a changed one. */
+export async function noticeId(notice: string): Promise<string> {
+  const h = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(notice)))
+  return [...h.slice(0, 8)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
 /** The tenant's part of the system prompt. Written by the tenant's own admins, so it guides but never overrides the app. */

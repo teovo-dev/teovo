@@ -89,7 +89,7 @@ export function postgresStorage(query: Query): Storage {
       return r.rows[0] ? card(r.rows[0]) : null
     },
     async tenantSettings(tenantId) {
-      const r = await query('select enabled, instructions, glossary, tools_off, formats from tv_tenant_settings where tenant_id = $1', [tenantId])
+      const r = await query('select enabled, instructions, glossary, tools_off, formats, privacy, models_off from tv_tenant_settings where tenant_id = $1', [tenantId])
       const row = r.rows[0]
       if (!row) return null
       return {
@@ -98,13 +98,16 @@ export function postgresStorage(query: Query): Storage {
         ...(row.glossary ? { glossary: row.glossary } : {}),
         ...(row.tools_off ? { toolsOff: row.tools_off } : {}),
         ...(row.formats ? { formats: row.formats } : {}),
+        ...(row.privacy ? { privacy: row.privacy } : {}),
+        ...(row.models_off ? { modelsOff: row.models_off } : {}),
       }
     },
     async saveTenantSettings(tenantId, s) {
       await query(
-        `insert into tv_tenant_settings (tenant_id, enabled, instructions, glossary, tools_off, formats) values ($1, $2, $3, $4, $5, $6)
-         on conflict (tenant_id) do update set enabled = excluded.enabled, instructions = excluded.instructions, glossary = excluded.glossary, tools_off = excluded.tools_off, formats = excluded.formats`,
-        [tenantId, s.enabled, s.instructions ?? null, json(s.glossary), json(s.toolsOff), json(s.formats)])
+        `insert into tv_tenant_settings (tenant_id, enabled, instructions, glossary, tools_off, formats, privacy, models_off) values ($1, $2, $3, $4, $5, $6, $7, $8)
+         on conflict (tenant_id) do update set enabled = excluded.enabled, instructions = excluded.instructions, glossary = excluded.glossary, tools_off = excluded.tools_off,
+           formats = excluded.formats, privacy = excluded.privacy, models_off = excluded.models_off`,
+        [tenantId, s.enabled, s.instructions ?? null, json(s.glossary), json(s.toolsOff), json(s.formats), json(s.privacy), json(s.modelsOff)])
     },
     async startRun(r) {
       await query('insert into tv_runs (id, thread_id, tenant_id, user_id, model, prompt_version) values ($1, $2, $3, $4, $5, $6)',

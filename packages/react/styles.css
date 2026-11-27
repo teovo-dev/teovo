@@ -82,7 +82,8 @@
 .tv-editing { align-self: stretch; max-width: 100%; gap: 6px; }
 .tv-editing textarea { width: 100%; resize: vertical; border: 1px solid var(--tv-accent); border-radius: 12px; padding: 8px 12px; background: var(--tv-bg); font: inherit; color: inherit; }
 .tv-edit-buttons { display: flex; justify-content: flex-end; gap: 8px; }
-.tv-btn-primary { background: var(--tv-accent); color: var(--tv-accent-text); border-color: transparent; }
+.tv-btn.tv-btn-primary { background: var(--tv-accent); color: var(--tv-accent-text); border-color: transparent; }
+.tv-btn.tv-btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
 .tv-edit-note { margin: 0; font-size: 0.75em; color: var(--tv-muted); text-align: right; }
 
 /* ---------- Buttons ---------- */
@@ -167,6 +168,13 @@
 .tv-chips::-webkit-scrollbar { display: none; }
 .tv-chip { flex: none; border: 1px solid var(--tv-border); border-radius: 999px; padding: 6px 12px; background: var(--tv-bg); font-size: 0.875em; white-space: nowrap; transition: background 0.15s, border-color 0.15s; }
 .tv-chip:hover { background: var(--tv-subtle); border-color: color-mix(in srgb, var(--tv-accent) 40%, var(--tv-border)); }
+
+/* ---------- Notice and allowance ---------- */
+.tv-notice { margin: 0 12px 10px; padding: 12px 14px; border: 1px solid var(--tv-border); border-radius: var(--tv-radius); background: var(--tv-subtle); font-size: 0.875em; display: flex; flex-direction: column; gap: 10px; }
+.tv-notice p { margin: 0; white-space: pre-wrap; }
+.tv-notice .tv-btn { align-self: flex-end; }
+.tv-input[aria-disabled='true'] { opacity: 0.5; pointer-events: none; }
+.tv-allowance { margin: 0 16px 6px; font-size: 0.8125em; color: var(--tv-muted); }
 
 /* ---------- Composer ---------- */
 .tv-input { padding: 0 12px 12px; }

@@ -6,4 +6,4 @@ export { readFile, shrinkPicture, SHRINK_BYTES, SHRINK_SIDE, useRecorder, useVoi
 export { Markdown } from './markdown.js'
 export { AssistantSheet, themeStyle, type AssistantSheetProps, type Theme } from './sheet.js'
 export { AssistantPanel, pageText, type AssistantPanelProps, type CardState } from './panel.js'
-export type { Action, Card, CardDecision, Formats, View, Page, Suggestions, ThreadSummary, Step, TeovoData, TeovoMessage } from './types.js'
+export type { Action, AllowanceItem, Card, CardDecision, Formats, View, Page, Policy, Suggestions, ThreadSummary, Step, TeovoData, TeovoMessage } from './types.js'

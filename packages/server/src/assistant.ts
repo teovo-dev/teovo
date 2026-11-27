@@ -3,7 +3,7 @@ import { convertToModelMessages, createUIMessageStream, createUIMessageStreamRes
 import { fallbackModel } from './fallback.js'
 import { CardError, cardForModel, decide, publicCard, type CardHandler, type CardRules, type Decision } from './cards.js'
 import type { CardEventKind, Miss } from './storage.js'
-import { checkLimits, limitMessage, type LimitHit, type Limits } from './limits.js'
+import { allowance, checkLimits, limitMessage, type LimitHit, type Limits } from './limits.js'
 import type { Storage, StoredCard, UsageRow } from './storage.js'
 import { toolsFor, type Action, type Identity, type Proposal, type TeovoTool, type ToolContext } from './tools.js'
 import { makeUntrusted, UNTRUSTED_RULE } from './untrusted.js'
@@ -13,7 +13,7 @@ import { checkForm, formHandler, formsText, missingFields, VIEWS_RULE, type Form
 import { checkMessage, type AttachmentRules } from './attachments.js'
 import { picturesOnce, storeFiles, type FileRules } from './files.js'
 import { checkFormats, DEFAULT_FORMATS, formatsText, type Formats } from './formats.js'
-import { DEFAULT_SETTINGS, SettingsError, settingsText, validateSettings } from './settings.js'
+import { DEFAULT_SETTINGS, noticeId, SettingsError, settingsText, validateSettings, type TenantSettings } from './settings.js'
 import { readPage, screenPath, screensText, screenText, tidy, type Page, type ScreenFn, type ScreenInfo, type SuggestionsFn } from './screens.js'
 import { z } from 'zod'
 export type { Page } from './screens.js'
@@ -124,6 +124,9 @@ async function stableId(text: string): Promise<string> {
 /** Said when the model, asked twice, still gives no answer in words. */
 const NO_ANSWER = 'I could not put an answer together for that. Try asking in another way.'
 
+/** The row in the tenant-settings table that holds the switches for every tenant (teovo.setSwitches). */
+export const SWITCHES = '*'
+
 const DEFAULT_TIMEOUTS = { firstChunkMs: 30_000, chunkMs: 20_000, totalMs: 120_000 }
 
 function clip(v: unknown, max: number): { value: unknown; truncated: boolean } {
@@ -159,7 +162,7 @@ const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 
 /** The request body the panel sends: only the new message; the history stays on the server. */
-interface ChatBody { threadId?: string; message?: UIMessage; page?: unknown }
+interface ChatBody { threadId?: string; message?: UIMessage; page?: unknown; consent?: string }
 
 export function createAssistant<DB>(config: AssistantConfig<DB>) {
   if (!config.models.length) throw new Error('createAssistant: at least one model is required')
@@ -184,8 +187,18 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     if (problem) return json(400, { error: problem })
 
     const { storage } = config
-    const settings = (await storage.tenantSettings(identity.tenantId)) ?? DEFAULT_SETTINGS
+    const [own, switches] = await Promise.all([storage.tenantSettings(identity.tenantId), storage.tenantSettings(SWITCHES)])
+    if (switches && !switches.enabled) return json(503, { error: 'The assistant is paused for everyone at the moment. Try again later.' })
+    // A tool switched off for everyone is off for this tenant too.
+    const settings: TenantSettings = { ...(own ?? DEFAULT_SETTINGS), toolsOff: [...new Set([...(own?.toolsOff ?? []), ...(switches?.toolsOff ?? [])])] }
     if (!settings.enabled) return json(403, { error: 'The assistant is turned off for your team. An admin can turn it on in settings.' })
+    // The tenant's notice must have been accepted, in its current words; and pictures only if the tenant allows them.
+    if (settings.privacy?.notice && body.consent !== (await noticeId(settings.privacy.notice))) {
+      return json(428, { error: 'Read and accept the notice about the assistant first.', notice: settings.privacy.notice })
+    }
+    if (settings.privacy?.pictures === false && message.parts.some((p) => p.type === 'file')) {
+      return json(400, { error: 'Pictures are turned off for your team. Describe it in words instead.' })
+    }
     // Before anything is saved, so a refused message leaves no empty thread behind.
     const timeouts = { ...DEFAULT_TIMEOUTS, ...config.timeouts }
     const hit = await checkLimits(storage, identity, config.limits, timeouts.totalMs * 2)
@@ -212,7 +225,9 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     const page = readPage(body.page)
     const text = message.parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join(' ')
     const routed = config.route ? await Promise.resolve().then(() => config.route!({ identity, page, text, history: earlier.length })).catch((e) => { config.on?.error?.(e, { identity, threadId: thread.id }); return undefined }) : undefined
-    const models = routed?.length ? routed : config.models
+    const offModels = new Set(switches?.modelsOff ?? [])
+    const models = (routed?.length ? routed : config.models).filter((m) => !offModels.has(m.modelId))
+    if (!models.length) return json(503, { error: 'The assistant is paused for everyone at the moment. Try again later.' })
     const first = models[0]!
     await storage.startRun({ id: runId, threadId: thread.id, tenantId: identity.tenantId, userId: identity.userId, model: first.modelId, promptVersion: config.promptVersion })
     // Count again now that this reply is registered: two messages sent at the same moment both passed the check
@@ -413,13 +428,14 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
             writer.merge(toUIMessageStream({ stream: again.stream, sendStart: false, sendFinish: false, onError: () => NO_ANSWER, redactToolErrors: false }))
             text = await Promise.resolve(again.text).catch(() => NO_ANSWER)
           }
-          writer.write({ type: 'finish' })
-          await finish('done')
           if (config.suggestions) {
-            // Follow-ups ride along as a transient part: shown under this reply, never saved in the history.
+            // Follow-ups ride along as a transient part: shown under this reply, never saved in the history. Before
+            // 'finish': a client that stops reading at the end of the reply would never see them after it.
             const s = await Promise.resolve().then(() => config.suggestions!({ identity: identity!, page, after: text, db })).catch(() => null)
             if (s && s.suggestions.length) writer.write({ type: 'data-suggestions', data: tidy(s), transient: true })
           }
+          writer.write({ type: 'finish' })
+          await finish('done')
         } catch (e) {
           await finish(req.signal.aborted ? 'stopped' : 'failed', streamError ?? e)
           throw e
@@ -600,6 +616,21 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     return json(200, { events: await config.storage.listCardEvents(identity.tenantId, { limit, ...(before ? { before } : {}), ...(userId ? { userId } : {}) }) })
   }
 
+  /** GET …/policy: what this person must know before chatting (the tenant's notice and its id), and whether pictures are allowed. */
+  async function policy(req: Request): Promise<Response> {
+    const identity = await config.identify(req)
+    if (!identity) return json(401, { error: 'Sign in to use the assistant.' })
+    const p = (await config.storage.tenantSettings(identity.tenantId))?.privacy ?? {}
+    return json(200, { pictures: p.pictures !== false && Boolean(config.attachments), ...(p.notice ? { notice: p.notice, noticeId: await noticeId(p.notice) } : {}) })
+  }
+
+  /** GET …/allowance: every limit that applies to this person, with how much is used. */
+  async function allowanceRoute(req: Request): Promise<Response> {
+    const identity = await config.identify(req)
+    if (!identity) return json(401, { error: 'Sign in to use the assistant.' })
+    return json(200, { allowance: await allowance(config.storage, identity, config.limits) })
+  }
+
   /** Conversations, pictures and logs of one person, or a whole tenant, gone. */
   async function wipe(tenantId: string, userId?: string): Promise<{ threads: number; files: number }> {
     const elsewhere = await config.files?.store.removeFor?.(tenantId, userId)   // pictures kept outside the tables
@@ -649,6 +680,14 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     /** Delete a person's (or with no userId, a whole tenant's) conversations, pictures and logs, e.g. on a privacy request. */
     wipe,
     /**
+     * For whoever runs the app, not tenants: pause the assistant for everyone (enabled: false), or take tools or models
+     * out of service for every tenant at once, e.g. a tool with a bug or a model that misbehaves. Takes effect on the
+     * next message. Pass {} to switch everything back on.
+     */
+    async setSwitches(sw: { enabled?: boolean; toolsOff?: string[]; modelsOff?: string[] }): Promise<void> {
+      await config.storage.saveTenantSettings(SWITCHES, { enabled: sw.enabled !== false, ...(sw.toolsOff?.length ? { toolsOff: sw.toolsOff } : {}), ...(sw.modelsOff?.length ? { modelsOff: sw.modelsOff } : {}) })
+    },
+    /**
      * Delete pictures older than `files.keepDays`. Call it on a schedule (a cron, a Worker scheduled event).
      * Returns how many were removed; 0 when no keepDays or the store can't list by age.
      */
@@ -672,6 +711,8 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
       if (t && ((req.method === 'GET' && !t[2]) || (req.method === 'POST' && t[2]))) return threads(req, t[1]!.toLowerCase(), Boolean(t[2]))
       const rt = /\/runs\/([0-9a-f-]{36})\/rating$/i.exec(path)
       if (req.method === 'POST' && rt) return rate(req, rt[1]!.toLowerCase())
+      if (req.method === 'GET' && path.endsWith('/policy')) return policy(req)
+      if (req.method === 'GET' && path.endsWith('/allowance')) return allowanceRoute(req)
       if (req.method === 'GET' && path.endsWith('/audit')) return adminList(req, 'audit')
       if (req.method === 'GET' && path.endsWith('/misses')) return adminList(req, 'misses')
       if (req.method === 'POST' && path.endsWith('/wipe')) return wipeRoute(req)

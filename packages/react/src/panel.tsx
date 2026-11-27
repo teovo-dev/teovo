@@ -3,7 +3,7 @@ import { readFile, useRecorder, useVoice, type PendingFile } from './input.js'
 import { Markdown } from './markdown.js'
 import { themeStyle, type Theme } from './sheet.js'
 import { useAssistant } from './provider.js'
-import type { Action, Card, CardDecision, Formats, Page, Step, TeovoMessage, View } from './types.js'
+import type { Action, AllowanceItem, Card, CardDecision, Formats, Page, Step, TeovoMessage, View } from './types.js'
 import { defaultViews, formatValue, isCurrent, type CellFormat, type ViewComponent } from './views.js'
 
 export interface AssistantPanelProps {
@@ -40,6 +40,8 @@ export interface AssistantPanelProps {
    * Default on, whenever the app reports a page with useAssistantContext. Pass false to hide it, or a function to word it.
    */
   pageLabel?: false | ((page: Page) => ReactNode)
+  /** A quiet line above the message box when little of the allowance is left ("8 messages left today"). Default true. */
+  showAllowance?: boolean
   className?: string
 }
 
@@ -47,7 +49,7 @@ export type CardState = { status: 'open' | 'busy' | 'confirmed' | 'skipped' | 'u
 
 /** A ready-made chat panel. Unstyled apart from `tv-` class names; import '@teovo/react/styles.css' for defaults. */
 export function AssistantPanel(props: AssistantPanelProps) {
-  const { chat, newChat, suggestions, clearSuggestions, page } = useAssistant()
+  const { chat, newChat, suggestions, clearSuggestions, page, policy, noticeAccepted, acceptNotice, allowance } = useAssistant()
   const [text, setText] = useState('')
   const busy = chat.status === 'submitted' || chat.status === 'streaming'
   const log = useRef<HTMLDivElement>(null)
@@ -76,14 +78,15 @@ export function AssistantPanel(props: AssistantPanelProps) {
     el.style.height = 'auto'
     el.style.height = `${el.scrollHeight}px`
   }, [text])
-  const attach = props.attach ? (props.attach === true ? {} : props.attach) : null
+  const attach = props.attach && policy.pictures ? (props.attach === true ? {} : props.attach) : null
+  const low = props.showAllowance === false ? null : allowanceNote(allowance)
   const addSaid = (said: string) => setText((t) => (t ? `${t} ${said}` : said))
   const browserVoice = useVoice(addSaid, props.voiceLang)
   const recorded = useRecorder(addSaid, props.transcribe)
   const voice = props.transcribe ? recorded : { ...browserVoice, working: false }
 
   function ask(t: string) {
-    if ((!t.trim() && !files.length) || busy) return
+    if ((!t.trim() && !files.length) || busy || (policy.notice && !noticeAccepted)) return
     setText('')
     clearSuggestions()
     const parts = files.map((f) => ({ type: 'file' as const, mediaType: f.mediaType, filename: f.name, url: f.url }))
@@ -116,7 +119,7 @@ export function AssistantPanel(props: AssistantPanelProps) {
         {busy && !showsSomething(chat.messages.at(-1)) ? <div className="tv-thinking" role="status" aria-label="Thinking"><span /><span /><span /></div> : null}
         {chat.error ? <div className="tv-error" role="alert">{errorText(chat.error)}</div> : null}
       </div>
-      {props.showSuggestions !== false && !busy && suggestions.suggestions.length ? (
+      {props.showSuggestions !== false && !busy && suggestions.suggestions.length && !(policy.notice && !noticeAccepted) ? (
         <div className="tv-chips" role="group" aria-label="Suggestions">
           {suggestions.suggestions.map((s) => <button key={s} type="button" className="tv-chip" onClick={() => ask(s)}>{s}</button>)}
         </div>
@@ -132,7 +135,14 @@ export function AssistantPanel(props: AssistantPanelProps) {
         </ul>
       ) : null}
       {fileError || voice.error ? <div className="tv-error" role="alert">{fileError ?? voice.error}</div> : null}
-      <form className="tv-input" onSubmit={send}>
+      {policy.notice && !noticeAccepted ? (
+        <div className="tv-notice" role="region" aria-label="About this assistant">
+          <p>{policy.notice}</p>
+          <button type="button" className="tv-btn tv-btn-primary" onClick={acceptNotice}>I understand</button>
+        </div>
+      ) : null}
+      {low ? <div className="tv-allowance" role="status">{low}</div> : null}
+      <form className="tv-input" onSubmit={send} aria-disabled={Boolean(policy.notice && !noticeAccepted)}>
         {page && props.pageLabel !== false && (page.title || page.path) ? (
           <div className="tv-page" title="The assistant sees this page and answers about it">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
@@ -391,6 +401,19 @@ function showsSomething(m: TeovoMessage | undefined): boolean {
   if (!m || m.role !== 'assistant') return false
   return m.parts.some((p) => (p.type === 'text' && p.text.trim() !== '') || p.type === 'data-view' || p.type === 'data-card' || p.type === 'data-action'
     || (p.type === 'data-step' && (p.data as Step).state === 'running'))
+}
+
+/** "2 messages left today", or for other units how much of it is used, once little is left. */
+function allowanceNote(items: AllowanceItem[]): string | null {
+  // Messages: when 20% or 3 or fewer are left (whichever comes first). Other units: 20%.
+  const tight = items.map((a) => ({ ...a, left: Math.max(0, a.limit - a.used) }))
+    .filter((a) => a.left <= (a.unit === 'messages' ? Math.max(a.limit * 0.2, 3) : a.limit * 0.2))
+    .sort((a, b) => a.left / a.limit - b.left / b.limit)[0]
+  if (!tight) return null
+  const when = tight.period === 'day' ? 'today' : 'this month'
+  const whose = tight.scope === 'tenant' ? 'Your team has' : 'You have'
+  if (tight.unit === 'messages') return `${whose} ${tight.left} ${tight.left === 1 ? 'message' : 'messages'} left ${when}.`
+  return `${whose} used ${Math.min(100, Math.round((tight.used / tight.limit) * 100))}% of the assistant allowance for ${when}.`
 }
 
 /** 'amount_due' → 'Amount due', 'customerName' → 'Customer name'. */

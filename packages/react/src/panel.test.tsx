@@ -49,6 +49,42 @@ async function ask(text: string) {
 
 afterEach(() => { cleanup(); gate = undefined })
 
+describe('notice, pictures and allowance', () => {
+  it('shows the notice and blocks typing until it is accepted, then sends the acceptance with each message', async () => {
+    localStorage.clear()
+    const s = server([say('Hello.')], true, {}, { attachments: {} })
+    // The tenant's notice, set the way an admin would.
+    await s.fetch('/api/assistant/settings', { method: 'PUT', body: JSON.stringify({ enabled: true, privacy: { notice: 'Questions go to Google Gemini.' } }) })
+    mount({ fetch: s.fetch })
+    const notice = await screen.findByRole('region', { name: 'About this assistant' })
+    expect(notice.textContent).toContain('Questions go to Google Gemini.')
+    expect(screen.getByLabelText('Message').closest('form')!.getAttribute('aria-disabled')).toBe('true')
+    await userEvent.click(screen.getByRole('button', { name: 'I understand' }))
+    expect(screen.queryByRole('region', { name: 'About this assistant' })).toBeNull()
+    await ask('hi')
+    await screen.findByText('Hello.')
+    expect(s.bodies.at(-1).consent).toMatch(/^[0-9a-f]{16}$/)
+  })
+
+  it('hides the attach button when pictures are turned off', async () => {
+    const s = server([], true, {}, { attachments: {} })
+    await s.fetch('/api/assistant/settings', { method: 'PUT', body: JSON.stringify({ enabled: true, privacy: { pictures: false } }) })
+    render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><AssistantPanel attach /></AssistantProvider>)
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Attach a picture' })).toBeNull())
+  })
+
+  it('says how many messages are left once the allowance runs low', async () => {
+    const s = server([say('one'), say('two')], true, {}, { limits: { user: { messages: 3 } } })
+    mount({ fetch: s.fetch })
+    await ask('first')
+    await screen.findByText('one')
+    await waitFor(() => expect(document.querySelector('.tv-allowance')?.textContent).toBe('You have 2 messages left today.'))
+    await ask('second')
+    await screen.findByText('two')
+    await waitFor(() => expect(document.querySelector('.tv-allowance')?.textContent).toBe('You have 1 message left today.'))
+  })
+})
+
 describe('actions on messages', () => {
   it('edits a question and sends it again: the old reply goes, a new one comes', async () => {
     const s = server([say('Sales today: ₹500.'), say('Sales this week: ₹4,200.')])
