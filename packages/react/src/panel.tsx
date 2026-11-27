@@ -111,7 +111,8 @@ export function AssistantPanel(props: AssistantPanelProps) {
       <div ref={log} className="tv-messages" role="log" aria-live="polite" data-count={count}
         onScroll={(e) => { const el = e.currentTarget; pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40 }}>
         {chat.messages.length === 0 && props.welcome ? <div className="tv-welcome">{props.welcome}</div> : null}
-        {chat.messages.map((m) => <Message key={m.id} message={m} ask={ask} stopped={stopped.has(m.id) || m.metadata?.stopped === true} {...props} />)}
+        {chat.messages.map((m, i) => <Message key={m.id} message={m} ask={ask} stopped={stopped.has(m.id) || m.metadata?.stopped === true}
+          last={i === chat.messages.length - 1} busy={busy} {...props} />)}
         {busy && !showsSomething(chat.messages.at(-1)) ? <div className="tv-thinking" role="status" aria-label="Thinking"><span /><span /><span /></div> : null}
         {chat.error ? <div className="tv-error" role="alert">{errorText(chat.error)}</div> : null}
       </div>
@@ -181,8 +182,23 @@ export function AssistantPanel(props: AssistantPanelProps) {
   )
 }
 
-function Message({ message, ask, stopped, ...props }: { message: TeovoMessage; ask: (t: string) => void; stopped?: boolean } & AssistantPanelProps) {
+function Message({ message, ask, stopped, last, busy, ...props }: { message: TeovoMessage; ask: (t: string) => void; stopped?: boolean; last: boolean; busy: boolean } & AssistantPanelProps) {
   const { onAction, submitForm, chat } = useAssistant()
+  const [editing, setEditing] = useState<string | null>(null)
+  const ownText = message.parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join('\n')
+  if (editing !== null) {
+    return (
+      <form className="tv-message tv-user tv-editing" onSubmit={(e) => { e.preventDefault(); if (editing.trim()) { setEditing(null); void chat.sendMessage({ text: editing.trim(), messageId: message.id }) } }}>
+        <textarea aria-label="Edit your message" value={editing} autoFocus onFocus={(e) => e.currentTarget.select()} rows={Math.min(6, editing.split('\n').length + 1)}
+          onChange={(e) => setEditing(e.target.value)} onKeyDown={(e) => { if (e.key === 'Escape') setEditing(null) }} />
+        <div className="tv-edit-buttons">
+          <button type="button" className="tv-btn" onClick={() => setEditing(null)}>Cancel</button>
+          <button type="submit" className="tv-btn tv-btn-primary" disabled={!editing.trim()}>Send again</button>
+        </div>
+        <p className="tv-edit-note">The replies after it are replaced.</p>
+      </form>
+    )
+  }
   const steps = message.parts.filter((p) => p.type === 'data-step')
   const running = steps.filter((p) => (p.data as Step).state === 'running')
   return (
@@ -221,6 +237,47 @@ function Message({ message, ask, stopped, ...props }: { message: TeovoMessage; a
         return <div key={p.id} className="tv-step">{props.stepLabels?.[name] ?? `Using ${name.replace(/_/g, ' ')}`}…</div>
       })}
       {stopped ? <div className="tv-stopped">Stopped</div> : null}
+      {!busy && message.role === 'user' && ownText ? (
+        <div className="tv-msg-actions">
+          <button type="button" className="tv-icon tv-icon-sm" aria-label="Edit and send again" title="Edit and send again" onClick={() => setEditing(ownText)}>{icons.edit}</button>
+        </div>
+      ) : null}
+      {!(busy && last) && message.role === 'assistant' ? <ReplyActions message={message} last={last} text={ownText} /> : null}
+    </div>
+  )
+}
+
+/** Under a finished reply: copy it, rate it, and (the latest one) ask for it again. */
+function ReplyActions({ message, last, text }: { message: TeovoMessage; last: boolean; text: string }) {
+  const { chat, rate } = useAssistant()
+  const [copied, setCopied] = useState(false)
+  const [rating, setRating] = useState<'up' | 'down' | null>(null)
+  const [error, setError] = useState<string>()
+  const runId = message.metadata?.runId
+  async function give(v: 'up' | 'down') {
+    if (!runId) return
+    const next = rating === v ? null : v
+    const before = rating
+    setRating(next)
+    setError(undefined)
+    try { await rate(runId, next) } catch (e) { setRating(before); setError(e instanceof Error ? e.message : String(e)) }
+  }
+  return (
+    <div className="tv-msg-actions">
+      {text ? (
+        <button type="button" className="tv-icon tv-icon-sm" aria-label={copied ? 'Copied' : 'Copy'} title={copied ? 'Copied' : 'Copy'}
+          onClick={() => { void navigator.clipboard?.writeText(text).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500) }) }}>
+          {copied ? icons.check : icons.copy}
+        </button>
+      ) : null}
+      {runId ? (
+        <>
+          <button type="button" className="tv-icon tv-icon-sm" aria-label="Good answer" title="Good answer" aria-pressed={rating === 'up'} onClick={() => void give('up')}>{icons.up}</button>
+          <button type="button" className="tv-icon tv-icon-sm" aria-label="Bad answer" title="Bad answer" aria-pressed={rating === 'down'} onClick={() => void give('down')}>{icons.down}</button>
+        </>
+      ) : null}
+      {last ? <button type="button" className="tv-icon tv-icon-sm" aria-label="Try again" title="Try again" onClick={() => void chat.regenerate()}>{icons.again}</button> : null}
+      {error ? <span className="tv-error" role="alert">{error}</span> : null}
     </div>
   )
 }
@@ -321,6 +378,12 @@ const icons = {
   send: svg(<path d="M12 19V5M5 12l7-7 7 7" />),
   stop: <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" /></svg>,
   plus: svg(<path d="M12 5v14M5 12h14" />),
+  edit: svg(<path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z" />),
+  copy: svg(<><rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15V5a2 2 0 0 1 2-2h10" /></>),
+  check: svg(<path d="M5 12l5 5 9-10" />),
+  up: svg(<path d="M7 10v11M7 10l4-7a2 2 0 0 1 3 2l-1 5h6a2 2 0 0 1 2 2.3l-1.4 7A2 2 0 0 1 17.6 21H7" />),
+  down: svg(<path d="M17 14V3M17 14l-4 7a2 2 0 0 1-3-2l1-5H5a2 2 0 0 1-2-2.3l1.4-7A2 2 0 0 1 6.4 3H17" />),
+  again: svg(<path d="M3 12a9 9 0 0 1 15.5-6.3L21 8M21 3v5h-5M21 12a9 9 0 0 1-15.5 6.3L3 16M3 21v-5h5" />),
 }
 
 /** True when the reply on screen already shows text, a view, a card, a button or a running step. */

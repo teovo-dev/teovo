@@ -44,6 +44,8 @@ export interface Storage {
   archiveThread(tenantId: string, userId: string, threadId: string): Promise<boolean>
   listMessages(threadId: string): Promise<UIMessage[]>
   saveMessages(threadId: string, messages: UIMessage[]): Promise<void>
+  /** Remove this message and every one after it (the user edited it, or asked for the reply again). */
+  removeMessagesFrom(threadId: string, messageId: string): Promise<void>
   /** Save a new card. Saving one whose id already exists changes nothing: the first save (and its decision) stands. */
   saveCard(card: StoredCard): Promise<void>
   /** A card, only if it is in one of this person's threads. */
@@ -62,6 +64,8 @@ export interface Storage {
   // Run log and usage ledger.
   startRun(run: RunRecord): Promise<void>
   finishRun(id: string, end: { status: 'done' | 'failed' | 'stopped'; model?: string; error?: string }): Promise<void>
+  /** Thumbs up (1) or down (-1) on a reply, or null to take it back; only by the person it answered. Returns false if not theirs. */
+  rateRun(tenantId: string, userId: string, runId: string, rating: 1 | -1 | null, note?: string): Promise<boolean>
   saveStep(step: StepRecord): Promise<void>
   /** Number of this person's runs still running that started after `since` (older ones count as abandoned). */
   runningRuns(tenantId: string, userId: string, since: Date): Promise<number>
@@ -87,7 +91,7 @@ export interface UsageRow { tenantId: string; userId: string; runId?: string; pr
 /** The UTC day or month a moment falls in, as the key usage is summed under ('2026-11-27' / '2026-11'). */
 export const periodKey = (period: Period, at = new Date()) => at.toISOString().slice(0, period === 'day' ? 10 : 7)
 
-export interface MemoryRun extends RunRecord { status: 'running' | 'done' | 'failed' | 'stopped'; startedAt: Date; error?: string }
+export interface MemoryRun extends RunRecord { status: 'running' | 'done' | 'failed' | 'stopped'; startedAt: Date; error?: string; rating?: 1 | -1 | null; ratingNote?: string }
 
 const strip = ({ archived: _, ...t }: Thread & { archived?: boolean }): Thread => ({ ...t })
 
@@ -137,6 +141,11 @@ export function memoryStorage() {
       const t = threads.get(id)
       if (t) t.updatedAt = new Date().toISOString()
     },
+    async removeMessagesFrom(id, messageId) {
+      const list = messages.get(id) ?? []
+      const at = list.findIndex((m) => m.id === messageId)
+      if (at >= 0) messages.set(id, list.slice(0, at))
+    },
     async saveCard(card) { if (!cards.has(card.id)) cards.set(card.id, structuredClone({ createdAt: new Date().toISOString(), ...card })) },
     async getCard(tenantId, userId, id) {
       const c = cards.get(id)
@@ -156,6 +165,13 @@ export function memoryStorage() {
       if (r) Object.assign(r, { status: end.status, error: end.error, ...(end.model ? { model: end.model } : {}) })
     },
     async saveStep(step) { steps.push(structuredClone(step)) },
+    async rateRun(tenantId, userId, runId, rating, note) {
+      const r = runs.get(runId)
+      if (!r || r.tenantId !== tenantId || r.userId !== userId) return false
+      r.rating = rating
+      r.ratingNote = note
+      return true
+    },
     async runningRuns(tenantId, userId, since) {
       return [...runs.values()].filter((r) => r.tenantId === tenantId && r.userId === userId && r.status === 'running' && r.startedAt > since).length
     },

@@ -49,6 +49,44 @@ async function ask(text: string) {
 
 afterEach(() => { cleanup(); gate = undefined })
 
+describe('actions on messages', () => {
+  it('edits a question and sends it again: the old reply goes, a new one comes', async () => {
+    const s = server([say('Sales today: ₹500.'), say('Sales this week: ₹4,200.')])
+    mount({ fetch: s.fetch })
+    await ask('sales today?')
+    await screen.findByText('Sales today: ₹500.')
+    await userEvent.click(screen.getByRole('button', { name: 'Edit and send again' }))
+    const box = screen.getByLabelText('Edit your message') as HTMLTextAreaElement
+    expect(box.value).toBe('sales today?')
+    await userEvent.clear(box)
+    await userEvent.type(box, 'sales this week?')
+    await userEvent.click(screen.getByRole('button', { name: 'Send again' }))
+    await screen.findByText('Sales this week: ₹4,200.')
+    expect(screen.queryByText('Sales today: ₹500.')).toBeNull()
+    expect(screen.queryByText('sales today?')).toBeNull()
+    const last = s.bodies.at(-1)
+    expect(last.message.id).toBe(s.bodies[0].message.id)            // the same message, sent again
+    expect(last.message.parts[0].text).toBe('sales this week?')
+  })
+
+  it('asks for the last reply again, rates a reply and copies it', async () => {
+    const s = server([say('First try.'), say('Second try.')])
+    const writeText = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } })
+    mount({ fetch: s.fetch })
+    await ask('hello')
+    await screen.findByText('First try.')
+    await userEvent.click(screen.getByRole('button', { name: 'Good answer' }))
+    await waitFor(() => expect(s.bodies.at(-1)).toEqual({ value: 'up' }))
+    expect(screen.getByRole('button', { name: 'Good answer' }).getAttribute('aria-pressed')).toBe('true')
+    await userEvent.click(screen.getByRole('button', { name: 'Copy' }))
+    expect(writeText).toHaveBeenCalledWith('First try.')
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }))
+    await screen.findByText('Second try.')
+    expect(screen.queryByText('First try.')).toBeNull()
+  })
+})
+
 describe('card values', () => {
   it('shows a new record as its values, in the given order, with labels, money and dates in the tenant\'s format', async () => {
     const s = server([call('add_expense', { amount: 1320 }), say('Ready to confirm.')], true, {}, {
