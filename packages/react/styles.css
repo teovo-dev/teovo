@@ -179,6 +179,8 @@
 .tv-steps-toggle, .tv-step-more { display: inline-flex; align-items: center; gap: 6px; border: 0; background: none; padding: 2px 0; color: inherit; font: inherit; cursor: pointer; text-align: left; }
 .tv-steps-toggle:hover, .tv-step-more:hover { color: var(--tv-fg); }
 .tv-chevron { display: inline-flex; transition: transform 0.15s; }
+.tv-steps-mark { display: inline-flex; color: var(--tv-accent); }
+.tv-steps-mark svg { width: 13px; height: 13px; }
 .tv-chevron svg { width: 12px; height: 12px; }
 [aria-expanded='true'] > .tv-chevron { transform: rotate(90deg); }
 .tv-steps-list { list-style: none; margin: 4px 0 0; padding: 0 0 0 10px; border-left: 2px solid var(--tv-border); display: flex; flex-direction: column; gap: 2px; }

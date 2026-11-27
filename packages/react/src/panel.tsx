@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { readFile, useRecorder, useVoice, type PendingFile } from './input.js'
 import { Markdown } from './markdown.js'
-import { themeStyle, type Theme } from './sheet.js'
+import { SPARKLE, themeStyle, type Theme } from './sheet.js'
 import { useAssistant } from './provider.js'
 import type { Action, AllowanceItem, Card, CardDecision, Formats, Page, Sources, Step, TeovoMessage, View } from './types.js'
 import { defaultViews, formatValue, isCurrent, type CellFormat, type ViewComponent } from './views.js'
@@ -367,6 +367,7 @@ function StepsList({ message, live, open, labels, details }: { message: TeovoMes
     <div className="tv-steps">
       <button type="button" className="tv-steps-toggle" aria-expanded={shown} onClick={() => setShown(!shown)}>
         <span className="tv-chevron" aria-hidden="true">{icons.chevron}</span>
+        <span className="tv-steps-mark" aria-hidden="true">{SPARKLE}</span>
         {steps.length} {steps.length === 1 ? 'step' : 'steps'}{failed ? ` · ${failed} failed` : ''}
       </button>
       {shown ? list : null}
