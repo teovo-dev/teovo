@@ -68,6 +68,23 @@ export function postgresStorage(query: Query): Storage {
       const r = await query(`update tv_proposals set ${sets.join(', ') || 'status = status'} where id = $1 and status = any($2) returning *`, [id, from, ...values])
       return r.rows[0] ? card(r.rows[0]) : null
     },
+    async tenantSettings(tenantId) {
+      const r = await query('select enabled, instructions, glossary, tools_off from tv_tenant_settings where tenant_id = $1', [tenantId])
+      const row = r.rows[0]
+      if (!row) return null
+      return {
+        enabled: row.enabled,
+        ...(row.instructions ? { instructions: row.instructions } : {}),
+        ...(row.glossary ? { glossary: row.glossary } : {}),
+        ...(row.tools_off ? { toolsOff: row.tools_off } : {}),
+      }
+    },
+    async saveTenantSettings(tenantId, s) {
+      await query(
+        `insert into tv_tenant_settings (tenant_id, enabled, instructions, glossary, tools_off) values ($1, $2, $3, $4, $5)
+         on conflict (tenant_id) do update set enabled = excluded.enabled, instructions = excluded.instructions, glossary = excluded.glossary, tools_off = excluded.tools_off`,
+        [tenantId, s.enabled, s.instructions ?? null, json(s.glossary), json(s.toolsOff)])
+    },
     async startRun(r) {
       await query('insert into tv_runs (id, thread_id, tenant_id, user_id, model, prompt_version) values ($1, $2, $3, $4, $5, $6)',
         [r.id, r.threadId, r.tenantId, r.userId, r.model ?? null, r.promptVersion ?? null])

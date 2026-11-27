@@ -7,6 +7,7 @@ import type { Storage, StoredCard, UsageRow } from './storage.js'
 import { toolsFor, type Action, type Identity, type Proposal, type TeovoTool, type ToolContext } from './tools.js'
 import { makeUntrusted, UNTRUSTED_RULE } from './untrusted.js'
 
+import { DEFAULT_SETTINGS, SettingsError, settingsText, validateSettings } from './settings.js'
 import { readPage, screenText, tidy, type Page, type ScreenFn, type SuggestionsFn } from './screens.js'
 export type { Page } from './screens.js'
 
@@ -37,6 +38,8 @@ export interface AssistantConfig<DB = unknown> {
   cards?: Record<string, CardApplier<any, DB>>
   /** How long a card can be confirmed, and how long after confirming it can be undone. */
   cardRules?: Partial<CardRules>
+  /** Roles that may read and change their tenant's settings (GET/PUT …/settings). Default ['owner', 'admin']. */
+  settingsRoles?: readonly string[]
   /** Saved on each run, so a change in replies can be traced to a change in instructions. */
   promptVersion?: string
   /** Tool inputs and outputs longer than this are cut in the run log (the model still sees all of it). Default 8000 characters. */
@@ -80,6 +83,8 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     }
 
     const { storage } = config
+    const settings = (await storage.tenantSettings(identity.tenantId)) ?? DEFAULT_SETTINGS
+    if (!settings.enabled) return json(403, { error: 'The assistant is turned off for your team. An admin can turn it on in settings.' })
     // Before anything is saved, so a refused message leaves no empty thread behind.
     const timeouts = { ...DEFAULT_TIMEOUTS, ...config.timeouts }
     const hit = await checkLimits(storage, identity, config.limits, timeouts.totalMs * 2)
@@ -108,14 +113,15 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     const page = readPage(body.page)
     const instructions = typeof config.instructions === 'function' ? await config.instructions({ identity, page }) : config.instructions
     const summary = page && config.screen ? await Promise.resolve().then(() => config.screen!(page, ctx)).catch((e) => { config.on?.error?.(e, { identity, threadId: thread.id }); return null }) : null
-    const system = `${instructions}\n\n${UNTRUSTED_RULE}${screenText(page, summary, ctx.untrusted)}`
+    const system = `${instructions}${settingsText(settings)}\n\n${UNTRUSTED_RULE}${screenText(page, summary, ctx.untrusted)}`
 
     const stream = createUIMessageStream<UIMessage<{ runId: string; threadId: string }>>({
       originalMessages: history as UIMessage<{ runId: string; threadId: string }>[],
       execute: async ({ writer }) => {
         writer.write({ type: 'start', messageMetadata: { runId, threadId: thread.id } })
         const tools: ToolSet = {}
-        for (const t of toolsFor(config.tools, identity)) {
+        const off = new Set(settings.toolsOff ?? [])
+        for (const t of toolsFor(config.tools, identity).filter((x) => !off.has(x.name))) {
           tools[t.name] = tool({
             description: t.description,
             inputSchema: t.input,
@@ -218,7 +224,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
   async function suggestions(req: Request): Promise<Response> {
     const identity = await config.identify(req)
     if (!identity) return json(401, { error: 'Sign in to use the assistant.' })
-    if (!config.suggestions) return json(200, { suggestions: [] })
+    if (!config.suggestions || ((await config.storage.tenantSettings(identity.tenantId)) ?? DEFAULT_SETTINGS).enabled === false) return json(200, { suggestions: [] })
     const q = new URL(req.url).searchParams
     const page = readPage({ path: q.get('path'), title: q.get('title'), record: { type: q.get('recordType'), id: q.get('recordId') } })
     try {
@@ -227,6 +233,26 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
       config.on?.error?.(e, { identity, threadId: '' })
       return json(200, { suggestions: [] })
     }
+  }
+
+  async function tenantSettings(req: Request): Promise<Response> {
+    const identity = await config.identify(req)
+    if (!identity) return json(401, { error: 'Sign in to use the assistant.' })
+    if (!(config.settingsRoles ?? ['owner', 'admin']).includes(identity.role)) return json(403, { error: 'Only an admin can change assistant settings.' })
+    const tools = config.tools.map((t) => ({ name: t.name, description: t.description, kind: t.kind }))
+    if (req.method === 'PUT') {
+      let body: unknown
+      try { body = await req.json() } catch { return json(400, { error: 'The request was not valid JSON.' }) }
+      try {
+        const s = validateSettings(body, config.tools)
+        await config.storage.saveTenantSettings(identity.tenantId, s)
+        return json(200, { settings: s, tools })
+      } catch (e) {
+        if (e instanceof SettingsError) return json(400, { error: e.message })
+        throw e
+      }
+    }
+    return json(200, { settings: (await config.storage.tenantSettings(identity.tenantId)) ?? DEFAULT_SETTINGS, tools })
   }
 
   async function card(req: Request, id: string, decision: Decision): Promise<Response> {
@@ -247,11 +273,12 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
   }
 
   return {
-    /** Mount under any path, e.g. app.all('/api/assistant/*', teovo.fetch). Handles POST …/chat, GET …/suggestions and POST …/cards/:id/(confirm|skip|undo). */
+    /** Mount under any path, e.g. app.all('/api/assistant/*', teovo.fetch). Handles POST …/chat, GET …/suggestions, GET/PUT …/settings and POST …/cards/:id/(confirm|skip|undo). */
     async fetch(req: Request): Promise<Response> {
       const path = new URL(req.url).pathname
       if (req.method === 'POST' && path.endsWith('/chat')) return chat(req)
       if (req.method === 'GET' && path.endsWith('/suggestions')) return suggestions(req)
+      if ((req.method === 'GET' || req.method === 'PUT') && path.endsWith('/settings')) return tenantSettings(req)
       const m = /\/cards\/([0-9a-f-]{36})\/(confirm|skip|undo)$/i.exec(path)
       if (req.method === 'POST' && m) return card(req, m[1]!.toLowerCase(), m[2] as Decision)
       return json(404, { error: 'Not found.' })

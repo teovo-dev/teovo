@@ -137,6 +137,19 @@ suite('@teovo/db on Postgres', () => {
     client.release()
   })
 
+  it("saves a tenant's settings and replaces them whole", async () => {
+    const { query, client } = await freshSchema()
+    await migrate(query)
+    const s = postgresStorage(query)
+    expect(await s.tenantSettings('shop-1')).toBeNull()
+    await s.saveTenantSettings('shop-1', { enabled: true, instructions: 'Closed Sundays', glossary: { khata: 'credit' }, toolsOff: ['get_expenses'] })
+    expect(await s.tenantSettings('shop-1')).toEqual({ enabled: true, instructions: 'Closed Sundays', glossary: { khata: 'credit' }, toolsOff: ['get_expenses'] })
+    await s.saveTenantSettings('shop-1', { enabled: false })
+    expect(await s.tenantSettings('shop-1')).toEqual({ enabled: false })
+    expect(await s.tenantSettings('shop-2')).toBeNull()
+    client.release()
+  })
+
   it('keeps usage totals per person and per tenant, reads budgets, and counts running replies', async () => {
     const { query, client } = await freshSchema()
     await migrate(query)
