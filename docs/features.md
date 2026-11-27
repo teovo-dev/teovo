@@ -12,6 +12,7 @@ cover it but nobody has tried it by hand. A feature counts as done only when thi
 | Ordered model fallback, with no switch after a tool has changed something | v1 | Built (#3) | Yes: Flash overloaded, flash-lite answered | scoops, bricks | kit |
 | Stalled-reply watchdog: first-output and idle timeouts | v1 | Built (#3, fixed #27) | Yes (#27: it never fired with Gemini; now times the wait itself and hands over to the next model) | bricks | Vercel AI SDK |
 | Three tool types: read, propose, action | v1 | Built (#3) | Yes | scoops | kit |
+| Steps panel: what the assistant did for each reply, folded under an arrow, with what it asked for and found | v1.1 | Built (#41) | Yes: open while it works, folds to "2 steps", phone shown as [hidden] | scoops | kit |
 | Confirm and skip cards | v1 | Built (#7) | Yes (#26: labels, ₹ and dates, new-record layout) | scoops | kit |
 | Undo by reversing the change, stored so it survives a reload | v1 | Built (#7) | Yes, after a reload too | scoops, in memory only | kit tables |
 | Screen awareness: route, record on screen, component state | v1 | Built (#9, #21) | Yes (#26: shown in the panel) | scoops | kit |
