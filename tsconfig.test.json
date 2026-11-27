@@ -7,6 +7,9 @@
       "node"
     ],
     "paths": {
+      "@teovo/server/testing": [
+        "./packages/server/src/testing.ts"
+      ],
       "@teovo/server": [
         "./packages/server/src/index.ts"
       ],

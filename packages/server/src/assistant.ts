@@ -75,6 +75,8 @@ export interface AssistantConfig<DB = unknown> {
   }
 }
 
+const FAILED = 'The assistant could not finish this reply. Try again.'
+
 const DEFAULT_TIMEOUTS = { firstChunkMs: 30_000, chunkMs: 20_000, totalMs: 120_000 }
 
 function clip(v: unknown, max: number): { value: unknown; truncated: boolean } {
@@ -253,7 +255,8 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
           maxRetries: 1,
           abortSignal: req.signal,
         })
-        writer.merge(toUIMessageStream({ stream: result.stream, sendStart: false }))
+        // Our sentence for the user, not the SDK's "An error occurred."; tool errors still reach the model as they are.
+        writer.merge(toUIMessageStream({ stream: result.stream, sendStart: false, onError: () => FAILED, redactToolErrors: false }))
         try {
           const text = await result.text
           await finish('done')
@@ -279,7 +282,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
       },
       onError: (e) => {
         config.on?.error?.(e, { identity, threadId: thread.id })
-        return 'The assistant could not finish this reply. Try again.'
+        return FAILED
       },
       onEnd: async ({ messages }) => {
         const reply = messages.at(-1)
