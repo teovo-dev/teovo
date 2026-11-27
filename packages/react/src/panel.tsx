@@ -1,4 +1,4 @@
-import { useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { readFile, useVoice, type PendingFile } from './input.js'
 import { Markdown } from './markdown.js'
 import { themeStyle, type Theme } from './sheet.js'
@@ -38,6 +38,15 @@ export function AssistantPanel(props: AssistantPanelProps) {
   const { chat, newChat, suggestions, clearSuggestions } = useAssistant()
   const [text, setText] = useState('')
   const busy = chat.status === 'submitted' || chat.status === 'streaming'
+  const log = useRef<HTMLDivElement>(null)
+  const pinned = useRef(true)   // at the bottom: keep following new text
+  const count = chat.messages.length
+  const lastUser = chat.messages.map((m) => m.role).lastIndexOf('user')
+  useEffect(() => { pinned.current = true }, [lastUser])   // the user just sent something: follow the reply
+  useLayoutEffect(() => {
+    const el = log.current
+    if (el && pinned.current) el.scrollTop = el.scrollHeight
+  })
   const hint = suggestions.placeholder
   const [files, setFiles] = useState<PendingFile[]>([])
   const [fileError, setFileError] = useState<string>()
@@ -71,7 +80,8 @@ export function AssistantPanel(props: AssistantPanelProps) {
 
   return (
     <section className={`tv-panel ${props.className ?? ''}`} aria-label="Assistant" data-theme={props.theme?.mode} style={themeStyle(props.theme)}>
-      <div className="tv-messages" role="log" aria-live="polite">
+      <div ref={log} className="tv-messages" role="log" aria-live="polite" data-count={count}
+        onScroll={(e) => { const el = e.currentTarget; pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40 }}>
         {chat.messages.length === 0 && props.welcome ? <div className="tv-welcome">{props.welcome}</div> : null}
         {chat.messages.map((m) => <Message key={m.id} message={m} ask={ask} {...props} />)}
         {chat.status === 'submitted' ? <div className="tv-thinking">Thinking…</div> : null}

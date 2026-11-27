@@ -19,6 +19,20 @@ describe('Markdown', () => {
     expect(container.querySelector('p br')).toBeTruthy()
   })
 
+  it('draws a Markdown table, which models often write', () => {
+    const { container } = render(<Markdown text={'Dues:\n| Customer | Due |\n|:--|--:|\n| **Riya** | ₹880 |\n| Asha | ₹0 |\nThat is all.'} />)
+    expect(Array.from(container.querySelectorAll('th')).map((t) => t.textContent)).toEqual(['Customer', 'Due'])
+    expect(Array.from(container.querySelectorAll('tbody tr')).map((r) => r.textContent)).toEqual(['Riya₹880', 'Asha₹0'])
+    expect(container.querySelector('td strong')?.textContent).toBe('Riya')
+    expect(Array.from(container.querySelectorAll('p')).map((p) => p.textContent)).toEqual(['Dues:', 'That is all.'])
+  })
+
+  it('treats a lone line with pipes as text, and never hangs on it', () => {
+    const { container } = render(<Markdown text={'| not a table |\nnext line\n|a|b|'} />)
+    expect(container.querySelector('table')).toBeNull()
+    expect(container.textContent).toBe('| not a table |next line|a|b|')
+  })
+
   it('never inserts HTML and only links to http(s) or mailto, in a new tab', () => {
     const { container } = render(<Markdown text={'<script>alert(1)</script> <b>x</b> [ok](https://example.com/a) [bad](javascript:alert(1))'} />)
     expect(container.querySelector('script, b')).toBeNull()

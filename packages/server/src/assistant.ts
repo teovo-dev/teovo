@@ -8,7 +8,7 @@ import { toolsFor, type Action, type Identity, type Proposal, type TeovoTool, ty
 import { makeUntrusted, UNTRUSTED_RULE } from './untrusted.js'
 
 import { makeRedactor, type RedactOptions } from './redact.js'
-import { checkForm, type FormData, type FormHandler, type TeovoView } from './views.js'
+import { checkForm, formHandler, formsText, missingFields, VIEWS_RULE, type FormData, type FormHandler, type FormSpec, type TeovoView } from './views.js'
 import { checkMessage, type AttachmentRules } from './attachments.js'
 import { checkFormats, DEFAULT_FORMATS, formatsText, type Formats } from './formats.js'
 import { DEFAULT_SETTINGS, SettingsError, settingsText, validateSettings } from './settings.js'
@@ -64,7 +64,7 @@ export interface AssistantConfig<DB = unknown> {
   /** Views the model can show inside a reply (tables, forms, choices, records). Start from builtinViews. */
   views?: readonly TeovoView[]
   /** Turn a submitted form into a card, keyed by the form's submit.kind. A form whose kind isn't here can't be shown. */
-  forms?: Record<string, FormHandler<DB>>
+  forms?: Record<string, FormHandler<DB> | FormSpec<DB>>
   /** Hide fields and patterns (phones, emails, UPI ids, card numbers) from the model and the run log. See redact.ts. */
   redact?: RedactOptions
   /** Roles that may read and change their tenant's settings (GET/PUT …/settings). Default ['owner', 'admin']. */
@@ -185,7 +185,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     const summary = page && config.screen ? await Promise.resolve().then(() => config.screen!(page, ctx)).catch((e) => { config.on?.error?.(e, { identity, threadId: thread.id }); return null }) : null
     const shownSummary = summary === null ? null : String(redact(summary))
     const formats: Formats = { ...DEFAULT_FORMATS, ...config.formats, ...settings.formats }
-    const system = `${instructions}${formatsText(formats, config.now?.() ?? new Date())}${settingsText(settings)}${screensText(config.screens ?? [])}\n\n${UNTRUSTED_RULE}${screenText(page, shownSummary, fence)}`
+    const system = `${instructions}${formatsText(formats, config.now?.() ?? new Date())}${settingsText(settings)}${screensText(config.screens ?? [])}${config.views?.length ? `\n\n${VIEWS_RULE}${formsText(config.forms ?? {})}` : ''}\n\n${UNTRUSTED_RULE}${screenText(page, shownSummary, fence)}`
 
     const stream = createUIMessageStream<UIMessage<{ runId: string; threadId: string; formats: Formats }>>({
       originalMessages: history as UIMessage<{ runId: string; threadId: string; formats: Formats }>[],
@@ -239,7 +239,10 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
             execute: async (data: unknown, { toolCallId }: { toolCallId: string }) => {
               if (v.name === 'form') {
                 const kind = (data as FormData).submit.kind
-                if (!config.forms?.[kind]) throw new Error(`There is no form for "${kind}". Use one of: ${Object.keys(config.forms ?? {}).join(', ') || 'none'}.`)
+                const spec = config.forms?.[kind]
+                if (!spec) throw new Error(`There is no form for "${kind}". Use one of: ${Object.keys(config.forms ?? {}).join(', ') || 'none'}.`)
+                const missing = missingFields(spec, data as FormData)
+                if (missing) throw new Error(missing)
               }
               writer.write({ type: 'data-view', id: toolCallId, data: { view: v.name, data } })
               await storage.saveStep({ runId, seq: seq++, type: 'tool', toolCallId, name: `show_${v.name}`, input: clip(data, config.logLimit ?? 8000).value, truncated: false, durationMs: 0 })
@@ -404,7 +407,8 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     try { body = (await req.json()) as { values?: unknown } } catch { return json(400, { error: 'The request was not valid JSON.' }) }
     const checked = checkForm(part.data.data, body.values)
     if ('error' in checked) return json(400, { error: checked.error })
-    const handler = config.forms?.[part.data.data.submit.kind]
+    const spec = config.forms?.[part.data.data.submit.kind]
+    const handler = spec ? formHandler(spec) : undefined
     if (!handler) return json(501, { error: 'This app can’t take this form yet.' })
     const ctx: ToolContext<DB> = { identity, db: await config.asUser(identity, req), untrusted: makeUntrusted(crypto.randomUUID().slice(0, 8)) }
     let proposal: Proposal
