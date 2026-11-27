@@ -38,15 +38,42 @@ export interface AssistantSheetProps {
   /** Control it from the app. */
   open?: boolean
   onOpenChange?: (open: boolean) => void
+  /**
+   * Whether the open sheet covers the app. 'phone' (default): on phones it is a bottom sheet over a dimmed page; on
+   * wider screens it is a panel docked on the right, with no backdrop, and the user can keep using the page beside it.
+   * true: always over a dimmed page, with the keyboard kept inside. false: always docked.
+   *
+   * While docked, <html> gets data-tv-sheet="docked" and the CSS variable --tv-sheet-width, so the app can make room:
+   * html[data-tv-sheet="docked"] .app { margin-right: var(--tv-sheet-width) }
+   */
+  modal?: boolean | 'phone'
+}
+
+const PHONE = '(max-width: 640px)'
+/** Docked panel width on wide screens. */
+export const SHEET_WIDTH = '440px'
+
+function usePhone() {
+  const query = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? window.matchMedia(PHONE) : null
+  const [phone, setPhone] = useState(query?.matches ?? false)
+  useEffect(() => {
+    if (!query) return
+    const on = () => setPhone(query.matches)
+    query.addEventListener('change', on)
+    return () => query.removeEventListener('change', on)
+  }, [query])
+  return phone
 }
 
 /**
- * A button that opens the panel: a drawer on the right on wide screens, a bottom sheet on phones. Escape closes it,
- * and focus goes back to the button.
+ * A button that opens the panel: docked on the right on wide screens (the page stays usable beside it), a bottom
+ * sheet on phones. Escape closes it, and focus goes back to the button.
  */
 export function AssistantSheet(props: AssistantSheetProps) {
   const [own, setOwn] = useState(false)
   const open = props.open ?? own
+  const phone = usePhone()
+  const modal = props.modal === undefined || props.modal === 'phone' ? phone : props.modal
   const button = useRef<HTMLButtonElement>(null)
   const sheet = useRef<HTMLDivElement>(null)
   const set = (v: boolean) => { setOwn(v); props.onOpenChange?.(v) }
@@ -58,7 +85,7 @@ export function AssistantSheet(props: AssistantSheetProps) {
     const onKey = (e: KeyboardEvent) => {
       if (key && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === key) { e.preventDefault(); latest.current(!open) }
       else if (e.key === 'Escape' && open) latest.current(false)
-      else if (e.key === 'Tab' && open && sheet.current) {
+      else if (e.key === 'Tab' && open && modal && sheet.current) {
         // Keep the keyboard inside the open sheet (it is a modal dialog): Tab from the last control goes to the first.
         const all = Array.from(sheet.current.querySelectorAll<HTMLElement>('button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'))
           .filter((el) => el.offsetParent !== null || el === document.activeElement)
@@ -71,7 +98,17 @@ export function AssistantSheet(props: AssistantSheetProps) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [open, props.shortcut])
+  }, [open, modal, props.shortcut])
+
+  // Docked: tell the page, so it can make room for the panel instead of sitting under it.
+  const docked = open && !modal
+  useEffect(() => {
+    if (!docked || typeof document === 'undefined') return
+    const html = document.documentElement
+    html.dataset.tvSheet = 'docked'
+    html.style.setProperty('--tv-sheet-width', SHEET_WIDTH)
+    return () => { delete html.dataset.tvSheet; html.style.removeProperty('--tv-sheet-width') }
+  }, [docked])
 
   const wasOpen = useRef(open)
   useEffect(() => {
@@ -91,8 +128,9 @@ export function AssistantSheet(props: AssistantSheetProps) {
       </button>
       {open ? (
         <>
-          <div className="tv-sheet-backdrop" onClick={() => set(false)} />
-          <div ref={sheet} id="tv-sheet" className="tv-sheet" role="dialog" aria-modal="true" aria-label="Assistant">
+          {modal ? <div className="tv-sheet-backdrop" onClick={() => set(false)} /> : null}
+          <div ref={sheet} id="tv-sheet" className={modal ? 'tv-sheet' : 'tv-sheet tv-sheet-docked'} role="dialog" aria-modal={modal} aria-label="Assistant"
+            style={modal ? undefined : { width: `min(${SHEET_WIDTH}, 100vw)` }}>
             <div className="tv-sheet-header">
               <div className="tv-sheet-title">{props.header ?? props.label ?? 'Assistant'}</div>
               <button type="button" className="tv-sheet-close" aria-label="Close assistant" onClick={() => set(false)}>
