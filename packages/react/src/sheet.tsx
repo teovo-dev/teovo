@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useAssistantName } from './provider.js'
 
 /** The app's look, as CSS variables on the panel. Anything left out keeps the default in styles.css. */
 export interface Theme {
@@ -29,8 +30,10 @@ export function themeStyle(theme: Theme | undefined): CSSProperties {
 export interface AssistantSheetProps {
   children: ReactNode
   theme?: Theme
-  /** The open button's text. */
+  /** The open button's text. Default "Ask <name>" with the name from the server's config, else "Ask". */
   label?: string
+  /** The open button's icon. Default an AI sparkle; null for none. */
+  icon?: ReactNode
   /** What the header shows: a title, or the app's own controls (e.g. Chat / History tabs). Default: the label. */
   header?: ReactNode
   /** Keyboard shortcut to open and close, with Ctrl (Windows, Linux) or ⌘ (Mac). Default 'k'; null for none. */
@@ -56,6 +59,15 @@ export interface AssistantSheetProps {
   layout?: 'panel' | 'floating'
 }
 
+/** The default open-button icon: an AI sparkle (one large star, two small). */
+const SPARKLE = (
+  <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+    <path d="M10 3.5c.4 3.6 2.4 5.6 6 6-3.6.4-5.6 2.4-6 6-.4-3.6-2.4-5.6-6-6 3.6-.4 5.6-2.4 6-6z" />
+    <path d="M18 13c.2 1.8 1.2 2.8 3 3-1.8.2-2.8 1.2-3 3-.2-1.8-1.2-2.8-3-3 1.8-.2 2.8-1.2 3-3z" />
+    <path d="M18.5 2.5c.15 1.2.8 1.85 2 2-1.2.15-1.85.8-2 2-.15-1.2-.8-1.85-2-2 1.2-.15 1.85-.8 2-2z" />
+  </svg>
+)
+
 const PHONE = '(max-width: 640px)'
 /** Docked panel width on wide screens. */
 export const SHEET_WIDTH = '440px'
@@ -79,6 +91,8 @@ function usePhone() {
 export function AssistantSheet(props: AssistantSheetProps) {
   const [own, setOwn] = useState(false)
   const open = props.open ?? own
+  const name = useAssistantName()
+  const label = props.label ?? (name ? `Ask ${name}` : 'Ask')
   const phone = usePhone()
   const modal = props.modal === undefined || props.modal === 'phone' ? phone : props.modal
   const button = useRef<HTMLButtonElement>(null)
@@ -129,19 +143,17 @@ export function AssistantSheet(props: AssistantSheetProps) {
   return (
     <div className="tv-sheet-root" data-theme={props.theme?.mode} style={themeStyle(props.theme)}>
       <button ref={button} type="button" className="tv-sheet-open" aria-expanded={open} aria-controls="tv-sheet" onClick={() => set(!open)}>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z" />
-        </svg>
-        {props.label ?? 'Ask'}
+        {props.icon === undefined ? SPARKLE : props.icon}
+        {label}
       </button>
       {open ? (
         <>
           {modal ? <div className="tv-sheet-backdrop" onClick={() => set(false)} /> : null}
-          <div ref={sheet} id="tv-sheet" className={modal ? 'tv-sheet' : floating ? 'tv-sheet tv-sheet-floating' : 'tv-sheet tv-sheet-docked'} role="dialog" aria-modal={modal} aria-label="Assistant"
+          <div ref={sheet} id="tv-sheet" className={modal ? 'tv-sheet' : floating ? 'tv-sheet tv-sheet-floating' : 'tv-sheet tv-sheet-docked'} role="dialog" aria-modal={modal} aria-label={name ?? 'Assistant'}
             style={modal || floating ? undefined : { width: `min(${SHEET_WIDTH}, 100vw)` }}>
             <div className="tv-sheet-header">
-              <div className="tv-sheet-title">{props.header ?? props.label ?? 'Assistant'}</div>
-              <button type="button" className="tv-sheet-close" aria-label="Close assistant" onClick={() => set(false)}>
+              <div className="tv-sheet-title">{props.header ?? name ?? props.label ?? 'Assistant'}</div>
+              <button type="button" className="tv-sheet-close" aria-label={`Close ${name ?? 'assistant'}`} onClick={() => set(false)}>
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
               </button>
             </div>

@@ -7,7 +7,7 @@ import userEvent from '@testing-library/user-event'
 import { MockLanguageModelV4 } from 'ai/test'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
-import { AssistantPanel, AssistantProvider, complete, ThreadList, useAssistantContext, type AssistantProviderProps } from './index'
+import { AssistantPanel, AssistantProvider, AssistantSheet, complete, ThreadList, useAssistantContext, type AssistantProviderProps } from './index'
 
 const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } }
 const streamOf = (parts: unknown[]) => ({ stream: new ReadableStream({ start(c) { for (const p of parts) c.enqueue(p as LanguageModelV4StreamPart); c.close() } }) })
@@ -658,5 +658,27 @@ describe('AssistantPanel', () => {
     mount({ fetch: server([], false).fetch })
     await ask('hi')
     await waitFor(() => expect(screen.getByRole('alert').textContent).toBe('Sign in to use the assistant.'))
+  })
+})
+
+describe('the name and the credit line', () => {
+  it("takes the assistant's name from the server's config for the open button, and shows Powered by Teovo", async () => {
+    const s = server([say('hi')], true, {}, { name: 'Teovo' })
+    render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><AssistantSheet><AssistantPanel /></AssistantSheet></AssistantProvider>)
+    const open = await screen.findByRole('button', { name: 'Ask Teovo' })
+    expect(open.querySelector('svg')).toBeTruthy()   // the AI sparkle by default
+    await userEvent.click(open)
+    expect(screen.getByRole('dialog', { name: 'Teovo' })).toBeTruthy()
+    const link = screen.getByRole('link', { name: 'Teovo' })
+    expect(link.getAttribute('href')).toBe('https://github.com/teovo-dev/teovo')
+    expect(link.closest('.tv-powered')?.textContent).toBe('Powered by Teovo')
+  })
+
+  it('lets the app hide the credit line and use its own label and icon', async () => {
+    const s = server([say('hi')])
+    render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><AssistantSheet label="Help" icon={null} open><AssistantPanel poweredBy={false} /></AssistantSheet></AssistantProvider>)
+    const open = screen.getByRole('button', { name: 'Help' })
+    expect(open.querySelector('svg')).toBeNull()
+    expect(document.querySelector('.tv-powered')).toBeNull()
   })
 })

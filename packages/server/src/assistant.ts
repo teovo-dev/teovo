@@ -31,6 +31,11 @@ export interface AssistantConfig<DB = unknown> {
    * Return undefined (or an empty list) to use `models`. The run log records which model actually answered.
    */
   route?: (ctx: { identity: Identity; page?: Page; text: string; history: number }) => readonly LanguageModelV4[] | undefined | Promise<readonly LanguageModelV4[] | undefined>
+  /**
+   * What the assistant is called in this app, e.g. 'Teovo' or 'Oven Help'. The model is told it, and the panel shows it
+   * (GET …/policy) on its open button ("Ask Teovo") and as the chat's name. Default: none ("Ask", "Assistant").
+   */
+  name?: string
   /** The app's own instructions for the model. */
   instructions: string | ((ctx: { identity: Identity; page?: Page }) => string | Promise<string>)
   storage: Storage
@@ -278,7 +283,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     // Ordered from most to least shared, so providers can cache the start: first what is the same for everyone (the
     // app's instructions and Teovo's rules), then what is the same for this tenant and person, then what changes
     // every message (the time, the screen).
-    const shared = `${instructions}${screensText(config.screens ?? [])}${config.views?.length ? `\n\n${VIEWS_RULE}${formsText(config.forms ?? {})}` : ''}${config.tools.some((t) => t.kind === 'propose') || config.views?.some((v) => v.name === 'form') ? `\n\n${CARDS_RULE}` : ''}\n\n${UNTRUSTED_RULE}`
+    const shared = `${config.name?.trim() ? `Your name is ${config.name.trim()}; you are the assistant built into this app.\n\n` : ''}${instructions}${screensText(config.screens ?? [])}${config.views?.length ? `\n\n${VIEWS_RULE}${formsText(config.forms ?? {})}` : ''}${config.tools.some((t) => t.kind === 'propose') || config.views?.some((v) => v.name === 'form') ? `\n\n${CARDS_RULE}` : ''}\n\n${UNTRUSTED_RULE}`
     const tenantPart = `${formatsText(formats)}${settingsText(settings)}${rolesText}${config.misses !== false && !(settings.toolsOff ?? []).includes('cannot_help') ? `\n\n${MISS_RULE}` : ''}`
     const system = `${shared}${tenantPart}${todayText(formats, config.now?.() ?? new Date())}${screenText(page, shownSummary, fence)}`
 
@@ -667,12 +672,16 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     return json(200, { events: await config.storage.listCardEvents(identity.tenantId, { limit, ...(before ? { before } : {}), ...(userId ? { userId } : {}) }) })
   }
 
-  /** GET …/policy: what this person must know before chatting (the tenant's notice and its id), and whether pictures are allowed. */
+  /** GET …/policy: the assistant's name, what this person must know before chatting (the tenant's notice and its id), and whether pictures are allowed. */
   async function policy(req: Request): Promise<Response> {
     const identity = await config.identify(req)
     if (!identity) return json(401, { error: 'Sign in to use the assistant.' })
     const p = (await config.storage.tenantSettings(identity.tenantId))?.privacy ?? {}
-    return json(200, { pictures: p.pictures !== false && Boolean(config.attachments), ...(p.notice ? { notice: p.notice, noticeId: await noticeId(p.notice) } : {}) })
+    return json(200, {
+      pictures: p.pictures !== false && Boolean(config.attachments),
+      ...(config.name?.trim() ? { name: config.name.trim() } : {}),
+      ...(p.notice ? { notice: p.notice, noticeId: await noticeId(p.notice) } : {}),
+    })
   }
 
   /** GET …/completions: the app's words for completing as people type. */
