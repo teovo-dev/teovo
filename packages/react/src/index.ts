@@ -2,7 +2,7 @@
 export { AssistantProvider, useAssistant, useAssistantContext, useThreads, type AssistantProviderProps } from './provider.js'
 export { ThreadList, type ThreadListProps } from './threads.js'
 export { defaultViews, formatValue, type CellFormat, type ViewComponent, type ViewPart, type ViewProps } from './views.js'
-export { readFile, useVoice, type PendingFile } from './input.js'
+export { readFile, shrinkPicture, SHRINK_BYTES, SHRINK_SIDE, useVoice, type PendingFile } from './input.js'
 export { Markdown } from './markdown.js'
 export { AssistantSheet, themeStyle, type AssistantSheetProps, type Theme } from './sheet.js'
 export { AssistantPanel, type AssistantPanelProps, type CardState } from './panel.js'

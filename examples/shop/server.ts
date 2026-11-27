@@ -1,7 +1,7 @@
 // The Teovo example shop's server: a tiny shop kept in memory, with Teovo's assistant mounted at /api/assistant.
 // Conversations, cards, runs and usage go to Postgres (TEOVO_DATABASE_URL); the model is Gemini (GEMINI_API_KEY).
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
-import { migrate, postgresStorage } from '@teovo/db'
+import { migrate, postgresFiles, postgresStorage } from '@teovo/db'
 import { builtinViews, createAssistant, defineTool, type Identity } from '@teovo/server'
 import { readFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
@@ -41,7 +41,7 @@ const order = (no: number) => {
 const pool = new pg.Pool({ connectionString: dbUrl, options: '-c search_path=teovo_demo' })
 await pool.query('create schema if not exists teovo_demo')
 const query = (text: string, params?: unknown[]) => pool.query(text, params as unknown[])
-console.log('migrations applied:', await migrate(query, { features: { proposals: true } }))
+console.log('migrations applied:', await migrate(query, { features: { proposals: true, files: true } }))
 
 const google = createGoogleGenerativeAI({ apiKey: key })
 
@@ -59,6 +59,8 @@ const teovo = createAssistant({
   formats: { locale: 'en-IN', currency: 'INR', timeZone: 'Asia/Kolkata' },
   limits: { user: { messages: 200 } },
   attachments: {},
+  // Pictures go to tv_files, not into the conversation; kept 30 days (call teovo.removeOldFiles() daily).
+  files: { store: postgresFiles(query), keepDays: 30 },
   redact: { fields: ['phone'], patterns: ['phone', 'email', 'upi'] },
   views: builtinViews,
   screens: [

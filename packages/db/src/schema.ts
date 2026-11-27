@@ -5,7 +5,7 @@ export interface Migration { id: string; sql: string }
 
 export interface SchemaOptions {
   /** Features switched on in createAssistant({ features }). Only their tables are created. */
-  features?: { proposals?: boolean }
+  features?: { proposals?: boolean; files?: boolean }
   /**
    * Row-level rules that match the app's own tenancy, as SQL expressions returning text. When given, every
    * tv_ table gets rules so a user sees only their own tenant's rows (and only their own threads).
@@ -140,6 +140,23 @@ const formats: Migration = {
   sql: `alter table tv_tenant_settings add column if not exists formats jsonb;`,
 }
 
+const files: Migration = {
+  id: '0005_files',
+  sql: `
+create table if not exists tv_files (
+  id         uuid primary key,
+  tenant_id  text not null,
+  user_id    text not null,
+  thread_id  uuid not null references tv_threads (id) on delete cascade,
+  media_type text not null,
+  filename   text,
+  size       int not null,
+  bytes      bytea not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists tv_files_age on tv_files (created_at);`,
+}
+
 function rlsMigration(tables: string[], rls: NonNullable<SchemaOptions['rls']>): Migration {
   const to = (rls.roles?.length ? rls.roles : ['public']).join(', ')
   const own = `tenant_id = (${rls.tenant}) and user_id = (${rls.user})`
@@ -147,7 +164,7 @@ function rlsMigration(tables: string[], rls: NonNullable<SchemaOptions['rls']>):
   const rule: Record<string, string> = {
     tv_threads: own, tv_runs: own, tv_messages: viaThread, tv_proposals: viaThread,
     tv_run_steps: `exists (select 1 from tv_runs r where r.id = run_id and r.tenant_id = (${rls.tenant}) and r.user_id = (${rls.user}))`,
-    tv_usage: own, tv_usage_daily: `tenant_id = (${rls.tenant})`, tv_budgets: `tenant_id = (${rls.tenant})`, tv_tenant_settings: `tenant_id = (${rls.tenant})`,
+    tv_files: own, tv_usage: own, tv_usage_daily: `tenant_id = (${rls.tenant})`, tv_budgets: `tenant_id = (${rls.tenant})`, tv_tenant_settings: `tenant_id = (${rls.tenant})`,
   }
   const sql = tables.map((t) =>
     `alter table ${t} enable row level security;\n` +
@@ -163,7 +180,8 @@ export function migrations(options: SchemaOptions = {}): Migration[] {
   if (options.features?.proposals) { list.push(proposals); tables.push('tv_proposals') }
   list.push(formats)
   if (options.features?.proposals) list.push(proposalSources)
-  if (options.rls) list.push({ ...rlsMigration(tables, options.rls), id: `0100_rls_${options.features?.proposals ? 'with_proposals' : 'core'}` })
+  if (options.features?.files) { list.push(files); tables.push('tv_files') }
+  if (options.rls) list.push({ ...rlsMigration(tables, options.rls), id: `0100_rls_${options.features?.proposals ? 'with_proposals' : 'core'}${options.features?.files ? '_files' : ''}` })
   return list
 }
 
@@ -171,4 +189,5 @@ export function migrations(options: SchemaOptions = {}): Migration[] {
 export const FEATURE_TABLES: Record<string, string[]> = {
   core: ['tv_threads', 'tv_messages', 'tv_runs', 'tv_run_steps', 'tv_usage', 'tv_usage_daily', 'tv_budgets', 'tv_tenant_settings', 'tv_migrations'],
   proposals: ['tv_proposals'],
+  files: ['tv_files'],
 }

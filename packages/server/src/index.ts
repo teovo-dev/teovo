@@ -6,6 +6,7 @@ export { memoryStorage, periodKey, type Budget, type CardPatch, type CardStatus,
 export { builtinViews, checkForm, choicesView, defineView, formView, recordView, tableView, VIEWS_RULE, type FormHandler, type FormSpec, type TeovoView } from './views.js'
 export { makeRedactor, type RedactOptions, type Redactor } from './redact.js'
 export { checkMessage, type AttachmentRules } from './attachments.js'
+export { decodeDataUrl, encodeDataUrl, FILE_SCHEME, memoryFiles, picturesOnce, storeFiles, type FileRules, type FileStore, type StoredFile } from './files.js'
 export { checkFormats, DEFAULT_FORMATS, formatsText, type Formats } from './formats.js'
 export { DEFAULT_SETTINGS, settingsText, validateSettings, type TenantSettings } from './settings.js'
 export { cardForModel, CardError, publicCard, type ApplyResult, type CardApplier, type CardRules, type Decision } from './cards.js'

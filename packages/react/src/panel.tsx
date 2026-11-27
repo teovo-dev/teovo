@@ -150,7 +150,9 @@ function Message({ message, ask, ...props }: { message: TeovoMessage; ask: (t: s
         }
         if (p.type === 'file') {
           return p.mediaType.startsWith('image/')
-            ? <img key={i} className="tv-attachment" src={p.url} alt={p.filename ?? 'Picture'} />
+            ? (p.url.startsWith('teovo-file:')
+              ? <StoredPicture key={i} id={p.url.slice('teovo-file:'.length)} alt={p.filename ?? 'Picture'} />
+              : <img key={i} className="tv-attachment" src={p.url} alt={p.filename ?? 'Picture'} />)
             : <div key={i} className="tv-attachment">{p.filename ?? 'File'}</div>
         }
         if (p.type === 'data-card') return <CardView key={p.id ?? i} card={p.data as Card} {...props} />
@@ -178,6 +180,28 @@ function Message({ message, ask, ...props }: { message: TeovoMessage; ask: (t: s
 
 const FINAL = { confirmed: 'confirmed', skipped: 'skipped', undone: 'undone', expired: 'expired' } as const
 const AFTER = { confirm: 'confirmed', skip: 'skipped', undo: 'undone' } as const
+
+/**
+ * A picture kept in the server's file store. Fetched with the provider's headers (so header-based sign-in works,
+ * which a plain <img src> can't do) and shown from a local blob URL.
+ */
+function StoredPicture({ id, alt }: { id: string; alt: string }) {
+  const { request } = useAssistant()
+  const [src, setSrc] = useState<string>()
+  const [gone, setGone] = useState(false)
+  useEffect(() => {
+    let url: string | undefined
+    let live = true
+    request(`/files/${encodeURIComponent(id)}`).then(async (res) => {
+      if (!res.ok) { if (live) setGone(true); return }
+      url = URL.createObjectURL(await res.blob())
+      if (live) setSrc(url)
+    }).catch(() => { if (live) setGone(true) })
+    return () => { live = false; if (url) URL.revokeObjectURL(url) }
+  }, [id, request])
+  if (gone) return <div className="tv-attachment tv-attachment-gone">{alt} (no longer kept)</div>
+  return src ? <img className="tv-attachment" src={src} alt={alt} /> : <div className="tv-attachment tv-attachment-loading" aria-label={`Loading ${alt}`} />
+}
 
 function CardView({ card, renderCard }: { card: Card } & AssistantPanelProps) {
   const { decideCard } = useAssistant()

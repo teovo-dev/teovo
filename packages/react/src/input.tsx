@@ -3,13 +3,46 @@ import { useEffect, useRef, useState } from 'react'
 /** A picture waiting to be sent, read into a data: URL the server can check. */
 export interface PendingFile { name: string; mediaType: string; url: string }
 
-export function readFile(file: File): Promise<PendingFile> {
-  return new Promise((resolve, reject) => {
-    const r = new FileReader()
-    r.onload = () => resolve({ name: file.name, mediaType: file.type, url: String(r.result) })
-    r.onerror = () => reject(new Error(`“${file.name}” could not be read.`))
-    r.readAsDataURL(file)
-  })
+/** Pictures larger than this on their long side, or than SHRINK_BYTES, are redrawn smaller before sending. */
+export const SHRINK_SIDE = 1600
+export const SHRINK_BYTES = 1_000_000
+
+const asDataUrl = (blob: Blob, name: string) => new Promise<string>((resolve, reject) => {
+  const r = new FileReader()
+  r.onload = () => resolve(String(r.result))
+  r.onerror = () => reject(new Error(`“${name}” could not be read.`))
+  r.readAsDataURL(blob)
+})
+
+/**
+ * Redraw a photo at most SHRINK_SIDE pixels on its long side, as JPEG. A phone photo goes from a few MB to a few
+ * hundred KB, which is plenty for reading a bill. Returns the original where the browser can't redraw it.
+ */
+export async function shrinkPicture(file: Blob): Promise<Blob> {
+  if (!file.type.startsWith('image/') || file.type === 'image/gif' || typeof createImageBitmap !== 'function' || typeof document === 'undefined') return file
+  try {
+    const bmp = await createImageBitmap(file)
+    const long = Math.max(bmp.width, bmp.height)
+    if (long <= SHRINK_SIDE && file.size <= SHRINK_BYTES) { bmp.close(); return file }
+    const scale = Math.min(1, SHRINK_SIDE / long)
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.round(bmp.width * scale)
+    canvas.height = Math.round(bmp.height * scale)
+    const ctx = canvas.getContext('2d')
+    if (!ctx) { bmp.close(); return file }
+    ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height)
+    bmp.close()
+    const out = await new Promise<Blob | null>((res) => canvas.toBlob(res, 'image/jpeg', 0.85))
+    return out && out.size < file.size ? out : file
+  } catch {
+    return file
+  }
+}
+
+export async function readFile(file: File): Promise<PendingFile> {
+  const small = await shrinkPicture(file)
+  const name = small === file ? file.name : file.name.replace(/\.\w+$/, '') + '.jpg'
+  return { name, mediaType: small.type || file.type, url: await asDataUrl(small, file.name) }
 }
 
 interface Recognition {

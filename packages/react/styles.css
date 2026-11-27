@@ -102,3 +102,5 @@
 .tv-md-table { overflow-x: auto; margin: 0 0 8px; }
 .tv-md-table table { border-collapse: collapse; }
 .tv-md-table th, .tv-md-table td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--tv-border); }
+.tv-attachment-loading { width: 160px; height: 120px; background: var(--tv-user-bg); }
+.tv-attachment-gone { color: var(--tv-muted); font-size: 0.875em; }

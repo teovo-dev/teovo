@@ -38,7 +38,7 @@ describe('teovo init and generate', () => {
   it('writes the config once, with row-level rules when given both expressions', async () => {
     const p = project(true)
     expect((await p.run('init', '--supabase')).text).toBe('Row-level rules need both --tenant-sql and --user-sql (or --supabase for the user).')
-    expect((await p.run('init', '--features', 'proposals,voice')).text).toBe('Unknown feature: voice. Known: proposals')
+    expect((await p.run('init', '--features', 'proposals,voice')).text).toBe('Unknown feature: voice. Known: proposals, files')
     const r = await p.run('init', '--supabase', '--tenant-sql', 'public.current_business_id()::text')
     expect(r.code).toBe(0)
     expect(r.text).toContain('Next: npx teovo generate')
