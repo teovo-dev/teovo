@@ -74,7 +74,25 @@ export interface Storage {
   usage(tenantId: string, userId: string, period: Period): Promise<{ user: Totals; tenant: Totals }>
   /** Limits a tenant set for itself (user '' = the whole tenant) or for one person; they override the code's. */
   budgets(tenantId: string, userId: string): Promise<Budget[]>
+
+  // Audit trail and miss log.
+  addCardEvent(e: CardEvent): Promise<void>
+  /** A tenant's card events, newest first; `before` (an ISO time) pages back, `userId` narrows to one person. */
+  listCardEvents(tenantId: string, opts: { limit: number; before?: string; userId?: string }): Promise<CardEvent[]>
+  addMiss(m: Miss): Promise<void>
+  listMisses(tenantId: string, opts: { limit: number; before?: string }): Promise<Miss[]>
+
+  /**
+   * Delete a person's (or with no userId, a whole tenant's) conversations, cards, run log, usage detail, card events
+   * and misses. Daily usage totals stay, so limits keep counting. Returns how many conversations went, and how many
+   * pictures kept in its own tables (tv_files) went with them.
+   */
+  wipe(tenantId: string, userId?: string): Promise<{ threads: number; files?: number }>
 }
+
+export type CardEventKind = 'proposed' | 'confirmed' | 'skipped' | 'undone' | 'expired'
+export interface CardEvent { cardId: string; threadId: string; tenantId: string; userId: string; kind: string; title: string; event: CardEventKind; at?: string }
+export interface Miss { tenantId: string; userId: string; threadId?: string; runId?: string; question: string; reason: string; at?: string }
 
 /** 'neurons' is Cloudflare Workers AI's own cost unit, reported by @teovo/server/workers-ai. */
 export type Unit = 'messages' | 'input_tokens' | 'output_tokens' | 'neurons'
@@ -104,13 +122,40 @@ export function memoryStorage() {
   const usageRows: (UsageRow & { at: Date })[] = []
   const budgetRows: (Budget & { tenantId: string })[] = []
   const settings = new Map<string, TenantSettings>()
+  const cardEvents: CardEvent[] = []
+  const misses: Miss[] = []
   const sum = (rows: typeof usageRows) => {
     const t: Totals = {}
     for (const r of rows) t[r.unit] = (t[r.unit] ?? 0) + r.amount
     return t
   }
-  const storage: Storage & { threads: typeof threads; messages: typeof messages; cards: typeof cards; runs: typeof runs; steps: typeof steps; usageRows: typeof usageRows; budgetRows: typeof budgetRows; settings: typeof settings } = {
-    threads, messages, cards, runs, steps, usageRows, budgetRows, settings,
+  const storage: Storage & { threads: typeof threads; messages: typeof messages; cards: typeof cards; runs: typeof runs; steps: typeof steps; usageRows: typeof usageRows; budgetRows: typeof budgetRows; settings: typeof settings; cardEvents: typeof cardEvents; misses: typeof misses } = {
+    threads, messages, cards, runs, steps, usageRows, budgetRows, settings, cardEvents, misses,
+    async addCardEvent(e) { cardEvents.push({ ...e, at: e.at ?? new Date().toISOString() }) },
+    async listCardEvents(tenantId, o) {
+      // Newest first; events in the same millisecond keep the order they happened in (as Postgres does by id).
+      return cardEvents.map((e, i) => ({ e, i })).filter(({ e }) => e.tenantId === tenantId && (!o.userId || e.userId === o.userId) && (!o.before || e.at! < o.before))
+        .sort((a, b) => b.e.at!.localeCompare(a.e.at!) || b.i - a.i).slice(0, o.limit).map(({ e }) => ({ ...e }))
+    },
+    async addMiss(m) { misses.push({ ...m, at: m.at ?? new Date().toISOString() }) },
+    async listMisses(tenantId, o) {
+      return misses.map((m, i) => ({ m, i })).filter(({ m }) => m.tenantId === tenantId && (!o.before || m.at! < o.before))
+        .sort((a, b) => b.m.at!.localeCompare(a.m.at!) || b.i - a.i).slice(0, o.limit).map(({ m }) => ({ ...m }))
+    },
+    async wipe(tenantId, userId) {
+      const mine = (x: { tenantId: string; userId: string }) => x.tenantId === tenantId && (userId === undefined || x.userId === userId)
+      let n = 0
+      for (const [id, t] of threads) {
+        if (!mine(t)) continue
+        threads.delete(id); messages.delete(id); n++
+        for (const [cid, c] of cards) if (c.threadId === id) cards.delete(cid)
+      }
+      for (const [id, r] of runs) if (mine(r)) { runs.delete(id); for (let i = steps.length - 1; i >= 0; i--) if (steps[i]!.runId === id) steps.splice(i, 1) }
+      // Usage rows are this store's daily totals too, so they stay (limits keep counting), as in Postgres.
+      for (let i = cardEvents.length - 1; i >= 0; i--) if (mine(cardEvents[i]!)) cardEvents.splice(i, 1)
+      for (let i = misses.length - 1; i >= 0; i--) if (mine(misses[i]!)) misses.splice(i, 1)
+      return { threads: n }
+    },
     async tenantSettings(tenantId) { const s = settings.get(tenantId); return s ? structuredClone(s) : null },
     async saveTenantSettings(tenantId, s) { settings.set(tenantId, structuredClone(s)) },
     async getThread(tenantId, userId, id) {

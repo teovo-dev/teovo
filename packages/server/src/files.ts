@@ -13,6 +13,8 @@ export interface FileStore {
   get(tenantId: string, id: string): Promise<StoredFile | null>
   /** Remove files older than this. Returns how many. Optional: stores that expire files themselves can skip it. */
   removeOlderThan?(before: Date): Promise<number>
+  /** Remove a person's (or with no userId, a whole tenant's) files, for wipe(). Stores that keep files in tv_files can skip it: those go with their conversation. */
+  removeFor?(tenantId: string, userId?: string): Promise<number>
 }
 
 export interface StoredFile {
@@ -85,6 +87,11 @@ export function memoryFiles(): FileStore & { files: Map<string, StoredFile> } {
     async removeOlderThan(before) {
       let n = 0
       for (const [id, f] of files) if (new Date(f.createdAt!) < before) { files.delete(id); n++ }
+      return n
+    },
+    async removeFor(tenantId, userId) {
+      let n = 0
+      for (const [id, f] of files) if (f.tenantId === tenantId && (userId === undefined || f.userId === userId)) { files.delete(id); n++ }
       return n
     },
   }

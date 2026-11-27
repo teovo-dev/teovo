@@ -129,6 +129,26 @@ suite('@teovo/db on Supabase (supabaseStorage)', () => {
     expect(await index.get(`${t}x`, id)).toBeNull()
   })
 
+  it('keeps the audit trail and misses, and wipe removes one person, their pictures included', async () => {
+    const svc = service()
+    const s = supabaseStorage(svc)
+    const t = tenant()
+    const th = await s.createThread(t, 'u1')
+    await s.createThread(t, 'u2')
+    await s.addCardEvent({ cardId: crypto.randomUUID(), threadId: th.id, tenantId: t, userId: 'u1', kind: 'pay', title: 'Pay', event: 'proposed' })
+    await s.addMiss({ tenantId: t, userId: 'u1', question: 'refund?', reason: 'no tool' })
+    expect((await s.listCardEvents(t, { limit: 5 })).map((e) => e.event)).toEqual(['proposed'])
+    expect((await s.listMisses(t, { limit: 5 })).map((m) => m.question)).toEqual(['refund?'])
+    const index = supabaseFileIndex(svc)
+    const id = crypto.randomUUID()
+    await index.put({ id, tenantId: t, userId: 'u1', threadId: th.id, mediaType: 'image/png' })
+    expect((await index.list(t, 'u1')).map((f) => f.id)).toEqual([id])
+    expect(await s.wipe(t, 'u1')).toEqual({ threads: 1 })
+    expect(await s.listThreads(t, 'u2', 5)).toHaveLength(1)
+    expect(await s.listCardEvents(t, { limit: 5 })).toEqual([])
+    expect(await index.list(t, 'u1')).toEqual([])   // owner rows went with the conversation
+  })
+
   it('locks the tables against the browser: the public key sees and changes nothing', async () => {
     const t = tenant()
     await supabaseStorage(service()).createThread(t, 'u1')

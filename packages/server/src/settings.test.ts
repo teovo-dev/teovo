@@ -60,7 +60,7 @@ describe('tenant settings', () => {
     expect(system).toContain('Notes from this business (follow them unless they conflict with anything above):\\nWe close on Sundays.')
     expect(system).toContain('Words this business uses:\\n- khata: credit account')
     expect(system.indexOf('We close on Sundays')).toBeLessThan(system.indexOf('Text between <untrusted'))
-    expect((call.tools ?? []).map((t) => t.name)).toEqual(['get_sales'])
+    expect((call.tools ?? []).map((t) => t.name)).toEqual(['get_sales', 'cannot_help'])
   })
 
   it('turns the assistant off for the whole tenant, chips included', async () => {

@@ -95,10 +95,10 @@ db('teovo migrate, status and prune on Postgres', () => {
     expect(before.code).toBe(1)
     expect(before.text).toContain('pending  0002_proposals')
     expect(before.text).toContain('Missing tables: tv_threads')
-    expect((await p.run('migrate')).text).toBe('Applied: 0001_core, 0002_proposals, 0003_tenant_formats, 0004_proposal_sources, 0006_proposal_fields, 0007_api_functions, 0009_ratings')
+    expect((await p.run('migrate')).text).toBe('Applied: 0001_core, 0002_proposals, 0003_tenant_formats, 0004_proposal_sources, 0006_proposal_fields, 0007_api_functions, 0009_ratings, 0010_audit_misses')
     expect((await p.run('migrate')).text).toBe('Already up to date.')
     const after = await p.run('status')
-    expect(after).toEqual({ code: 0, text: 'done     0001_core\ndone     0002_proposals\ndone     0003_tenant_formats\ndone     0004_proposal_sources\ndone     0006_proposal_fields\ndone     0007_api_functions\ndone     0009_ratings\nAll tables are there.' })
+    expect(after).toEqual({ code: 0, text: 'done     0001_core\ndone     0002_proposals\ndone     0003_tenant_formats\ndone     0004_proposal_sources\ndone     0006_proposal_fields\ndone     0007_api_functions\ndone     0009_ratings\ndone     0010_audit_misses\nAll tables are there.' })
   })
 
   it('prunes only old conversations, and only with --yes', async () => {

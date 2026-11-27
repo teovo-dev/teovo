@@ -1,4 +1,4 @@
-import { periodKey, type CardPatch, type Storage, type StoredCard, type StoredFile, type Thread, type Totals, type Unit } from '@teovo/server'
+import { periodKey, type CardEvent, type CardPatch, type Miss, type Storage, type StoredCard, type StoredFile, type Thread, type Totals, type Unit } from '@teovo/server'
 import type { UIMessage } from 'ai'
 
 /**
@@ -158,6 +158,31 @@ export function supabaseStorage(db: SupabaseLike): Storage {
       }
       return { user, tenant }
     },
+    async addCardEvent(e) {
+      await ok(db.from('tv_card_events').insert({ card_id: e.cardId, thread_id: e.threadId, tenant_id: e.tenantId, user_id: e.userId, kind: e.kind, title: e.title, event: e.event }))
+    },
+    async listCardEvents(tenantId, o) {
+      let q = db.from('tv_card_events').select('*').eq('tenant_id', tenantId)
+      if (o.userId) q = q.eq('user_id', o.userId)
+      if (o.before) q = q.lt('at', o.before)
+      const rows = await ok(q.order('at', { ascending: false }).order('id', { ascending: false }).limit(o.limit))
+      return rows.map((x: any): CardEvent => ({ cardId: x.card_id, threadId: x.thread_id, tenantId: x.tenant_id, userId: x.user_id, kind: x.kind, title: x.title, event: x.event, at: iso(x.at) }))
+    },
+    async addMiss(m) {
+      await ok(db.from('tv_misses').insert({ tenant_id: m.tenantId, user_id: m.userId, thread_id: m.threadId ?? null, run_id: m.runId ?? null, question: m.question, reason: m.reason }))
+    },
+    async listMisses(tenantId, o) {
+      let q = db.from('tv_misses').select('*').eq('tenant_id', tenantId)
+      if (o.before) q = q.lt('at', o.before)
+      const rows = await ok(q.order('at', { ascending: false }).order('id', { ascending: false }).limit(o.limit))
+      return rows.map((x: any): Miss => ({ tenantId: x.tenant_id, userId: x.user_id, ...(x.thread_id ? { threadId: x.thread_id } : {}), ...(x.run_id ? { runId: x.run_id } : {}), question: x.question, reason: x.reason, at: iso(x.at) }))
+    },
+    async wipe(tenantId, userId) {
+      const scope = (q: any) => (userId === undefined ? q.eq('tenant_id', tenantId) : q.eq('tenant_id', tenantId).eq('user_id', userId))
+      const gone = await ok(scope(db.from('tv_threads').delete()).select('id'))
+      for (const t of ['tv_runs', 'tv_usage', 'tv_card_events', 'tv_misses']) await ok(scope(db.from(t).delete()))
+      return { threads: (gone as unknown[]).length }
+    },
     async budgets(tenantId, userId) {
       const rows = await ok(db.from('tv_budgets').select('user_id, unit, period, limit').eq('tenant_id', tenantId).in('user_id', [userId, '']))
       return rows.map((b: any) => ({ userId: b.user_id, unit: b.unit, period: b.period, limit: Number(b.limit) }))
@@ -177,6 +202,12 @@ export function supabaseFileIndex(db: SupabaseLike) {
       const r = rows[0]
       if (!r) return null
       return { id: r.id, tenantId: r.tenant_id, userId: r.user_id, threadId: r.thread_id, mediaType: r.media_type, ...(r.filename ? { filename: r.filename } : {}), createdAt: iso(r.created_at) }
+    },
+    async list(tenantId: string, userId?: string): Promise<Omit<StoredFile, 'bytes'>[]> {
+      let q = db.from('tv_files').select('id, tenant_id, user_id, thread_id, media_type').eq('tenant_id', tenantId)
+      if (userId !== undefined) q = q.eq('user_id', userId)
+      const rows = await ok(q)
+      return rows.map((r: any) => ({ id: r.id, tenantId: r.tenant_id, userId: r.user_id, threadId: r.thread_id, mediaType: r.media_type }))
     },
   }
 }

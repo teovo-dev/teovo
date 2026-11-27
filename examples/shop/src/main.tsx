@@ -67,6 +67,36 @@ function OrderPage({ order }: { order: Order | undefined }) {
   )
 }
 
+/** What an app's own admin screen can show from Teovo: the trail of changes, the misses, and deleting conversations. */
+function Admin({ user }: { user: string }) {
+  const [events, setEvents] = useState<{ title: string; event: string; userId: string; at: string }[]>([])
+  const [misses, setMisses] = useState<{ question: string; reason: string; userId: string; at: string }[]>([])
+  const [note, setNote] = useState('')
+  const get = (path: string) => fetch(`/api/assistant/${path}`, { headers: { 'x-demo-user': user } }).then((r) => r.json())
+  const load = () => { void get('audit?limit=20').then((b) => setEvents(b.events ?? [])); void get('misses?limit=20').then((b) => setMisses(b.misses ?? [])) }
+  useEffect(load, [user])
+  useAssistantContext({ path: '/admin', title: 'Admin' })
+  const when = (iso: string) => new Date(iso).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })
+  return (
+    <section>
+      <h1>Admin</h1>
+      <h2>Changes made through the assistant</h2>
+      {events.length ? <table><thead><tr><th>When</th><th>Who</th><th>Change</th><th>What happened</th></tr></thead>
+        <tbody>{events.map((e, i) => <tr key={i}><td>{when(e.at)}</td><td>{e.userId}</td><td>{e.title}</td><td>{e.event}</td></tr>)}</tbody></table> : <p>None yet.</p>}
+      <h2>Questions it couldn't answer</h2>
+      {misses.length ? <table><thead><tr><th>When</th><th>Who</th><th>Asked</th><th>Why not</th></tr></thead>
+        <tbody>{misses.map((m, i) => <tr key={i}><td>{when(m.at)}</td><td>{m.userId}</td><td>{m.question}</td><td>{m.reason}</td></tr>)}</tbody></table> : <p>None yet.</p>}
+      <h2>Your data</h2>
+      <button type="button" onClick={async () => {
+        if (!confirm('Delete all your conversations with the assistant? This cannot be undone.')) return
+        const r = await fetch('/api/assistant/wipe', { method: 'POST', headers: { 'x-demo-user': user, 'content-type': 'application/json' }, body: JSON.stringify({ scope: 'me' }) }).then((x) => x.json())
+        setNote(`Deleted ${r.threads} conversation(s) and ${r.files} picture(s).`)
+        load()
+      }}>Delete my conversations</button> <span>{note}</span>
+    </section>
+  )
+}
+
 function Expenses({ expenses }: { expenses: Expense[] }) {
   useAssistantContext({ path: '/expenses', title: 'Expenses' })
   return (
@@ -98,6 +128,7 @@ function App() {
         <strong>Teovo shop</strong>
         <a href="#/orders">Orders</a>
         <a href="#/expenses">Expenses</a>
+        {user === 'owner' ? <a href="#/admin">Admin</a> : null}
         <select aria-label="Signed in as" value={user} onChange={(e) => setUser(e.target.value as 'owner' | 'staff')}>
           <option value="owner">Owner</option>
           <option value="staff">Staff</option>
@@ -106,6 +137,7 @@ function App() {
       <main>
         {match ? <OrderPage order={shop.orders.find((o) => o.no === Number(match[1]))} />
           : route === '/expenses' ? <Expenses expenses={shop.expenses} />
+          : route === '/admin' ? <Admin user={user} />
           : <Orders orders={shop.orders} go={go} query={new URLSearchParams(search)} />}
       </main>
       <AssistantSheet label="Ask Teovo" theme={{ accent: '#b45309' }} open={open} onOpenChange={setOpen} header={

@@ -1,4 +1,4 @@
-import { periodKey, type CardPatch, type Storage, type StoredCard, type Thread, type Totals, type Unit } from '@teovo/server'
+import { periodKey, type CardEvent, type CardPatch, type Miss, type Storage, type StoredCard, type Thread, type Totals, type Unit } from '@teovo/server'
 import type { UIMessage } from 'ai'
 import type { Query } from './migrate.js'
 
@@ -147,6 +147,37 @@ export function postgresStorage(query: Query): Storage {
       const user: Totals = {}, tenant: Totals = {}
       for (const row of r.rows) (row.user_id === '' ? tenant : user)[row.unit as Unit] = Number(row.amount)
       return { user, tenant }
+    },
+    async addCardEvent(e) {
+      await query('insert into tv_card_events (card_id, thread_id, tenant_id, user_id, kind, title, event) values ($1, $2, $3, $4, $5, $6, $7)',
+        [e.cardId, e.threadId, e.tenantId, e.userId, e.kind, e.title, e.event])
+    },
+    async listCardEvents(tenantId, o) {
+      const r = await query(
+        `select * from tv_card_events where tenant_id = $1 and ($2::text is null or user_id = $2) and ($3::timestamptz is null or at < $3) order by at desc, id desc limit $4`,
+        [tenantId, o.userId ?? null, o.before ?? null, o.limit])
+      return r.rows.map((x): CardEvent => ({ cardId: x.card_id, threadId: x.thread_id, tenantId: x.tenant_id, userId: x.user_id, kind: x.kind, title: x.title, event: x.event, at: iso(x.at) }))
+    },
+    async addMiss(m) {
+      await query('insert into tv_misses (tenant_id, user_id, thread_id, run_id, question, reason) values ($1, $2, $3, $4, $5, $6)',
+        [m.tenantId, m.userId, m.threadId ?? null, m.runId ?? null, m.question, m.reason])
+    },
+    async listMisses(tenantId, o) {
+      const r = await query(`select * from tv_misses where tenant_id = $1 and ($2::timestamptz is null or at < $2) order by at desc, id desc limit $3`, [tenantId, o.before ?? null, o.limit])
+      return r.rows.map((x): Miss => ({ tenantId: x.tenant_id, userId: x.user_id, ...(x.thread_id ? { threadId: x.thread_id } : {}), ...(x.run_id ? { runId: x.run_id } : {}), question: x.question, reason: x.reason, at: iso(x.at) }))
+    },
+    async wipe(tenantId, userId) {
+      const who = userId === undefined ? 'tenant_id = $1' : 'tenant_id = $1 and user_id = $2'
+      const args = userId === undefined ? [tenantId] : [tenantId, userId]
+      // Threads take their messages, cards, runs (and run steps) and pictures with them (on delete cascade).
+      const hasFiles = (await query(`select to_regclass('tv_files') is not null as ok`)).rows[0].ok as boolean
+      const files = hasFiles ? (await query(`select count(*)::int as n from tv_files where ${who}`, args)).rows[0].n as number : 0
+      const t = await query(`delete from tv_threads where ${who} returning id`, args)
+      await query(`delete from tv_runs where ${who}`, args)
+      await query(`delete from tv_usage where ${who}`, args)
+      await query(`delete from tv_card_events where ${who}`, args)
+      await query(`delete from tv_misses where ${who}`, args)
+      return { threads: t.rows.length, files }
     },
     async budgets(tenantId, userId) {
       const r = await query(`select user_id, unit, period, "limit"::float8 as "limit" from tv_budgets where tenant_id = $1 and user_id in ($2, '')`, [tenantId, userId])

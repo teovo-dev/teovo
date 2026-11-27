@@ -29,6 +29,7 @@ export interface SupabaseStorageLike {
   storage: { from(bucket: string): {
     upload(path: string, body: Uint8Array, opts: { contentType: string; upsert?: boolean }): Promise<{ error: { message: string } | null }>
     download(path: string): Promise<{ data: Blob | null; error: { message: string } | null }>
+    remove?(paths: string[]): Promise<{ error: { message: string } | null }>
   } }
 }
 
@@ -37,7 +38,12 @@ export interface SupabaseStorageLike {
  * (GET …/files/:id checks the owner), so the bucket stays private. A small metadata row in tv_files (without bytes)
  * is not needed: the path holds the owner. Expire them with a Storage lifecycle rule or your own job.
  */
-export function supabaseFiles(client: SupabaseStorageLike, bucket: string, index: { put(f: Omit<StoredFile, 'bytes'>): Promise<void>; get(tenantId: string, id: string): Promise<Omit<StoredFile, 'bytes'> | null> }): FileStore {
+export function supabaseFiles(client: SupabaseStorageLike, bucket: string, index: {
+  put(f: Omit<StoredFile, 'bytes'>): Promise<void>
+  get(tenantId: string, id: string): Promise<Omit<StoredFile, 'bytes'> | null>
+  /** The owner rows to delete with wipe(); without it, wipe leaves the bucket alone. */
+  list?(tenantId: string, userId?: string): Promise<Omit<StoredFile, 'bytes'>[]>
+}): FileStore {
   const path = (f: Pick<StoredFile, 'tenantId' | 'userId' | 'threadId' | 'id'>) => `${f.tenantId}/${f.userId}/${f.threadId}/${f.id}`
   return {
     async put(f) {
@@ -53,12 +59,24 @@ export function supabaseFiles(client: SupabaseStorageLike, bucket: string, index
       if (error || !data) return null
       return { ...meta, bytes: new Uint8Array(await data.arrayBuffer()) }
     },
+    async removeFor(tenantId, userId) {
+      const remove = client.storage.from(bucket).remove
+      if (!index.list || !remove) return 0
+      const owned = await index.list(tenantId, userId)
+      for (let i = 0; i < owned.length; i += 100) {
+        const { error } = await client.storage.from(bucket).remove!(owned.slice(i, i + 100).map(path))
+        if (error) throw new Error(`Could not delete the pictures: ${error.message}`)
+      }
+      return owned.length
+    },
   }
 }
 
 /** The calls Teovo makes on a Cloudflare R2 bucket binding. */
 export interface R2Like {
   put(key: string, value: Uint8Array, opts: { httpMetadata: { contentType: string }; customMetadata: Record<string, string> }): Promise<unknown>
+  list?(opts: { prefix: string; cursor?: string; include?: ('customMetadata')[] }): Promise<{ objects: { key: string; customMetadata?: Record<string, string> }[]; truncated: boolean; cursor?: string }>
+  delete?(keys: string[]): Promise<void>
   get(key: string): Promise<{ arrayBuffer(): Promise<ArrayBuffer>; httpMetadata?: { contentType?: string }; customMetadata?: Record<string, string>; uploaded: Date } | null>
 }
 
@@ -70,6 +88,17 @@ export function r2Files(bucket: R2Like): FileStore {
         httpMetadata: { contentType: f.mediaType },
         customMetadata: { userId: f.userId, threadId: f.threadId, ...(f.filename ? { filename: f.filename } : {}) },
       })
+    },
+    async removeFor(tenantId, userId) {
+      if (!bucket.list || !bucket.delete) return 0
+      let n = 0, cursor: string | undefined
+      do {
+        const page = await bucket.list({ prefix: `${tenantId}/`, ...(cursor ? { cursor } : {}), include: ['customMetadata'] })
+        const keys = page.objects.filter((o) => userId === undefined || o.customMetadata?.userId === userId).map((o) => o.key)
+        if (keys.length) { await bucket.delete(keys); n += keys.length }
+        cursor = page.truncated ? page.cursor : undefined
+      } while (cursor)
+      return n
     },
     async get(tenantId, id) {
       if (!/^[0-9a-f-]{36}$/i.test(id)) return null
