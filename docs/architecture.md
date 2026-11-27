@@ -85,8 +85,10 @@ Mounted under one path in the app's server, e.g. `app.all('/api/assistant/*', te
 | `POST /cards/:id/confirm`, `/skip`, `/undo` | Decide a card |
 | `GET /suggestions?path&title&recordType&recordId` | Chips and the input hint for a screen |
 | `GET /settings`, `PUT /settings` | A tenant's own settings (owner and admin) |
+| `GET /threads`, `GET /threads/:id`, `POST /threads/:id/archive` | List, reopen and remove conversations |
+| `POST /threads/:id/views/:viewId/submit` | Send a form the assistant showed; it becomes a card |
 
-Planned: `GET /threads`, `GET /threads/:id` (reopen past conversations), ratings, data wipe, run events for long runs.
+Planned: ratings, data wipe, run events for long runs.
 
 ## Stream parts
 
@@ -99,8 +101,9 @@ Teovo uses the Vercel AI SDK's UI message stream (decision [0001](decisions/0001
 | `data-card` | A change to confirm, with before and after values (never the undo data) |
 | `data-action` | A button: open a screen or run an app action |
 | `data-suggestions` | Follow-up chips (transient, not saved) |
+| `data-view` | A view the assistant showed (choices, table, record, form, or the app's own), drawn by the panel |
 
-Planned: `data-view` and `data-choices` (interactive replies), `data-sources`.
+Planned: `data-sources`.
 
 ## Tables
 

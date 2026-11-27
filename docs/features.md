@@ -16,7 +16,7 @@ Status numbers are pull requests in this repository. Rows with no status are pla
 | Chat panel: streaming, markdown, attachments, stop | v1 | Partly: streaming and stop (#5); markdown via renderText; attachments to do | none of ours has all of these | assistant-ui |
 | Suggestions above the box: follow-ups to the last reply, and chips for the screen and its record using real names | v1 | Built (#9) | scoops, fixed starters in an empty chat only | kit |
 | Voice input and image reading | v1 | To do | scoops | kit, Vercel AI SDK |
-| Threads and message history | v1 | Partly: stored (#4); reopening in the panel to do | parityai, scobly | kit tables |
+| Threads and message history | v1 | Built (#4, #13) | parityai, scobly | kit tables |
 | One rule for what history the model sees, including earlier tool results | v1 | Partly: last 30 messages, cards with their current status (#3, #7) | new | kit |
 | Per-tenant budgets and a usage ledger | v1 | Built (#6) | scoops, scobly | kit tables |
 | Run log of every model and tool call, with retention and trimming | v1 | Built (#6, prune in #8) | scobly, bricks | kit tables |
@@ -24,7 +24,7 @@ Status numbers are pull requests in this repository. Rows with no status are pla
 | Tools filtered by role, so staff never see owner-only tools | v1 | Built (#3) | scoops, told in the prompt only | kit |
 | Identity check required in the handler, with per-user limits beside per-tenant ones | v1 | Built (#3, #6) | not checked | kit tables |
 | Outside text marked as untrusted (customer notes, screenshots, bank texts, web pages): it never triggers an action and is labelled on the card | v1 | Partly: fencing and prompt rule (#3, #9); card label to do | not checked | kit |
-| Interactive replies as typed views: choices, form, table, record card, plus views the app registers | v1 | To do (next) | scoops, hard-wired expense and payment cards | kit, assistant-ui |
+| Interactive replies as typed views: choices, form, table, record card, plus views the app registers | v1 | Built (#14) | scoops, hard-wired expense and payment cards | kit, assistant-ui |
 | Setup command (npx teovo init) and table migrations with an upgrade path | v1 | Built (#4, #8) | not checked | kit |
 | Theming from the app: colours, fonts, corner radius, dark mode, bottom sheet on phones | v1 | Partly: optional styles.css with tv- classes and dark mode (#5) | not checked | kit, assistant-ui |
 | Per-task model choice: a cheap model for simple reads, a stronger one for hard questions | v1 | To do | scoops, chosen by hand | kit |
@@ -39,7 +39,7 @@ Status numbers are pull requests in this repository. Rows with no status are pla
 | Answers link to the records they used | v1.1 |  | not checked | kit |
 | Thumbs up or down on a reply, saved with its run | v1.1 |  | not checked | kit tables |
 | Prompt and model version stored on each run | v1.1 | Built (#6) | not checked | kit tables |
-| A question with answer buttons when the request is unclear | v1.1 |  | not checked | kit |
+| A question with answer buttons when the request is unclear | v1.1 | Built early (#14, choices view) | not checked | kit |
 | One card for a change to many records, with a list to review and a single undo | v1.1 |  | not checked | kit |
 | Custom instructions and a word list per tenant | v1.1 | Built (#10) | not checked | kit tables |
 | Before and after shown on a card, such as price ₹350 → ₹380 | v1.1 | Built (#5) | not checked | kit |
@@ -60,7 +60,7 @@ Status numbers are pull requests in this repository. Rows with no status are pla
 | Guarded read-only query tool | v2 |  | parityai, bricks | kit |
 | Search over help content | v2 |  | parityai, whole guide in the prompt | kit |
 | Suggestions from data checks (such as orders unpaid for 5 days) and from the user's own habits, ranked by taps | v2 |  | new | kit tables |
-| Personal details masked in logs, such as phone numbers and UPI ids | v2 |  | not checked | kit |
+| Personal details masked in logs, such as phone numbers and UPI ids | v2 | Built early (#12); also hidden from the model | not checked | kit |
 | Alert when the backup model is in use or errors rise | v2 |  | not checked | kit |
 | Replies survive a dropped connection, and a message typed offline is sent later | v2 |  | not checked | kit |
 | Push notification when a long run finishes | v2 |  | not checked | kit |
