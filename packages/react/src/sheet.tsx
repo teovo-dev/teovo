@@ -59,8 +59,8 @@ export interface AssistantSheetProps {
   layout?: 'panel' | 'floating'
 }
 
-/** The default open-button icon: an AI sparkle (one large star, two small). */
-const SPARKLE = (
+/** The AI sparkle (one large star, two small): the open button's default icon, and the mark on the steps line. */
+export const SPARKLE = (
   <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
     <path d="M10 3.5c.4 3.6 2.4 5.6 6 6-3.6.4-5.6 2.4-6 6-.4-3.6-2.4-5.6-6-6 3.6-.4 5.6-2.4 6-6z" />
     <path d="M18 13c.2 1.8 1.2 2.8 3 3-1.8.2-2.8 1.2-3 3-.2-1.8-1.2-2.8-3-3 1.8-.2 2.8-1.2 3-3z" />
