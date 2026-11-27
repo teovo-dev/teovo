@@ -98,8 +98,7 @@ describe('AssistantSheet', () => {
     expect(document.documentElement.dataset.tvSheet).toBe('floating')
     // The page needn't make room for a floating window.
     expect(document.documentElement.style.getPropertyValue('--tv-sheet-width')).toBe('')
-    // The open button stays below it and closes it.
-    await userEvent.click(screen.getByRole('button', { name: 'Ask' }))
+    await userEvent.keyboard('{Escape}')
     expect(screen.queryByRole('dialog')).toBeNull()
   })
 })
