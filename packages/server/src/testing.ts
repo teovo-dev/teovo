@@ -125,7 +125,7 @@ export async function chat(teovo: { fetch: (req: Request) => Promise<Response> }
   return {
     status: res.status, threadId, message: last, suggestions,
     ...(error?.errorText ? { error: error.errorText } : {}),
-    text: parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join(''),
+    text: parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).filter(Boolean).join('\n'),
     // The fields worth asserting on; run and thread ids differ on every run.
     cards: data<ChatResult['cards'][number] & { runId?: string; threadId?: string }>('data-card').map(({ runId: _r, threadId: _t, ...c }) => c),
     actions: parts.filter((p) => p.type === 'data-action').map((p) => (p as { data: ChatResult['actions'][number] }).data),

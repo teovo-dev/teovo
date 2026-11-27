@@ -2,7 +2,7 @@
  * Optional defaults for @teovo/react. Every colour, the corner radius and the font are CSS variables, so an app can
  * theme the panel with the `theme` prop or its own CSS: .tv-panel { --tv-accent: #0f766e; }
  */
-.tv-panel, .tv-sheet-root {
+.tv-sheet-root, .tv-panel:not(.tv-sheet-root .tv-panel) {
   --tv-accent: #4f46e5;
   --tv-accent-text: #ffffff;
   --tv-bg: #ffffff;
@@ -16,7 +16,7 @@
   --tv-font: inherit;
 }
 @media (prefers-color-scheme: dark) {
-  .tv-panel:not([data-theme='light']), .tv-sheet-root:not([data-theme='light']) {
+  .tv-sheet-root:not([data-theme='light']), .tv-panel:not([data-theme='light']):not(.tv-sheet-root .tv-panel) {
     --tv-bg: #111827; --tv-fg: #f3f4f6; --tv-muted: #9ca3af; --tv-border: #374151; --tv-user-bg: #1e1b4b; --tv-error: #f87171; --tv-ok: #34d399;
   }
 }
@@ -29,7 +29,7 @@
 .tv-messages { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; padding: 12px; }
 .tv-message { display: flex; flex-direction: column; gap: 8px; max-width: 90%; }
 .tv-user { align-self: flex-end; background: var(--tv-user-bg); border-radius: var(--tv-radius); padding: 8px 12px; }
-.tv-assistant { align-self: flex-start; }
+.tv-assistant { align-self: stretch; max-width: 100%; }
 .tv-text { white-space: pre-wrap; }
 .tv-md { white-space: normal; }
 .tv-md p { margin: 0 0 8px; }
@@ -57,6 +57,11 @@
 .tv-input { display: flex; gap: 8px; padding: 12px; border-top: 1px solid var(--tv-border); align-items: flex-end; }
 .tv-input textarea { flex: 1; resize: none; font: inherit; color: inherit; background: transparent; border: 1px solid var(--tv-border); border-radius: calc(var(--tv-radius) - 4px); padding: 6px 8px; }
 .tv-mic[aria-pressed='true'] { color: var(--tv-error); }
+.tv-new { margin-left: auto; }
+@media (max-width: 480px) {
+  .tv-input { flex-wrap: wrap; }
+  .tv-input textarea { flex-basis: 100%; order: -1; }
+}
 
 .tv-pending { list-style: none; display: flex; gap: 6px; margin: 0; padding: 0 12px; }
 .tv-pending li { position: relative; }
@@ -69,6 +74,7 @@
 .tv-table table { border-collapse: collapse; width: 100%; }
 .tv-table th button { background: none; border: 0; color: inherit; font-weight: 600; cursor: pointer; padding: 0; }
 .tv-table th, .tv-table td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--tv-border); }
+.tv-table td[data-format], .tv-table th { white-space: nowrap; }
 .tv-table td[data-format='money'], .tv-table td[data-format='number'] { text-align: right; font-variant-numeric: tabular-nums; }
 .tv-record dl { margin: 0; display: grid; gap: 4px; }
 .tv-record dl > div { display: flex; justify-content: space-between; gap: 12px; }
@@ -93,3 +99,6 @@
   .tv-sheet { top: auto; left: 0; width: 100vw; height: 85vh; border-radius: var(--tv-radius) var(--tv-radius) 0 0; box-shadow: 0 -4px 24px rgb(0 0 0 / 0.2); padding-bottom: env(safe-area-inset-bottom); }
 }
 .tv-card-untrusted { font-size: 0.875em; color: var(--tv-muted); border-left: 3px solid #d97706; padding-left: 8px; }
+.tv-md-table { overflow-x: auto; margin: 0 0 8px; }
+.tv-md-table table { border-collapse: collapse; }
+.tv-md-table th, .tv-md-table td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--tv-border); }

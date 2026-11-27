@@ -72,6 +72,24 @@ describe('views', () => {
   })
 })
 
+describe('forms with declared fields', () => {
+  it('tells the model the views rule and the form fields, and refuses a form missing one', async () => {
+    const bad = { ...expenseForm, fields: expenseForm.fields.filter((f) => f.name !== 'vendor') }
+    const t = setup([show('form', bad), show('form', expenseForm), say('Check it.')], {
+      forms: { expense: { fields: ['amount', 'vendor'], description: 'a new expense', handle: (v) => ({ kind: 'add_expense', title: `Expense ₹${v.amount} to ${v.vendor}`, payload: v }) } },
+    })
+    const { thread } = await t.chat('spent 450 on milk')
+    const system = (t.model.doStreamCalls[0]!.prompt[0] as { content: string }).content
+    expect(system).toContain('do not repeat its contents in your text')
+    expect(system).toContain('Forms you can show with show_form (submit.kind, then the field names to use):\n- expense: fields amount, vendor (a new expense)')
+    expect(JSON.stringify(t.model.doStreamCalls[1]!.prompt)).toContain('This form must have fields named exactly: amount, vendor. Missing: vendor.')
+    const views = (await t.reply(thread!)).parts.filter((p) => p.type === 'data-view')
+    expect(views).toHaveLength(1)
+    const ok = await t.call('POST', `threads/${thread}/views/v-form/submit`, { values: { amount: 450, vendor: 'Milk depot' } })
+    expect(ok.body.card.title).toBe('Expense ₹450 to Milk depot')
+  })
+})
+
 describe('form submit', () => {
   it('turns a submitted form into a card under it, once, which is then confirmed like any other', async () => {
     const t = setup([show('form', expenseForm), say('Check the details.')])

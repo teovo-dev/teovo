@@ -24,6 +24,20 @@ function blocks(text: string): ReactNode[] {
       out.push(<pre key={out.length}><code>{code.join('\n')}</code></pre>)
       continue
     }
+    if (/^\s*\|.*\|\s*$/.test(line) && /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)+\|?\s*$/.test(lines[i + 1] ?? '')) {
+      const cells = (l: string) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim())
+      const head = cells(line)
+      i += 2
+      const rows: string[][] = []
+      while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i]!)) rows.push(cells(lines[i++]!))
+      out.push(
+        <div key={out.length} className="tv-md-table"><table>
+          <thead><tr>{head.map((c, k) => <th key={k}>{inline(c)}</th>)}</tr></thead>
+          <tbody>{rows.map((r, k) => <tr key={k}>{head.map((_, j) => <td key={j}>{inline(r[j] ?? '')}</td>)}</tr>)}</tbody>
+        </table></div>,
+      )
+      continue
+    }
     const h = /^(#{1,6})\s+(.*)$/.exec(line)
     if (h) { out.push(<p key={out.length} className="tv-md-h"><strong>{inline(h[2]!)}</strong></p>); i++; continue }
     if (/^\s*[-*•]\s+/.test(line) || /^\s*\d+[.)]\s+/.test(line)) {
@@ -35,8 +49,9 @@ function blocks(text: string): ReactNode[] {
       out.push(ordered ? <ol key={out.length}>{li}</ol> : <ul key={out.length}>{li}</ul>)
       continue
     }
-    const para: string[] = []
-    while (i < lines.length && lines[i]!.trim() && !/^(#{1,6}\s|```|\s*[-*•]\s+|\s*\d+[.)]\s+)/.test(lines[i]!)) para.push(lines[i++]!)
+    // The first line always belongs to the paragraph, so a line that looks like (but isn't) a table can't stall the loop.
+    const para: string[] = [lines[i++]!]
+    while (i < lines.length && lines[i]!.trim() && !/^(#{1,6}\s|```|\s*[-*•]\s+|\s*\d+[.)]\s+|\s*\|.*\|\s*$)/.test(lines[i]!)) para.push(lines[i++]!)
     out.push(<p key={out.length}>{para.map((l, k) => <Fragment key={k}>{k > 0 ? <br /> : null}{inline(l)}</Fragment>)}</p>)
   }
   return out

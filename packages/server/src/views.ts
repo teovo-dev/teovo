@@ -64,6 +64,41 @@ export const builtinViews: readonly TeovoView[] = [choicesView, tableView, recor
 /** Turns a submitted form into the card the user confirms. Keyed by the form's `submit.kind`. Throw to refuse with a sentence. */
 export type FormHandler<DB = any> = (values: Record<string, string | number | null>, ctx: ToolContext<DB>) => Promise<Proposal> | Proposal
 
+/**
+ * A form kind with the fields it needs. The model is told these names and a form missing one is refused, so the
+ * handler gets `vendor` and not whatever the model thought of calling it.
+ */
+export interface FormSpec<DB = any> {
+  /** Field names the form must include, e.g. ['amount', 'vendor', 'date']. */
+  fields: readonly string[]
+  /** One line on what the form is for, shown to the model. */
+  description?: string
+  handle: FormHandler<DB>
+}
+
+export const formHandler = <DB>(f: FormHandler<DB> | FormSpec<DB>): FormHandler<DB> => (typeof f === 'function' ? f : f.handle)
+
+/** Sentence for the model when a form misses a required field, else null. */
+export function missingFields(f: FormHandler | FormSpec, form: { fields: { name: string }[] }): string | null {
+  if (typeof f === 'function') return null
+  const have = new Set(form.fields.map((x) => x.name))
+  const missing = f.fields.filter((n) => !have.has(n))
+  return missing.length ? `This form must have fields named exactly: ${f.fields.join(', ')}. Missing: ${missing.join(', ')}.` : null
+}
+
+/** What the model is told about the forms it may show. */
+export function formsText(forms: Record<string, FormHandler | FormSpec>): string {
+  const lines = Object.entries(forms).map(([kind, f]) => (typeof f === 'function'
+    ? `- ${kind}`
+    : `- ${kind}: fields ${f.fields.join(', ')}${f.description ? ` (${f.description})` : ''}`))
+  return lines.length ? `\n\nForms you can show with show_form (submit.kind, then the field names to use):\n${lines.join('\n')}` : ''
+}
+
+/** How the model should use views; added to the prompt when views are on. */
+export const VIEWS_RULE = 'When you show a view (a table, record, form or choices), the user sees it: do not repeat its contents in your text, ' +
+  'add at most one short sentence. Do not show a view of a change you proposed; the card already shows it. ' +
+  'After show_choices, stop and wait for the user to pick.'
+
 export type FormData = z.infer<typeof formView.data>
 
 /** Check submitted values against the form the model showed. Returns cleaned values or a sentence for the user. */

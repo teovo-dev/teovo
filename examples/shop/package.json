@@ -1,0 +1,27 @@
+{
+  "name": "teovo-example-shop",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "server": "tsx server.ts",
+    "web": "vite",
+    "dev": "npm run server & npm run web",
+    "chat": "tsx try.ts"
+  },
+  "dependencies": {
+    "@ai-sdk/google": "4.0.128",
+    "@teovo/db": "0.0.0",
+    "@teovo/react": "0.0.0",
+    "@teovo/server": "0.0.0",
+    "pg": "^8.23.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1",
+    "@vitejs/plugin-react": "6.3.0",
+    "tsx": "4.23.15",
+    "vite": "8.4.0"
+  }
+}
