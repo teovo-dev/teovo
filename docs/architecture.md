@@ -46,7 +46,7 @@ flowchart LR
 | --- | --- | --- |
 | `@teovo/server` | The app's own server | The handler, tool loop, cards, limits, run log, screens, suggestions, tenant settings |
 | `@teovo/react` | The browser | The provider, the panel, cards, chips, and the screen-context hook |
-| `@teovo/db` | Postgres | Migrations (tables follow the features that are on), row-level rules, the storage adapter, `prune` |
+| `@teovo/db` | Postgres | Migrations (tables follow the features that are on), row-level rules, the storage adapters (`postgresStorage` for SQL, `supabaseStorage` for servers that reach Supabase only through its API), `prune` |
 | `teovo` | A terminal or CI | `npx teovo init`, `generate`, `migrate`, `status`, `prune` |
 
 ## One message, start to finish
@@ -131,6 +131,10 @@ select set_config('app.tenant', $1, true), set_config('app.user', $2, true);  --
 -- … Teovo's queries …
 commit;
 ```
+
+With `supabaseStorage`, use `rls: 'server-only'` (`npx teovo init --server-only`) instead: the server's own key reads
+and writes the tables and Teovo scopes every call to one tenant and user, while a signed-in browser calling Supabase's
+API directly sees nothing and can't touch its usage rows.
 
 Use `set_config`, not `SET app.user = …`: `user` is a reserved word, so that line fails. The rules apply only to a
 database role that is not the tables' owner and not a superuser; connect the app as such a role. Checked by hand on
