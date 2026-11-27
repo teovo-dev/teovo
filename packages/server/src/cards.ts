@@ -16,6 +16,20 @@ export interface CardApplier<P = any, DB = any> {
   undo?: (undo: unknown, payload: P, ctx: ToolContext<DB>) => Promise<void> | void
 }
 
+/**
+ * A kind of card the app applies itself, in the browser with the user's own login (AssistantProvider's onCard).
+ * The server still holds the card and who may decide it; Confirm, Skip and Undo only record what happened, so the
+ * card keeps its state after a reload and the model knows the outcome.
+ */
+export interface AppCard {
+  inApp: true
+  /** Roles that may confirm it. Omitted: anyone who could see it. */
+  roles?: readonly string[]
+}
+
+export type CardHandler<DB = any> = CardApplier<any, DB> | AppCard
+const isApp = (h: CardHandler | undefined): h is AppCard => !!h && 'inApp' in h && h.inApp === true
+
 export interface ApplyResult {
   /** Whatever undo needs (e.g. the id of the row apply created). Stored with the card; never sent to the browser. */
   undo?: unknown
@@ -42,13 +56,17 @@ export function publicCard(c: StoredCard): Omit<StoredCard, 'undo'> {
 
 /** Confirm, skip or undo one card, for the person who was shown it. Throws CardError with a sentence for the user. */
 export async function decide<DB>(opts: {
-  storage: Storage; appliers: Record<string, CardApplier<any, DB>>; rules: CardRules
+  storage: Storage; appliers: Record<string, CardHandler<DB>>; rules: CardRules
   identity: Identity; ctx: () => Promise<ToolContext<DB>>; id: string; decision: Decision
+  /** For an app-applied card: whether the app can take the change back (what its onCard returned). */
+  reversible?: boolean
 }): Promise<StoredCard> {
   const { storage, identity, id, decision, rules } = opts
   const card = await storage.getCard(identity.tenantId, identity.userId, id)
   if (!card) throw new CardError(404, 'That card was not found.')
-  const applier = opts.appliers[card.kind]
+  const handler = opts.appliers[card.kind]
+  if (isApp(handler)) return recordAppDecision(storage, card, handler, identity, decision, rules, opts.reversible)
+  const applier = handler
   const now = new Date()
   const claim = async (from: CardStatus[], patch: Parameters<Storage['updateCard']>[2]) => {
     const c = await storage.updateCard(id, from, patch)
@@ -100,6 +118,25 @@ export async function decide<DB>(opts: {
     await storage.updateCard(id, ['undone'], { status: 'confirmed', undoneAt: undefined })
     throw new CardError(422, e instanceof Error ? e.message : String(e))
   }
+}
+
+/** The app already applied (or skipped, or undid) it in the browser: check who may, then record it. */
+async function recordAppDecision(storage: Storage, card: StoredCard, h: AppCard, identity: Identity, decision: Decision, rules: CardRules, reversible?: boolean): Promise<StoredCard> {
+  const now = new Date()
+  const claim = async (from: CardStatus[], patch: Parameters<Storage['updateCard']>[2]) => {
+    const c = await storage.updateCard(card.id, from, patch)
+    if (!c) throw new CardError(409, 'This card was already decided.')
+    return c
+  }
+  if (decision === 'skip') return claim(['shown'], { status: 'skipped', decidedBy: identity.userId, decidedAt: now.toISOString() })
+  if (decision === 'confirm') {
+    if (h.roles && !h.roles.includes(identity.role)) throw new CardError(403, 'Your role can’t make this change. Ask an owner.')
+    return claim(['shown'], { status: 'confirmed', decidedBy: identity.userId, decidedAt: now.toISOString(), reversible: reversible === true })
+  }
+  if (card.decidedBy !== identity.userId) throw new CardError(403, 'Only the person who confirmed this can undo it.')
+  if (!card.reversible) throw new CardError(409, 'This change can’t be undone here.')
+  if (now.getTime() - new Date(card.decidedAt!).getTime() > rules.undoMs) throw new CardError(410, 'It’s too late to undo this here.')
+  return claim(['confirmed'], { status: 'undone', undoneAt: now.toISOString() })
 }
 
 /** How a card reads to the model in later turns, with its status now (not when it was shown). */
