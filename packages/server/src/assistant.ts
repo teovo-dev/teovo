@@ -21,6 +21,11 @@ export interface AssistantConfig<DB = unknown> {
   tools: readonly TeovoTool<any, any, DB>[]
   /** Models in order: if one fails before saying anything, the next is tried. */
   models: readonly LanguageModelV4[]
+  /**
+   * Pick the models for one message, e.g. a cheap model for a quick lookup and a stronger one for a hard question.
+   * Return undefined (or an empty list) to use `models`. The run log records which model actually answered.
+   */
+  route?: (ctx: { identity: Identity; page?: Page; text: string; history: number }) => readonly LanguageModelV4[] | undefined | Promise<readonly LanguageModelV4[] | undefined>
   /** The app's own instructions for the model. */
   instructions: string | ((ctx: { identity: Identity; page?: Page }) => string | Promise<string>)
   storage: Storage
@@ -124,14 +129,17 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
 
     const db = await config.asUser(identity, req)
     const runId = crypto.randomUUID()
-    const first = config.models[0]!
+    const page = readPage(body.page)
+    const text = message.parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join(' ')
+    const routed = config.route ? await Promise.resolve().then(() => config.route!({ identity, page, text, history: earlier.length })).catch((e) => { config.on?.error?.(e, { identity, threadId: thread.id }); return undefined }) : undefined
+    const models = routed?.length ? routed : config.models
+    const first = models[0]!
     await storage.startRun({ id: runId, threadId: thread.id, tenantId: identity.tenantId, userId: identity.userId, model: first.modelId, promptVersion: config.promptVersion })
     await storage.addUsage([{ tenantId: identity.tenantId, userId: identity.userId, runId, provider: first.provider, model: first.modelId, unit: 'messages', amount: 1 }])
     let seq = 0
     const statuses = new Map((await storage.listCards(thread.id)).map((c) => [c.id, c]))
     const nonce = crypto.randomUUID().slice(0, 8)
     const ctx: ToolContext<DB> = { identity, db, untrusted: makeUntrusted(nonce) }
-    const page = readPage(body.page)
     const instructions = typeof config.instructions === 'function' ? await config.instructions({ identity, page }) : config.instructions
     const summary = page && config.screen ? await Promise.resolve().then(() => config.screen!(page, ctx)).catch((e) => { config.on?.error?.(e, { identity, threadId: thread.id }); return null }) : null
     const shownSummary = summary === null ? null : String(redact(summary))
@@ -200,9 +208,9 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
         }
         // Tools only read, propose or offer buttons; none writes during a run, so switching model is always safe.
         let usedModel = first
-        const model = fallbackModel(config.models, () => true, (from, e) => {
-          const i = config.models.findIndex((m) => m.modelId === from)
-          usedModel = config.models[i + 1] ?? usedModel
+        const model = fallbackModel(models, () => true, (from, e) => {
+          const i = models.findIndex((m) => m.modelId === from)
+          usedModel = models[i + 1] ?? usedModel
           config.on?.modelSwitch?.(from, e)
         })
         let streamError: unknown
