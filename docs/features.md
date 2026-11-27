@@ -13,22 +13,22 @@ Status numbers are pull requests in this repository. Rows with no status are pla
 | Undo by reversing the change, stored so it survives a reload | v1 | Built (#7) | scoops, in memory only | kit tables |
 | Screen awareness: route, record on screen, component state | v1 | Partly: route and record (#9); component state to do | scoops | kit |
 | Screens map and navigation buttons | v1 | Partly: buttons from action tools (#3, #5); screens map to do | scoops | kit |
-| Chat panel: streaming, markdown, attachments, stop | v1 | Partly: streaming and stop (#5); markdown via renderText; attachments to do | none of ours has all of these | assistant-ui |
+| Chat panel: streaming, markdown, attachments, stop | v1 | Built (#5, #17, #18) | none of ours has all of these | assistant-ui |
 | Suggestions above the box: follow-ups to the last reply, and chips for the screen and its record using real names | v1 | Built (#9) | scoops, fixed starters in an empty chat only | kit |
-| Voice input and image reading | v1 | To do | scoops | kit, Vercel AI SDK |
+| Voice input and image reading | v1 | Built (#17) | scoops | kit, Vercel AI SDK |
 | Threads and message history | v1 | Built (#4, #13) | parityai, scobly | kit tables |
 | One rule for what history the model sees, including earlier tool results | v1 | Partly: last 30 messages, cards with their current status (#3, #7) | new | kit |
 | Per-tenant budgets and a usage ledger | v1 | Built (#6) | scoops, scobly | kit tables |
 | Run log of every model and tool call, with retention and trimming | v1 | Built (#6, prune in #8) | scobly, bricks | kit tables |
-| Fake model and record/replay for tests | v1 | Partly: scripted model in all tests; record/replay lives in scoops for now | scobly, parityai | kit |
+| Fake model and record/replay for tests | v1 | Built (#20) | scobly, parityai | kit |
 | Tools filtered by role, so staff never see owner-only tools | v1 | Built (#3) | scoops, told in the prompt only | kit |
 | Identity check required in the handler, with per-user limits beside per-tenant ones | v1 | Built (#3, #6) | not checked | kit tables |
-| Outside text marked as untrusted (customer notes, screenshots, bank texts, web pages): it never triggers an action and is labelled on the card | v1 | Partly: fencing and prompt rule (#3, #9); card label to do | not checked | kit |
+| Outside text marked as untrusted (customer notes, screenshots, bank texts, web pages): it never triggers an action and is labelled on the card | v1 | Built (#3, #9, #19) | not checked | kit |
 | Interactive replies as typed views: choices, form, table, record card, plus views the app registers | v1 | Built (#14) | scoops, hard-wired expense and payment cards | kit, assistant-ui |
 | Setup command (npx teovo init) and table migrations with an upgrade path | v1 | Built (#4, #8) | not checked | kit |
-| Theming from the app: colours, fonts, corner radius, dark mode, bottom sheet on phones | v1 | Partly: optional styles.css with tv- classes and dark mode (#5) | not checked | kit, assistant-ui |
-| Per-task model choice: a cheap model for simple reads, a stronger one for hard questions | v1 | To do | scoops, chosen by hand | kit |
-| Local formats: dates, currency such as ₹, and the tenant's time zone in replies and views | v1 | To do | scoops, chosen by hand | kit |
+| Theming from the app: colours, fonts, corner radius, dark mode, bottom sheet on phones | v1 | Built (#18) | not checked | kit, assistant-ui |
+| Per-task model choice: a cheap model for simple reads, a stronger one for hard questions | v1 | Built (#15) | scoops, chosen by hand | kit |
+| Local formats: dates, currency such as ₹, and the tenant's time zone in replies and views | v1 | Built (#16) | scoops, chosen by hand | kit |
 | Row-level rules on the tv\_ tables that match the app's own tenancy | v1 | Built (#4) | scoops, scobly, parityai (their own tables) | kit tables |
 | Placeholder that cycles through examples for the screen | v1.1 | Partly: one hint per screen, Tab accepts (#9) | new | kit |
 | Completion while typing: customer, product and phrase matches on the device, Tab or tap to accept, no model call | v1.1 |  | new | kit |
@@ -48,7 +48,7 @@ Status numbers are pull requests in this repository. Rows with no status are pla
 | Fixed prompt parts (instructions, catalog, tools) placed first so the provider can cache them | v1.1 |  | not checked | kit |
 | Edit and resend a message, regenerate a reply, copy a reply | v1.1 |  | not checked | kit, assistant-ui |
 | Tool versions, so a pending card made by an older tool still works after a deploy | v1.1 |  | not checked | kit tables |
-| Accessibility: screen reader labels and a keyboard shortcut to open the panel | v1.1 |  | not checked | kit, assistant-ui |
+| Accessibility: screen reader labels and a keyboard shortcut to open the panel | v1.1 | Partly (#18): labels and Ctrl/⌘+K | not checked | kit, assistant-ui |
 | Long runs: queue, resume after a restart, stop from any server | v2 |  | scobly | pg-boss |
 | Done-checks that can refuse a reply before it ships | v2 |  | parityai, scobly | kit |
 | Continue check when the model stops early | v2 |  | bricks, parityai | kit |
