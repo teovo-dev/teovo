@@ -33,10 +33,10 @@ describe('screen state', () => {
 
 describe('screens map', () => {
   it('lists the screens and opens only those, with safe values', async () => {
-    const m = scriptedModel([callTool('open_screen', { screen: '/orders/:id', params: { id: 142 } }), callTool('open_screen', { screen: '/admin' }), callTool('open_screen', { screen: '/orders/:id', params: { id: '../../admin' } }), say('Here it is.')])
+    const m = scriptedModel([callTool('open_screen', { screen: '/orders/:id', params: { id: 142 }, label: 'Open order #142' }), callTool('open_screen', { screen: '/admin', label: 'Admin' }), callTool('open_screen', { screen: '/orders/:id', params: { id: '../../admin' }, label: 'Admin' }), say('Here it is.')])
     const r = await chat(setup(m, { screens }), 'open order 142')
     expect(system(m, 0)).toContain('then offer a screen with open_screen if it helps.\n- Orders: /orders (all orders, filter by unpaid)\n- Order: /orders/:id')
-    expect(r.actions).toEqual([{ label: 'Open Order', action: 'navigate', args: { to: '/orders/142' } }])
+    expect(r.actions).toEqual([{ label: 'Open order #142', action: 'navigate', args: { to: '/orders/142' } }])
     const later = JSON.stringify(m.doStreamCalls[3]!.prompt)
     expect(later).toContain('There is no screen \\"/admin\\". Use one of: /orders, /orders/:id.')
     expect(later).toContain("Order (/orders/:id) can't take those values. It has no filters.")
@@ -46,8 +46,8 @@ describe('screens map', () => {
     const withFilters = [{ path: '/orders', title: 'Orders', filters: { unpaid: "'yes' for orders with money due" } }, { path: '/orders/:id', title: 'Order' }]
     const m = scriptedModel([
       callTool('open_screen', { screen: '/orders', params: { unpaid: 'yes' }, label: 'Show unpaid orders' }),
-      callTool('open_screen', { screen: '/orders', params: { filter: 'unpaid' } }),
-      callTool('open_screen', { screen: '/orders/:id', params: { id: 142, tab: 'payments' } }),
+      callTool('open_screen', { screen: '/orders', params: { filter: 'unpaid' }, label: 'Unpaid' }),
+      callTool('open_screen', { screen: '/orders/:id', params: { id: 142, tab: 'payments' }, label: 'Payments' }),
       say('Here.'),
     ])
     const r = await chat(setup(m, { screens: withFilters }), 'unpaid orders')

@@ -44,7 +44,7 @@ describe('limits', () => {
     expect((await send(u1)).status).toBe(200)
     const third = await send(u1)
     expect(third.status).toBe(429)
-    expect(JSON.parse(third.body).error).toBe('You have reached your assistant limit for this day. It resets tomorrow.')
+    expect(JSON.parse(third.body).error).toBe('You have reached your assistant limit for today. It resets tomorrow.')
     expect(storage.threads.size).toBe(2)   // the refused message left nothing behind
     expect((await send(u2)).status).toBe(200)
   })

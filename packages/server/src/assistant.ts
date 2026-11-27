@@ -279,7 +279,11 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
           const screens = config.screens
           tools.open_screen = tool({
             description: 'Offer the user a button that opens one of the app\'s screens. Give the screen\'s path from the list, and in params the values for its :params and any of its filters. Only the listed filters work.',
-            inputSchema: z.object({ screen: z.string(), params: z.record(z.string(), z.union([z.string(), z.number()])).optional(), label: z.string().max(40).optional() }),
+            inputSchema: z.object({
+              screen: z.string(),
+              params: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
+              label: z.string().max(40).describe('What the button does, in the user\'s words, e.g. "Show unpaid orders" or "Open order #142"'),
+            }),
             execute: async ({ screen, params, label }, { toolCallId }) => {
               const to = screenPath(screens, screen, params ?? {})
               if (!to) {
@@ -288,7 +292,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
                   ? `${s.title} (${s.path}) can't take those values. ${s.filters ? `Its filters are: ${Object.keys(s.filters).join(', ')}.` : 'It has no filters.'} Offer it without the rest, or say the app can't do that.`
                   : `There is no screen "${screen}". Use one of: ${screens.map((x) => x.path).join(', ')}.`)
               }
-              writer.write({ type: 'data-action', id: toolCallId, data: { label: label ?? `Open ${to.title}`, action: 'navigate', args: { to: to.path } } })
+              writer.write({ type: 'data-action', id: toolCallId, data: { label: label?.trim() || `Open ${to.title}`, action: 'navigate', args: { to: to.path } } })
               return 'A button is shown under your reply.'
             },
           })
@@ -299,7 +303,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
           const i = models.findIndex((m) => m.modelId === from)
           usedModel = models[i + 1] ?? usedModel
           config.on?.modelSwitch?.(from, e)
-        })
+        }, timeouts.firstChunkMs)
         let streamError: unknown
         const result = streamText({
           onError: ({ error }) => { streamError ??= error },
@@ -320,7 +324,9 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
           }),
           tools,
           stopWhen: isStepCount(config.maxSteps ?? 8),
-          timeout: timeouts,
+          // First output is timed by fallbackModel (per model, so a stalled one hands over to the next); the SDK
+          // keeps the gaps between chunks and the total.
+          timeout: { chunkMs: timeouts.chunkMs, totalMs: timeouts.totalMs },
           maxRetries: 1,
           abortSignal: req.signal,
         })

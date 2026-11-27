@@ -36,6 +36,8 @@
 .tv-panel *, .tv-sheet * { box-sizing: border-box; }
 .tv-panel button, .tv-panel input, .tv-panel select, .tv-panel textarea { font: inherit; color: inherit; }
 .tv-panel button { cursor: pointer; }
+/* The app's own table styles must not reach in (a white table background would hide the scroll shadows). */
+.tv-panel table { background: transparent; margin: 0; }
 .tv-panel button:disabled { cursor: default; opacity: 0.5; }
 .tv-panel :focus-visible, .tv-sheet :focus-visible { outline: 2px solid var(--tv-accent); outline-offset: 2px; }
 
@@ -99,11 +101,23 @@
 .tv-card-untrusted { font-size: 0.875em; color: var(--tv-muted); border-left: 3px solid #d97706; padding-left: 8px; }
 
 .tv-choices-options { display: flex; flex-wrap: wrap; gap: 8px; }
-.tv-table { overflow-x: auto; padding: 0; }
+.tv-table {
+  overflow-x: auto; padding: 0;
+  /* Scroll shadows: a soft edge appears on whichever side has more columns, so a wide table shows it scrolls. */
+  background:
+    linear-gradient(to right, var(--tv-bg) 30%, transparent) left center / 24px 100% no-repeat local,
+    linear-gradient(to left, var(--tv-bg) 30%, transparent) right center / 24px 100% no-repeat local,
+    radial-gradient(farthest-side at 0 50%, rgb(0 0 0 / 0.28), transparent) left center / 16px 100% no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%, rgb(0 0 0 / 0.28), transparent) right center / 16px 100% no-repeat scroll,
+    var(--tv-bg);
+}
+.tv-table td:not([data-format]) { min-width: 6em; }
 .tv-table .tv-view-title { padding: 12px 14px 0; }
-.tv-table table { border-collapse: collapse; width: 100%; font-size: 0.9375em; }
+.tv-table table { border-collapse: collapse; width: 100%; font-size: 0.875em; }
 .tv-table th button { background: none; border: 0; font-weight: 600; padding: 0; color: var(--tv-muted); font-size: 0.8125em; text-transform: uppercase; letter-spacing: 0.03em; }
-.tv-table th, .tv-table td { text-align: left; padding: 8px 14px; border-bottom: 1px solid var(--tv-border); }
+.tv-table th, .tv-table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--tv-border); }
+.tv-table th:first-child, .tv-table td:first-child { padding-left: 14px; }
+.tv-table th:last-child, .tv-table td:last-child { padding-right: 14px; }
 .tv-table tbody tr:last-child td { border-bottom: 0; }
 .tv-table td[data-format], .tv-table th { white-space: nowrap; }
 .tv-table td[data-format='money'], .tv-table td[data-format='number'] { text-align: right; font-variant-numeric: tabular-nums; }
@@ -205,7 +219,7 @@
 .tv-sheet-open svg { width: 18px; height: 18px; }
 .tv-sheet-backdrop { position: fixed; inset: 0; z-index: 1000; background: rgb(15 18 25 / 0.35); animation: tv-fade 0.2s ease-out; }
 .tv-sheet {
-  position: fixed; z-index: 1001; top: 0; right: 0; bottom: 0; width: min(440px, 100vw); background: var(--tv-bg); color: var(--tv-fg);
+  position: fixed; z-index: 1001; top: 0; right: 0; bottom: 0; width: min(500px, 100vw); background: var(--tv-bg); color: var(--tv-fg);
   display: flex; flex-direction: column; box-shadow: -8px 0 32px rgb(0 0 0 / 0.16); font-family: var(--tv-font); font-size: 15px;
   animation: tv-slide-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
 }

@@ -122,6 +122,21 @@ All prefixed `tv_`. Core tables are always created; a feature's tables only when
 With `rls` set, every table gets row-level rules built from the app's own tenancy, for example
 `{ tenant: 'public.current_business_id()::text', user: 'auth.uid()::text' }` on Supabase.
 
+On plain Postgres, the app can say who is asking per transaction, and point the rules at those settings:
+
+```sql
+-- npx teovo init --tenant-sql "current_setting('app.tenant', true)" --user-sql "current_setting('app.user', true)"
+begin;
+select set_config('app.tenant', $1, true), set_config('app.user', $2, true);  -- true: only for this transaction
+-- … Teovo's queries …
+commit;
+```
+
+Use `set_config`, not `SET app.user = …`: `user` is a reserved word, so that line fails. The rules apply only to a
+database role that is not the tables' owner and not a superuser; connect the app as such a role. Checked by hand on
+27 Nov 2026: a user sees only their own conversations, writes for another business are refused, and with nothing set
+no rows are visible.
+
 ## What the app keeps
 
 - **Tools, prompts and card designs.** These are domain work.

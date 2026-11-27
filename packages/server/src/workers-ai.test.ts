@@ -81,7 +81,7 @@ describe('workersAi', () => {
     expect((await chat(capped.teovo, 'one')).status).toBe(200)
     expect((await chat(capped.teovo, 'two')).status).toBe(200)    // 60, then 120 ≥ 100
     const third = await chat(capped.teovo, 'three')
-    expect(third).toMatchObject({ status: 429, error: 'Your team has reached its assistant limit for this day. It resets tomorrow.' })
+    expect(third).toMatchObject({ status: 429, error: 'Your team has reached its assistant limit for today. It resets tomorrow.' })
   })
 
   it('names an allowance error clearly when there is no backup', async () => {

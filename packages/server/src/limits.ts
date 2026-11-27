@@ -46,6 +46,6 @@ export function limitMessage(hit: LimitHit): string {
   if (hit.scope === 'running') return 'The assistant is still answering your last message. Wait for it to finish, then try again.'
   const when = period === 'day' ? 'tomorrow' : 'next month'
   return hit.scope === 'user'
-    ? `You have reached your assistant limit for this ${period}. It resets ${when}.`
-    : `Your team has reached its assistant limit for this ${period}. It resets ${when}.`
+    ? `You have reached your assistant limit for ${period === 'day' ? 'today' : `this ${period}`}. It resets ${when}.`
+    : `Your team has reached its assistant limit for ${period === 'day' ? 'today' : `this ${period}`}. It resets ${when}.`
 }

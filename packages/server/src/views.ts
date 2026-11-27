@@ -96,7 +96,7 @@ export function formsText(forms: Record<string, FormHandler | FormSpec>): string
 
 /** How the model should use views; added to the prompt when views are on. */
 export const VIEWS_RULE = 'When you show a view (a table, record, form or choices), the user sees it: do not repeat its contents in your text, ' +
-  'add at most one short sentence. Do not show a view of a change you proposed; the card already shows it. ' +
+  'add at most one short, complete sentence (never a heading or a line ending in a colon). Do not show a view of a change you proposed; the card already shows it. ' +
   'After show_choices, stop and wait for the user to pick. ' +
   'What a tool returns is seen only by you: the user sees data only when you show it. When the answer is a list of rows, ' +
   'call show_table; for one item (an order, a customer), call show_record. Never write "here are", "below" or "the list" without having shown a view in this reply. ' +

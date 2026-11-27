@@ -53,11 +53,18 @@ const teovo = createAssistant({
   },
   asUser: (identity) => ({ role: identity.role }),
   models: [google('gemini-2.5-flash'), google('gemini-2.5-flash-lite')],
+  // Short look-ups ("who owes money?") go to the cheaper flash-lite first; anything longer, with a picture, or deep
+  // in a conversation keeps Flash. Each list still falls back to the other model.
+  route: ({ text, history }) => (text.length <= 60 && history < 6 && !/[?]\s*\S/.test(text) && /^(who|what|how much|how many|show|list|which)\b/i.test(text.trim())
+    ? [google('gemini-2.5-flash-lite'), google('gemini-2.5-flash')]
+    : undefined),
   instructions: 'You help the owner and staff of a small bakery run their shop. Be brief. Use the tools for every number; never guess. ' +
     'To change anything, use a propose tool: the user confirms it on a card. Show lists of orders as a table.',
   storage: postgresStorage(query),
   formats: { locale: 'en-IN', currency: 'INR', timeZone: 'Asia/Kolkata' },
   limits: { user: { messages: 200 } },
+  // For trying the stalled-reply timeout by hand: DEMO_FIRST_CHUNK_MS=300 npm run server. Default: Teovo's (30 s).
+  ...(process.env.DEMO_FIRST_CHUNK_MS ? { timeouts: { firstChunkMs: Number(process.env.DEMO_FIRST_CHUNK_MS) } } : {}),
   attachments: {},
   // Pictures go to tv_files, not into the conversation; kept 30 days (call teovo.removeOldFiles() daily).
   files: { store: postgresFiles(query), keepDays: 30 },
