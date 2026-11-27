@@ -11,7 +11,10 @@ export interface Page {
 }
 
 /** Chips above the input, and the hint inside it. */
-export interface Suggestions { suggestions: string[]; placeholder?: string }
+export interface Suggestions { suggestions: string[]; placeholder?: string; examples?: string[] }
+
+/** Links under an answer to the records it came from. */
+export interface Sources { links: { label: string; to: string }[] }
 
 /** A change the user must confirm (a `propose` tool's result, saved by the server). */
 export interface Card {
@@ -47,7 +50,7 @@ export interface Step { name: string; state: 'running' | 'done' }
 /** A view the assistant showed: its name, its data, and for a form whether it was sent. */
 export interface View { view: string; data: any; submitted?: string; values?: Record<string, string | number | boolean | null> }
 
-export type TeovoData = { card: Card; step: Step; action: Action; suggestions: Suggestions; view: View }
+export type TeovoData = { card: Card; step: Step; action: Action; suggestions: Suggestions; view: View; sources: Sources }
 
 /** How the tenant writes dates and money, sent by the server with each reply. */
 export interface Formats { locale: string; currency: string; timeZone: string }

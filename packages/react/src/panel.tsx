@@ -3,7 +3,7 @@ import { readFile, useRecorder, useVoice, type PendingFile } from './input.js'
 import { Markdown } from './markdown.js'
 import { themeStyle, type Theme } from './sheet.js'
 import { useAssistant } from './provider.js'
-import type { Action, AllowanceItem, Card, CardDecision, Formats, Page, Step, TeovoMessage, View } from './types.js'
+import type { Action, AllowanceItem, Card, CardDecision, Formats, Page, Sources, Step, TeovoMessage, View } from './types.js'
 import { defaultViews, formatValue, isCurrent, type CellFormat, type ViewComponent } from './views.js'
 
 export interface AssistantPanelProps {
@@ -49,7 +49,7 @@ export type CardState = { status: 'open' | 'busy' | 'confirmed' | 'skipped' | 'u
 
 /** A ready-made chat panel. Unstyled apart from `tv-` class names; import '@teovo/react/styles.css' for defaults. */
 export function AssistantPanel(props: AssistantPanelProps) {
-  const { chat, newChat, suggestions, clearSuggestions, page, policy, noticeAccepted, acceptNotice, allowance } = useAssistant()
+  const { chat, newChat, suggestions, clearSuggestions, page, policy, noticeAccepted, acceptNotice, allowance, words } = useAssistant()
   const [text, setText] = useState('')
   const busy = chat.status === 'submitted' || chat.status === 'streaming'
   const log = useRef<HTMLDivElement>(null)
@@ -61,7 +61,18 @@ export function AssistantPanel(props: AssistantPanelProps) {
     const el = log.current
     if (el && pinned.current) el.scrollTop = el.scrollHeight
   })
-  const hint = suggestions.placeholder
+  // The empty box shows the screen's example questions in turn; Tab takes the one showing.
+  const examples = suggestions.examples ?? []
+  const [exampleAt, setExampleAt] = useState(0)
+  useEffect(() => {
+    setExampleAt(0)
+    if (examples.length < 2) return
+    const t = setInterval(() => setExampleAt((i) => (i + 1) % examples.length), 3500)
+    return () => clearInterval(t)
+  }, [examples.join('|')])   // eslint-disable-line react-hooks/exhaustive-deps
+  const hint = examples.length ? examples[exampleAt % examples.length] : suggestions.placeholder
+  const [phrases, setPhrases] = useState<string[]>(() => { try { return JSON.parse(localStorage.getItem('teovo-phrases') ?? '[]') as string[] } catch { return [] } })
+  const completion = complete(text, words, phrases)
   const [files, setFiles] = useState<PendingFile[]>([])
   const [stopped, setStopped] = useState<Set<string>>(() => new Set())
   function stop() {
@@ -87,6 +98,13 @@ export function AssistantPanel(props: AssistantPanelProps) {
 
   function ask(t: string) {
     if ((!t.trim() && !files.length) || busy || (policy.notice && !noticeAccepted)) return
+    // Remember what this person writes, so it can be completed next time (on this device only).
+    const said = t.trim()
+    if (said.length >= 6 && said.length <= 80) {
+      const next = [said, ...phrases.filter((p) => p !== said)].slice(0, 40)
+      setPhrases(next)
+      try { localStorage.setItem('teovo-phrases', JSON.stringify(next)) } catch { /* fine without */ }
+    }
     setText('')
     clearSuggestions()
     const parts = files.map((f) => ({ type: 'file' as const, mediaType: f.mediaType, filename: f.name, url: f.url }))
@@ -151,6 +169,12 @@ export function AssistantPanel(props: AssistantPanelProps) {
             <span>{props.pageLabel ? props.pageLabel(page) : pageText(page)}</span>
           </div>
         ) : null}
+        {completion ? (
+          <button type="button" className="tv-complete" onClick={() => { setText(completion.full); box.current?.focus() }}
+            aria-label={`Complete: ${completion.word}`} title="Tab">
+            <kbd aria-hidden="true">Tab ↹</kbd> {completion.word}
+          </button>
+        ) : null}
         <div className="tv-composer">
           <textarea
             ref={box}
@@ -160,6 +184,7 @@ export function AssistantPanel(props: AssistantPanelProps) {
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Tab' && !text && hint) { e.preventDefault(); setText(hint) }   // accept the hint, like autocomplete
+              else if (e.key === 'Tab' && completion) { e.preventDefault(); setText(completion.full) }
               else if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) send(e)
             }}
             rows={1}
@@ -234,6 +259,18 @@ function Message({ message, ask, stopped, last, busy, ...props }: { message: Teo
           const id = p.id ?? String(i)
           return <Draw key={id} part={{ ...v, id }} current={isCurrent(chat.messages, message.id)} ask={ask} formats={message.metadata?.formats}
             submit={(values) => submitForm(message.id, id, values)} />
+        }
+        if (p.type === 'data-sources') {
+          const links = (p.data as Sources).links ?? []
+          if (!links.length) return null
+          return (
+            <div key={p.id ?? i} className="tv-sources">
+              <span>From:</span>
+              {links.map((l) => (
+                <button key={l.to} type="button" className="tv-source" onClick={() => onAction?.({ label: l.label, action: 'navigate', args: { to: l.to } })}>{l.label}</button>
+              ))}
+            </div>
+          )
         }
         if (p.type === 'data-action') {
           const a = p.data as Action
@@ -401,6 +438,27 @@ function showsSomething(m: TeovoMessage | undefined): boolean {
   if (!m || m.role !== 'assistant') return false
   return m.parts.some((p) => (p.type === 'text' && p.text.trim() !== '') || p.type === 'data-view' || p.type === 'data-card' || p.type === 'data-action'
     || (p.type === 'data-step' && (p.data as Step).state === 'running'))
+}
+
+/**
+ * The best completion for what is being typed: a known word or name (or an earlier message) that the last one, two
+ * or three words start, e.g. "chand b" → "Chand Bakers". Nothing until at least two letters, and never the same text.
+ */
+export function complete(text: string, words: readonly string[], phrases: readonly string[] = []): { word: string; full: string } | null {
+  if (!text.trim() || /\s$/.test(text)) return null
+  // A whole earlier message that this text starts.
+  const lower = text.toLowerCase()
+  const phrase = phrases.find((p) => p.length > text.length && p.toLowerCase().startsWith(lower) && text.length >= 3)
+  if (phrase) return { word: phrase, full: phrase }
+  const parts = text.split(/(\s+)/)
+  for (let n = 3; n >= 1; n--) {
+    const tail = parts.slice(-(n * 2 - 1)).join('')
+    if (tail.trim().length < 2 || parts.length < n * 2 - 1) continue
+    const t = tail.toLowerCase()
+    const hit = words.find((w) => w.length > tail.length && w.toLowerCase().startsWith(t))
+    if (hit) return { word: hit, full: text.slice(0, text.length - tail.length) + hit + ' ' }
+  }
+  return null
 }
 
 /** "2 messages left today", or for other units how much of it is used, once little is left. */

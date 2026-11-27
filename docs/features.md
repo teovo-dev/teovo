@@ -33,13 +33,13 @@ cover it but nobody has tried it by hand. A feature counts as done only when thi
 | Per-task model choice: a cheap model for simple reads, a stronger one for hard questions | v1 | Built (#15) | Yes (#27: the example routes short look-ups to flash-lite) | scoops, chosen by hand | kit |
 | Local formats: dates, currency such as ₹, and the tenant's time zone in replies and views | v1 | Built (#16) | Yes | scoops, chosen by hand | kit |
 | Row-level rules on the tv\_ tables that match the app's own tenancy | v1 | Built (#4) | Yes, by hand in Postgres as a non-owner role; how-to in docs/architecture.md (#27) | scoops, scobly, parityai (their own tables) | kit tables |
-| Placeholder that cycles through examples for the screen | v1.1 | Partly: one hint per screen, Tab accepts (#9) |  | new | kit |
-| Completion while typing: customer, product and phrase matches on the device, Tab or tap to accept, no model call | v1.1 |  |  | new | kit |
+| Placeholder that cycles through examples for the screen | v1.1 | Built (#9, #37: examples rotate) | Yes | new | kit |
+| Completion while typing: customer, product and phrase matches on the device, Tab or tap to accept, no model call | v1.1 | Built (#37) | Yes: "chand b" → Chand Bakers | new | kit |
 | Remaining allowance shown in the panel | v1.1 | Built (#36) | Yes: counted down 3 → 1 | bricks, scobly | kit |
 | Audit trail of proposed, confirmed, skipped and undone changes | v1.1 | Built (#35) | Yes: example Admin page | new | kit tables |
 | Miss log: questions the assistant could not answer | v1.1 | Built (#35) | Yes: logged with Gemini, shown on Admin | new | kit tables |
 | Wipe a user's or a tenant's conversations and logs on request | v1.1 | Built (#35) | Yes: "Delete my conversations" | not checked | kit tables |
-| Answers link to the records they used | v1.1 |  |  | not checked | kit |
+| Answers link to the records they used | v1.1 | Built (#37) | Yes: "From: Order #141 · #142 · #143" | not checked | kit |
 | Thumbs up or down on a reply, saved with its run | v1.1 | Built (#34) | Yes: saved on the run | not checked | kit tables |
 | Prompt and model version stored on each run | v1.1 | Built (#6) |  | not checked | kit tables |
 | A question with answer buttons when the request is unclear | v1.1 | Built early (#14, choices view) |  | not checked | kit |

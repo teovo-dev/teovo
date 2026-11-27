@@ -58,7 +58,12 @@ export function screensText(screens: readonly ScreenInfo[]): string {
 export type ScreenFn<DB> = (page: Page, ctx: ToolContext<DB>) => Promise<string | null> | string | null
 
 /** Questions shown as chips above the input, and the grey hint inside it (Tab accepts it). */
-export interface Suggestions { suggestions: string[]; placeholder?: string }
+export interface Suggestions {
+  suggestions: string[]
+  placeholder?: string
+  /** Example questions the empty message box shows in turn (Tab takes the one showing). Up to 6. */
+  examples?: string[]
+}
 
 /**
  * Suggestions for this person on this screen. `after` is the assistant's last reply when called after a reply
@@ -74,7 +79,8 @@ export function tidy(s: Suggestions): Suggestions {
   const clean = (t: string) => t.replace(/\s+/g, ' ').trim().slice(0, MAX_CHARS)
   const suggestions = [...new Set(s.suggestions.map(clean).filter(Boolean))].slice(0, MAX_CHIPS)
   const placeholder = s.placeholder ? clean(s.placeholder) : undefined
-  return placeholder ? { suggestions, placeholder } : { suggestions }
+  const examples = [...new Set((s.examples ?? []).map(clean).filter(Boolean))].slice(0, 6)
+  return { suggestions, ...(placeholder ? { placeholder } : {}), ...(examples.length ? { examples } : {}) }
 }
 
 /** A page from the request body or query string, with anything malformed dropped. */

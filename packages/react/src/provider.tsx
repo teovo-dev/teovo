@@ -53,6 +53,8 @@ interface AssistantState {
   acceptNotice: () => void
   /** Every limit that applies, with how much is used (refreshed after each reply). */
   allowance: AllowanceItem[]
+  /** The app's words the message box completes (GET …/completions). */
+  words: string[]
   onAction: AssistantProviderProps['onAction']
 }
 
@@ -71,6 +73,7 @@ export function AssistantProvider(props: AssistantProviderProps) {
   const consent = useRef<string | undefined>(undefined)
   const [accepted, setAccepted] = useState(false)
   const [allowanceItems, setAllowance] = useState<AllowanceItem[]>([])
+  const [words, setWords] = useState<string[]>([])
 
   const transport = useMemo(() => new DefaultChatTransport<TeovoMessage>({
     api: `${props.endpoint.replace(/\/$/, '')}/chat`,
@@ -194,6 +197,13 @@ export function AssistantProvider(props: AssistantProviderProps) {
     return () => { live = false }
   }, [request, props.endpoint])
 
+  // The app's words for completing as people type (customers, products, phrases): loaded once.
+  useEffect(() => {
+    let live = true
+    request('/completions').then(async (res) => { if (res.ok && live) setWords(((await res.json()) as { words?: string[] }).words ?? []) }).catch(() => {})
+    return () => { live = false }
+  }, [request])
+
   const acceptNotice = useCallback(() => {
     if (!policy.noticeId) return
     try { localStorage.setItem(`teovo-notice:${policy.noticeId}`, new Date().toISOString()) } catch { /* still accepted for now */ }
@@ -233,8 +243,8 @@ export function AssistantProvider(props: AssistantProviderProps) {
   }, [])
 
   const currentPage = useMemo(() => (pageKey && pageKey !== 'null' ? JSON.parse(pageKey) as Page : undefined), [pageKey])
-  const value = useMemo<AssistantState>(() => ({ chat, threadId, newChat, openThread, submitForm, request, setPage, page: currentPage, suggestions, clearSuggestions, decideCard, rate, policy, noticeAccepted: accepted, acceptNotice, allowance: allowanceItems, onAction: props.onAction }),
-    [chat, threadId, newChat, openThread, submitForm, request, setPage, currentPage, suggestions, clearSuggestions, decideCard, rate, policy, accepted, acceptNotice, allowanceItems, props.onAction])
+  const value = useMemo<AssistantState>(() => ({ chat, threadId, newChat, openThread, submitForm, request, setPage, page: currentPage, suggestions, clearSuggestions, decideCard, rate, policy, noticeAccepted: accepted, acceptNotice, allowance: allowanceItems, words, onAction: props.onAction }),
+    [chat, threadId, newChat, openThread, submitForm, request, setPage, currentPage, suggestions, clearSuggestions, decideCard, rate, policy, accepted, acceptNotice, allowanceItems, words, props.onAction])
   return <Ctx.Provider value={value}>{props.children}</Ctx.Provider>
 }
 
