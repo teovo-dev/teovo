@@ -1,5 +1,5 @@
 import { useMemo, useState, type FormEvent, type ReactNode } from 'react'
-import type { TeovoMessage } from './types.js'
+import type { Formats, TeovoMessage } from './types.js'
 
 type Cell = string | number | boolean | null
 
@@ -12,6 +12,26 @@ export interface ViewProps<D = any> {
   current: boolean
   ask: (text: string) => void
   submit: (values: Record<string, Cell>) => Promise<void>
+  /** The tenant's formats for this reply, when the server sent them. */
+  formats?: Formats
+}
+
+export type CellFormat = 'text' | 'number' | 'money' | 'date'
+
+/** Write a value the way the tenant does: ₹1,250.00, 27 Nov 2026. Falls back to the value as text. */
+export function formatValue(v: Cell | undefined, format: CellFormat | undefined, f: Formats | undefined): string {
+  if (v === null || v === undefined || v === '') return '—'
+  const locale = f?.locale
+  try {
+    if (format === 'money' && typeof v === 'number') return new Intl.NumberFormat(locale, { style: 'currency', currency: f?.currency ?? 'USD' }).format(v)
+    if (format === 'number' && typeof v === 'number') return new Intl.NumberFormat(locale).format(v)
+    if (format === 'date' && typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v)) {
+      // A bare date is a calendar day, not a moment: draw it in UTC so it never shifts a day.
+      const tz = v.length === 10 ? 'UTC' : f?.timeZone
+      return new Intl.DateTimeFormat(locale, { day: 'numeric', month: 'short', year: 'numeric', timeZone: tz }).format(new Date(v.length === 10 ? `${v}T00:00:00Z` : v))
+    }
+  } catch { /* fall through to plain text */ }
+  return String(v)
 }
 
 export type ViewComponent<D = any> = (props: ViewProps<D>) => ReactNode
@@ -27,7 +47,7 @@ function Choices({ part, current, ask }: ViewProps<{ question: string; options: 
   )
 }
 
-function Table({ part }: ViewProps<{ title?: string; columns: { key: string; label: string }[]; rows: Record<string, Cell>[] }>) {
+function Table({ part, formats }: ViewProps<{ title?: string; columns: { key: string; label: string; format?: CellFormat }[]; rows: Record<string, Cell>[] }>) {
   const [sort, setSort] = useState<{ key: string; dir: 1 | -1 } | null>(null)
   const rows = useMemo(() => {
     if (!sort) return part.data.rows
@@ -46,17 +66,17 @@ function Table({ part }: ViewProps<{ title?: string; columns: { key: string; lab
             <button type="button" onClick={() => setSort((s) => ({ key: c.key, dir: s?.key === c.key && s.dir === 1 ? -1 : 1 }))}>{c.label}</button>
           </th>
         ))}</tr></thead>
-        <tbody>{rows.map((r, i) => <tr key={i}>{part.data.columns.map((c) => <td key={c.key}>{show(r[c.key])}</td>)}</tr>)}</tbody>
+        <tbody>{rows.map((r, i) => <tr key={i}>{part.data.columns.map((c) => <td key={c.key} data-format={c.format}>{formatValue(r[c.key], c.format, formats)}</td>)}</tr>)}</tbody>
       </table>
     </div>
   )
 }
 
-function Record({ part }: ViewProps<{ title: string; fields: { label: string; value: Cell }[] }>) {
+function Record({ part, formats }: ViewProps<{ title: string; fields: { label: string; value: Cell; format?: CellFormat }[] }>) {
   return (
     <div className="tv-view tv-record" role="group" aria-label={part.data.title}>
       <div className="tv-view-title">{part.data.title}</div>
-      <dl>{part.data.fields.map((f) => <div key={f.label}><dt>{f.label}</dt><dd>{show(f.value)}</dd></div>)}</dl>
+      <dl>{part.data.fields.map((f) => <div key={f.label}><dt>{f.label}</dt><dd>{formatValue(f.value, f.format, formats)}</dd></div>)}</dl>
     </div>
   )
 }
@@ -97,8 +117,6 @@ function Form({ part, submit }: ViewProps<{ title: string; fields: FormField[]; 
     </form>
   )
 }
-
-const show = (v: Cell | undefined) => (v === null || v === undefined ? '—' : String(v))
 
 /** The panel's own drawing of the four built-in views. Pass `views` to AssistantPanel to replace or add to them. */
 export const defaultViews: Record<string, ViewComponent> = { choices: Choices, table: Table, record: Record, form: Form }

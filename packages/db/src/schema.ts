@@ -130,6 +130,11 @@ create table if not exists tv_proposals (
 create index if not exists tv_proposals_thread on tv_proposals (thread_id, created_at);`,
 }
 
+const formats: Migration = {
+  id: '0003_tenant_formats',
+  sql: `alter table tv_tenant_settings add column if not exists formats jsonb;`,
+}
+
 function rlsMigration(tables: string[], rls: NonNullable<SchemaOptions['rls']>): Migration {
   const to = (rls.roles?.length ? rls.roles : ['public']).join(', ')
   const own = `tenant_id = (${rls.tenant}) and user_id = (${rls.user})`
@@ -151,6 +156,7 @@ export function migrations(options: SchemaOptions = {}): Migration[] {
   const list: Migration[] = [core]
   const tables = ['tv_threads', 'tv_messages', 'tv_runs', 'tv_run_steps', 'tv_usage', 'tv_usage_daily', 'tv_budgets', 'tv_tenant_settings']
   if (options.features?.proposals) { list.push(proposals); tables.push('tv_proposals') }
+  list.push(formats)
   if (options.rls) list.push({ ...rlsMigration(tables, options.rls), id: `0100_rls_${options.features?.proposals ? 'with_proposals' : 'core'}` })
   return list
 }

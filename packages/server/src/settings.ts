@@ -1,3 +1,4 @@
+import { checkFormats, type Formats } from './formats.js'
 import type { TeovoTool } from './tools.js'
 
 /** What a business (tenant) can set for itself. The app's own code always comes first; these only add or narrow. */
@@ -10,6 +11,8 @@ export interface TenantSettings {
   glossary?: Record<string, string>
   /** Tools switched off for this tenant. A tenant can only narrow what roles already allow, never widen it. */
   toolsOff?: string[]
+  /** How this business writes dates and money; any part left out uses the app's default. */
+  formats?: Partial<Formats>
 }
 
 export const DEFAULT_SETTINGS: TenantSettings = { enabled: true }
@@ -44,6 +47,19 @@ export function validateSettings(raw: unknown, tools: readonly TeovoTool[]): Ten
     const unknown = (r.toolsOff as string[]).filter((t) => !known.has(t))
     if (unknown.length) throw new SettingsError(`Unknown tool: ${unknown.join(', ')}.`)
     if (r.toolsOff.length) out.toolsOff = [...new Set(r.toolsOff as string[])]
+  }
+  if (r.formats !== undefined && r.formats !== null) {
+    if (typeof r.formats !== 'object') throw new SettingsError('formats must be { locale, currency, timeZone }.')
+    const f = r.formats as Record<string, unknown>
+    const pick: Partial<Formats> = {}
+    for (const k of ['locale', 'currency', 'timeZone'] as const) {
+      if (f[k] === undefined || f[k] === null || f[k] === '') continue
+      if (typeof f[k] !== 'string') throw new SettingsError(`${k} must be text.`)
+      pick[k] = (f[k] as string).trim()
+    }
+    const problem = checkFormats(pick)
+    if (problem) throw new SettingsError(problem)
+    if (Object.keys(pick).length) out.formats = pick
   }
   return out
 }
