@@ -103,11 +103,12 @@ function App() {
           : path === '/expenses' ? <Expenses expenses={shop.expenses} />
           : <Orders orders={shop.orders} go={go} />}
       </main>
-      <AssistantSheet label="Ask Teovo" theme={{ accent: '#b45309' }}>
-        <div className="sheet-tabs">
+      <AssistantSheet label="Ask Teovo" theme={{ accent: '#b45309' }} header={
+        <div className="tv-tabs" role="group" aria-label="View">
           <button type="button" aria-pressed={!history} onClick={() => setHistory(false)}>Chat</button>
           <button type="button" aria-pressed={history} onClick={() => setHistory(true)}>History</button>
         </div>
+      }>
         {history ? <ThreadList onOpen={() => setHistory(false)} />
           : <AssistantPanel attach welcome="Ask about orders, payments and expenses." stepLabels={{ list_orders: 'Looking at orders', list_expenses: 'Looking at expenses' }} />}
       </AssistantSheet>

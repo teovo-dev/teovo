@@ -31,6 +31,8 @@ export interface AssistantSheetProps {
   theme?: Theme
   /** The open button's text. */
   label?: string
+  /** What the header shows: a title, or the app's own controls (e.g. Chat / History tabs). Default: the label. */
+  header?: ReactNode
   /** Keyboard shortcut to open and close, with Ctrl (Windows, Linux) or ⌘ (Mac). Default 'k'; null for none. */
   shortcut?: string | null
   /** Control it from the app. */
@@ -72,14 +74,22 @@ export function AssistantSheet(props: AssistantSheetProps) {
   return (
     <div className="tv-sheet-root" data-theme={props.theme?.mode} style={themeStyle(props.theme)}>
       <button ref={button} type="button" className="tv-sheet-open" aria-expanded={open} aria-controls="tv-sheet" onClick={() => set(!open)}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M21 12a8 8 0 0 1-11.6 7.1L4 20l1-4.6A8 8 0 1 1 21 12z" />
+        </svg>
         {props.label ?? 'Ask'}
       </button>
       {open ? (
         <>
           <div className="tv-sheet-backdrop" onClick={() => set(false)} />
           <div ref={sheet} id="tv-sheet" className="tv-sheet" role="dialog" aria-modal="true" aria-label="Assistant">
-            <button type="button" className="tv-sheet-close" aria-label="Close assistant" onClick={() => set(false)}>×</button>
-            {props.children}
+            <div className="tv-sheet-header">
+              <div className="tv-sheet-title">{props.header ?? props.label ?? 'Assistant'}</div>
+              <button type="button" className="tv-sheet-close" aria-label="Close assistant" onClick={() => set(false)}>
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+              </button>
+            </div>
+            <div className="tv-sheet-body">{props.children}</div>
           </div>
         </>
       ) : null}
