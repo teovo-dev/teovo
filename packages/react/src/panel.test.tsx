@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 // The panel against the real server handler (createAssistant) with a scripted model: no network, no mocks of our own code.
 import type { LanguageModelV4StreamPart } from '@ai-sdk/provider'
-import { createAssistant, defineTool, memoryStorage } from '@teovo/server'
+import { createAssistant, defineTool, memoryStorage, type CardApplier } from '@teovo/server'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MockLanguageModelV4 } from 'ai/test'
@@ -23,15 +23,15 @@ const tools = [
     run: ({ no }) => ({ label: `Open order #${no}`, action: 'navigate', args: { to: `/orders/${no}` } }) }),
 ]
 
-function server(steps: ReturnType<typeof say>[], signedIn = true) {
+function server(steps: ReturnType<typeof say>[], signedIn = true, cards: Record<string, CardApplier> = {}) {
   const bodies: any[] = []
   const teovo = createAssistant({
     identify: () => (signedIn ? { tenantId: 'shop-1', userId: 'u1', role: 'owner' } : null),
-    asUser: () => null, tools, instructions: 'Help.', storage: memoryStorage(),
+    asUser: () => null, tools, instructions: 'Help.', storage: memoryStorage(), cards,
     models: [new MockLanguageModelV4({ doStream: steps as never })],
   })
   const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    bodies.push(JSON.parse(String(init?.body)))
+    if (init?.body) bodies.push(JSON.parse(String(init.body)))
     return teovo.fetch(new Request(new URL(String(input), 'https://app.test'), init))
   }) as typeof globalThis.fetch
   return { fetch, bodies }
@@ -86,6 +86,27 @@ describe('AssistantPanel', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Confirm' }))
     expect((await screen.findByRole('alert')).textContent).toBe('Order #2 was already paid.')
     expect(screen.getByRole('button', { name: 'Confirm' })).toBeTruthy()
+  })
+
+  it("by default confirms and undoes through the server's card endpoints", async () => {
+    let paid = 0
+    const cards = { record_payment: { apply: ({ amount }: { amount: number }) => { paid += amount; return { undo: amount } }, undo: (n: unknown) => { paid -= n as number } } }
+    mount({ fetch: server([call('record_payment', { amount: 200 }), say('Ready.')], true, cards).fetch })
+    await ask('paid 200')
+    await userEvent.click(await screen.findByRole('button', { name: 'Confirm' }))
+    await screen.findByText('Done')
+    expect(paid).toBe(200)
+    await userEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await screen.findByText('Undone')
+    expect(paid).toBe(0)
+  })
+
+  it("shows the server's reason when a card can't be applied", async () => {
+    mount({ fetch: server([call('record_payment', { amount: 200 }), say('Ready.')], true, {}).fetch })
+    await ask('paid 200')
+    await userEvent.click(await screen.findByRole('button', { name: 'Confirm' }))
+    expect((await screen.findByRole('alert')).textContent).toBe('This app can\'t apply "record_payment" changes yet.')
+    expect(screen.getByRole('button', { name: 'Skip' })).toBeTruthy()
   })
 
   it('offers buttons from action tools', async () => {

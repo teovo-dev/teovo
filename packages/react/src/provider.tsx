@@ -1,7 +1,7 @@
 import { useChat } from '@ai-sdk/react'
 import { DefaultChatTransport } from 'ai'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import type { Action, Card, Page, TeovoMessage } from './types'
+import type { Action, Card, CardDecision, Page, TeovoMessage } from './types'
 
 export interface AssistantProviderProps {
   /** Where the app mounted the server handler, e.g. '/api/assistant'. The panel posts to `${endpoint}/chat`. */
@@ -12,8 +12,11 @@ export interface AssistantProviderProps {
   onThread?: (threadId: string) => void
   /** Extra headers on every request (e.g. the app's auth token or tenant id). */
   headers?: Record<string, string> | (() => Record<string, string> | Promise<Record<string, string>>)
-  /** The user pressed Confirm or Skip on a card. Throw to show the error on the card. */
-  onCard?: (card: Card, decision: 'confirm' | 'skip') => Promise<void> | void
+  /**
+   * Replace how Confirm, Skip and Undo reach the app. Default: POST `${endpoint}/cards/:id/:decision`, which
+   * runs the appliers given to createAssistant({ cards }). Throw to show the error on the card.
+   */
+  onCard?: (card: Card, decision: CardDecision) => Promise<Partial<Card> | void> | Partial<Card> | void
   /** The user pressed a button the assistant offered (open a screen, run an app action). */
   onAction?: (action: Action) => void
   /** Replace fetch, e.g. in tests or to call the handler in-process. */
@@ -27,7 +30,8 @@ interface AssistantState {
   /** Start a fresh conversation: clears the messages; the next message creates a new thread. */
   newChat: () => void
   setPage: (page: Page | undefined) => void
-  onCard: AssistantProviderProps['onCard']
+  /** Confirm, skip or undo a card. Resolves to the card as it is now; rejects with the sentence to show. */
+  decideCard: (card: Card, decision: CardDecision) => Promise<Partial<Card>>
   onAction: AssistantProviderProps['onAction']
 }
 
@@ -71,8 +75,18 @@ export function AssistantProvider(props: AssistantProviderProps) {
 
   const setPage = useCallback((p: Page | undefined) => { page.current = p }, [])
 
-  const value = useMemo<AssistantState>(() => ({ chat, threadId, newChat, setPage, onCard: props.onCard, onAction: props.onAction }),
-    [chat, threadId, newChat, setPage, props.onCard, props.onAction])
+  const decideCard = useCallback(async (card: Card, decision: CardDecision): Promise<Partial<Card>> => {
+    const p = latest.current
+    if (p.onCard) return (await p.onCard(card, decision)) ?? {}
+    const h = typeof p.headers === 'function' ? await p.headers() : (p.headers ?? {})
+    const res = await (p.fetch ?? fetch)(`${p.endpoint.replace(/\/$/, '')}/cards/${card.id}/${decision}`, { method: 'POST', headers: h })
+    const body = (await res.json().catch(() => ({}))) as { card?: Card; error?: string }
+    if (!res.ok) throw new Error(body.error ?? 'Something went wrong. Nothing was changed.')
+    return body.card ?? {}
+  }, [])
+
+  const value = useMemo<AssistantState>(() => ({ chat, threadId, newChat, setPage, decideCard, onAction: props.onAction }),
+    [chat, threadId, newChat, setPage, decideCard, props.onAction])
   return <Ctx.Provider value={value}>{props.children}</Ctx.Provider>
 }
 

@@ -1,6 +1,7 @@
 import type { LanguageModelV4 } from '@ai-sdk/provider'
 import { convertToModelMessages, createUIMessageStream, createUIMessageStreamResponse, isStepCount, streamText, tool, toUIMessageStream, type ToolSet, type UIMessage } from 'ai'
 import { fallbackModel } from './fallback'
+import { CardError, cardForModel, decide, publicCard, type CardApplier, type CardRules, type Decision } from './cards'
 import { checkLimits, limitMessage, type LimitHit, type Limits } from './limits'
 import type { Storage, StoredCard, UsageRow } from './storage'
 import { toolsFor, type Action, type Identity, type Proposal, type TeovoTool, type ToolContext } from './tools'
@@ -27,6 +28,10 @@ export interface AssistantConfig<DB = unknown> {
   timeouts?: { firstChunkMs?: number; chunkMs?: number; totalMs?: number }
   /** Messages and tokens per person and per tenant, checked before every reply. Tenants can set their own in tv_budgets. */
   limits?: Limits
+  /** How to apply each kind of card when the user confirms it, keyed by the card's `kind`. */
+  cards?: Record<string, CardApplier<any, DB>>
+  /** How long a card can be confirmed, and how long after confirming it can be undone. */
+  cardRules?: Partial<CardRules>
   /** Saved on each run, so a change in replies can be traced to a change in instructions. */
   promptVersion?: string
   /** Tool inputs and outputs longer than this are cut in the run log (the model still sees all of it). Default 8000 characters. */
@@ -37,6 +42,7 @@ export interface AssistantConfig<DB = unknown> {
     card?: (card: StoredCard) => void
     limit?: (hit: LimitHit, identity: Identity) => void
     usage?: (rows: UsageRow[]) => void
+    decision?: (card: StoredCard, decision: Decision, identity: Identity) => void
   }
 }
 
@@ -91,6 +97,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     await storage.startRun({ id: runId, threadId: thread.id, tenantId: identity.tenantId, userId: identity.userId, model: first.modelId, promptVersion: config.promptVersion })
     await storage.addUsage([{ tenantId: identity.tenantId, userId: identity.userId, runId, provider: first.provider, model: first.modelId, unit: 'messages', amount: 1 }])
     let seq = 0
+    const statuses = new Map((await storage.listCards(thread.id)).map((c) => [c.id, c]))
     const nonce = crypto.randomUUID().slice(0, 8)
     const ctx: ToolContext<DB> = { identity, db, untrusted: makeUntrusted(nonce) }
     const instructions = typeof config.instructions === 'function' ? await config.instructions({ identity, page: body.page }) : config.instructions
@@ -121,7 +128,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
                   const card: StoredCard = { ...p, id: crypto.randomUUID(), threadId: thread.id, runId, status: 'shown' }
                   await storage.saveCard(card)
                   config.on?.card?.(card)
-                  writer.write({ type: 'data-card', id: card.id, data: card })
+                  writer.write({ type: 'data-card', id: card.id, data: publicCard(card) })
                   return `Shown to the user as a card: "${p.title}". Nothing has changed yet; the user confirms or skips it.`
                 }
                 if (t.kind === 'action') {
@@ -150,7 +157,14 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
           onError: ({ error }) => { streamError ??= error },
           model,
           system,
-          messages: await convertToModelMessages(history),
+          messages: await convertToModelMessages(history, {
+            // Earlier cards reach the model with their status now, so it knows what the user confirmed or skipped.
+            convertDataPart: (p) => {
+              if (p.type !== 'data-card') return undefined
+              const c = p.data as StoredCard
+              return { type: 'text', text: cardForModel(statuses.get(c.id) ?? c) }
+            },
+          }),
           tools,
           stopWhen: isStepCount(config.maxSteps ?? 8),
           timeout: timeouts,
@@ -188,11 +202,32 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     return createUIMessageStreamResponse({ stream, headers: { 'x-teovo-thread': thread.id } })
   }
 
+  const rules: CardRules = { ttlMs: 24 * 3600_000, undoMs: 10 * 60_000, ...config.cardRules }
+
+  async function card(req: Request, id: string, decision: Decision): Promise<Response> {
+    const identity = await config.identify(req)
+    if (!identity) return json(401, { error: 'Sign in to use the assistant.' })
+    try {
+      const done = await decide({
+        storage: config.storage, appliers: config.cards ?? {}, rules, identity, id, decision,
+        ctx: async () => ({ identity, db: await config.asUser(identity, req), untrusted: makeUntrusted(crypto.randomUUID().slice(0, 8)) }),
+      })
+      config.on?.decision?.(done, decision, identity)
+      return json(200, { card: publicCard(done) })
+    } catch (e) {
+      if (e instanceof CardError) return json(e.status, { error: e.message })
+      config.on?.error?.(e, { identity, threadId: '' })
+      return json(500, { error: 'Something went wrong. Nothing was changed.' })
+    }
+  }
+
   return {
-    /** Mount under any path, e.g. app.all('/api/assistant/*', teovo.fetch). Handles POST …/chat. */
+    /** Mount under any path, e.g. app.all('/api/assistant/*', teovo.fetch). Handles POST …/chat and POST …/cards/:id/(confirm|skip|undo). */
     async fetch(req: Request): Promise<Response> {
       const path = new URL(req.url).pathname
       if (req.method === 'POST' && path.endsWith('/chat')) return chat(req)
+      const m = /\/cards\/([0-9a-f-]{36})\/(confirm|skip|undo)$/i.exec(path)
+      if (req.method === 'POST' && m) return card(req, m[1]!.toLowerCase(), m[2] as Decision)
       return json(404, { error: 'Not found.' })
     },
   }

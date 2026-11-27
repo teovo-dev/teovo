@@ -7,8 +7,21 @@ export interface StoredCard extends Proposal {
   id: string
   threadId: string
   runId: string
-  status: 'shown' | 'confirmed' | 'skipped' | 'undone' | 'expired' | 'waiting_for_approval'
+  status: CardStatus
+  createdAt?: string
+  decidedBy?: string
+  decidedAt?: string
+  /** Set when the card was applied and the app can take it back. */
+  reversible?: boolean
+  /** What the app's undo needs, returned by its apply. Never sent to the browser. */
+  undo?: unknown
+  undoneAt?: string
 }
+
+export type CardStatus = 'shown' | 'confirmed' | 'skipped' | 'undone' | 'expired' | 'waiting_for_approval'
+
+/** The fields a decision changes. */
+export type CardPatch = Partial<Pick<StoredCard, 'status' | 'decidedBy' | 'decidedAt' | 'reversible' | 'undo' | 'undoneAt'>>
 
 /**
  * Where the kit keeps conversations and cards. @teovo/db provides the Postgres version; `memoryStorage` is for
@@ -21,6 +34,14 @@ export interface Storage {
   listMessages(threadId: string): Promise<UIMessage[]>
   saveMessages(threadId: string, messages: UIMessage[]): Promise<void>
   saveCard(card: StoredCard): Promise<void>
+  /** A card, only if it is in one of this person's threads. */
+  getCard(tenantId: string, userId: string, id: string): Promise<StoredCard | null>
+  listCards(threadId: string): Promise<StoredCard[]>
+  /**
+   * Change a card only if its status is still one of `from`; returns the updated card, or null if someone
+   * (a second tab, a double tap) got there first. This is what makes Confirm safe to press twice.
+   */
+  updateCard(id: string, from: CardStatus[], patch: CardPatch): Promise<StoredCard | null>
 
   // Run log and usage ledger.
   startRun(run: RunRecord): Promise<void>
@@ -81,7 +102,19 @@ export function memoryStorage() {
       for (const m of list) byId.set(m.id, structuredClone(m))
       messages.set(id, [...byId.values()])
     },
-    async saveCard(card) { cards.set(card.id, structuredClone(card)) },
+    async saveCard(card) { cards.set(card.id, structuredClone({ createdAt: new Date().toISOString(), ...card })) },
+    async getCard(tenantId, userId, id) {
+      const c = cards.get(id)
+      const t = c && threads.get(c.threadId)
+      return c && t && t.tenantId === tenantId && t.userId === userId ? structuredClone(c) : null
+    },
+    async listCards(threadId) { return [...cards.values()].filter((c) => c.threadId === threadId).map((c) => structuredClone(c)) },
+    async updateCard(id, from, patch) {
+      const c = cards.get(id)
+      if (!c || !from.includes(c.status)) return null
+      Object.assign(c, structuredClone(patch))
+      return structuredClone(c)
+    },
     async startRun(run) { runs.set(run.id, { ...run, status: 'running', startedAt: new Date() }) },
     async finishRun(id, end) {
       const r = runs.get(id)
