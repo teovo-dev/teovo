@@ -7,7 +7,7 @@ import userEvent from '@testing-library/user-event'
 import { MockLanguageModelV4 } from 'ai/test'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
-import { AssistantPanel, AssistantProvider, useAssistantContext, type AssistantProviderProps } from './index'
+import { AssistantPanel, AssistantProvider, ThreadList, useAssistantContext, type AssistantProviderProps } from './index'
 
 const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } }
 const streamOf = (parts: unknown[]) => ({ stream: new ReadableStream({ start(c) { for (const p of parts) c.enqueue(p as LanguageModelV4StreamPart); c.close() } }) })
@@ -186,6 +186,42 @@ describe('AssistantPanel', () => {
     await screen.findByRole('button', { name: 'On /orders' })
     view.rerender(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><Screen path="/expenses" /><AssistantPanel /></AssistantProvider>)
     await screen.findByRole('button', { name: 'On /expenses' })
+  })
+
+  it('lists earlier conversations, opens one, and continues it', async () => {
+    const s = server([say('First answer.'), say('Second answer.'), say('Continued.')])
+    const view = mount({ fetch: s.fetch })
+    await ask('first question')
+    await screen.findByText('First answer.')
+    await userEvent.click(screen.getByRole('button', { name: 'New chat' }))
+    await ask('second question')
+    await screen.findByText('Second answer.')
+    const first = s.bodies.length   // requests so far
+    view.rerender(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><ThreadList /><AssistantPanel /></AssistantProvider>)
+    await userEvent.click(await screen.findByRole('button', { name: 'first question' }))
+    await screen.findByText('First answer.')
+    expect(screen.queryByText('Second answer.')).toBeNull()
+    await ask('more')
+    await screen.findByText('Continued.')
+    const sent = s.bodies.slice(first).find((b) => b.message?.parts?.[0]?.text === 'more')
+    const firstThread = s.bodies.find((b) => b.message?.parts?.[0]?.text === 'first question')
+    expect(sent.threadId).toBeTruthy()
+    expect(s.bodies.filter((b) => b.threadId === sent.threadId).length).toBe(1)
+    expect(firstThread.threadId).toBeUndefined()
+  })
+
+  it('opens the conversation the app passes in, with its cards as they are now', async () => {
+    let id = ''
+    const s = server([call('record_payment', { amount: 200 }), say('Ready.')], true, { record_payment: { apply: () => {}, undo: () => {} } })
+    const first = render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch} onThread={(t) => { id = t }}><AssistantPanel /></AssistantProvider>)
+    await ask('paid 200')
+    await userEvent.click(await screen.findByRole('button', { name: 'Confirm' }))
+    await screen.findByText('Done')
+    first.unmount()
+    render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch} threadId={id}><AssistantPanel /></AssistantProvider>)
+    await screen.findByText('paid 200')
+    await screen.findByText('Done')
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeTruthy()
   })
 
   it("shows the server's sentence when the user is signed out", async () => {

@@ -137,6 +137,27 @@ suite('@teovo/db on Postgres', () => {
     client.release()
   })
 
+  it('lists threads by latest activity, keeps titles, and archives only for the owner', async () => {
+    const { query, client } = await freshSchema()
+    await migrate(query)
+    const s = postgresStorage(query)
+    const a = await s.createThread('shop-1', 'u1')
+    const b = await s.createThread('shop-1', 'u1')
+    await s.createThread('shop-1', 'u2')
+    await s.setThreadTitle(a.id, 'Sales this month')
+    await s.saveMessages(b.id, [{ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'x' }] }])
+    await query(`update tv_messages set created_at = now() - interval '1 hour'`)
+    await s.saveMessages(a.id, [{ id: 'm2', role: 'user', parts: [{ type: 'text', text: 'y' }] }])
+    const list = await s.listThreads('shop-1', 'u1', 10)
+    expect(list.map((t) => [t.id, t.title])).toEqual([[a.id, 'Sales this month'], [b.id, null]])
+    expect(await s.archiveThread('shop-1', 'u2', a.id)).toBe(false)
+    expect(await s.archiveThread('shop-1', 'u1', a.id)).toBe(true)
+    expect(await s.archiveThread('shop-1', 'u1', a.id)).toBe(false)
+    expect((await s.listThreads('shop-1', 'u1', 10)).map((t) => t.id)).toEqual([b.id])
+    expect(await s.getThread('shop-1', 'u1', a.id)).toBeNull()
+    client.release()
+  })
+
   it("saves a tenant's settings and replaces them whole", async () => {
     const { query, client } = await freshSchema()
     await migrate(query)

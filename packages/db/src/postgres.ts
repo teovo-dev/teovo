@@ -33,6 +33,21 @@ export function postgresStorage(query: Query): Storage {
       const r = await query('insert into tv_threads (id, tenant_id, user_id) values ($1, $2, $3) returning *', [crypto.randomUUID(), tenantId, userId])
       return thread(r.rows[0])
     },
+    async listThreads(tenantId, userId, limit) {
+      const r = await query(
+        `select t.*, coalesce((select max(m.created_at) from tv_messages m where m.thread_id = t.id), t.created_at) as updated_at
+         from tv_threads t where t.tenant_id = $1 and t.user_id = $2 and t.archived_at is null
+         order by updated_at desc limit $3`, [tenantId, userId, limit])
+      return r.rows.map((row) => ({ ...thread(row), updatedAt: new Date(row.updated_at).toISOString() }))
+    },
+    async setThreadTitle(id, title) {
+      await query('update tv_threads set title = $2 where id = $1', [id, title])
+    },
+    async archiveThread(tenantId, userId, id) {
+      if (!/^[0-9a-f-]{36}$/i.test(id)) return false
+      const r = await query('update tv_threads set archived_at = now() where id = $1 and tenant_id = $2 and user_id = $3 and archived_at is null returning id', [id, tenantId, userId])
+      return r.rows.length > 0
+    },
     async listMessages(threadId) {
       const r = await query('select id, role, parts, metadata from tv_messages where thread_id = $1 order by seq', [threadId])
       return r.rows.map((m) => ({ id: m.id, role: m.role, parts: m.parts, ...(m.metadata ? { metadata: m.metadata } : {}) }) as UIMessage)

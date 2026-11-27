@@ -26,6 +26,9 @@ export interface Card {
   reversible?: boolean
 }
 
+/** One conversation in the history list. */
+export interface ThreadSummary { id: string; title: string | null; createdAt: string; updatedAt: string }
+
 export type CardDecision = 'confirm' | 'skip' | 'undo'
 
 /** A button under the reply (an `action` tool's result). */
