@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 // The panel against the real server handler (createAssistant) with a scripted model: no network, no mocks of our own code.
 import type { LanguageModelV4StreamPart } from '@ai-sdk/provider'
-import { createAssistant, defineTool, memoryStorage, type AssistantConfig, type CardApplier } from '@teovo/server'
+import { builtinViews, createAssistant, defineTool, memoryStorage, type AssistantConfig, type CardApplier } from '@teovo/server'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MockLanguageModelV4 } from 'ai/test'
@@ -222,6 +222,60 @@ describe('AssistantPanel', () => {
     await screen.findByText('paid 200')
     await screen.findByText('Done')
     expect(screen.getByRole('button', { name: 'Undo' })).toBeTruthy()
+  })
+
+  it('asks with choices, sends the pick, and closes the choices once answered', async () => {
+    const s = server([call('show_choices', { question: 'Which Riya?', options: [{ label: 'Riya Sharma' }, { label: 'Riya K' }] }), say('Pick one.'), say('Riya K owes ₹880.')], true, {}, { views: builtinViews })
+    mount({ fetch: s.fetch })
+    await ask('what does Riya owe?')
+    const group = await screen.findByRole('group', { name: 'Which Riya?' })
+    await userEvent.click(screen.getByRole('button', { name: 'Riya K' }))
+    expect(s.bodies.at(-1).message.parts[0].text).toBe('Riya K')
+    await screen.findByText('Riya K owes ₹880.')
+    expect((group.querySelector('button') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('sorts a table by a column', async () => {
+    const rows = [{ name: 'Bina', due: 300 }, { name: 'Asha', due: 900 }, { name: 'Chand', due: 50 }]
+    const s = server([call('show_table', { title: 'Unpaid', columns: [{ key: 'name', label: 'Customer' }, { key: 'due', label: 'Due' }], rows }), say('Here.')], true, {}, { views: builtinViews })
+    mount({ fetch: s.fetch })
+    await ask('unpaid?')
+    await screen.findByText('Bina')
+    const names = () => Array.from(document.querySelectorAll('.tv-table tbody tr td:first-child')).map((td) => td.textContent)
+    expect(names()).toEqual(['Bina', 'Asha', 'Chand'])
+    await userEvent.click(screen.getByRole('button', { name: 'Due' }))
+    expect(names()).toEqual(['Chand', 'Bina', 'Asha'])
+    await userEvent.click(screen.getByRole('button', { name: 'Due' }))
+    expect(names()).toEqual(['Asha', 'Bina', 'Chand'])
+  })
+
+  it('sends a corrected form and shows the card it became, right under it', async () => {
+    const form = { title: 'New expense', submit: { kind: 'expense' }, fields: [
+      { name: 'amount', label: 'Amount', type: 'number', value: 450, required: true }, { name: 'vendor', label: 'Vendor', value: 'Milk depot' }] }
+    let applied: unknown
+    const s = server([call('show_form', form), say('Check it.')], true, { add_expense: { apply: (p: unknown) => { applied = p } } }, {
+      views: builtinViews, forms: { expense: (v) => ({ kind: 'add_expense', title: `Expense ₹${v.amount} to ${v.vendor}`, payload: v }) },
+    })
+    mount({ fetch: s.fetch })
+    await ask('spent 450 on milk')
+    const amount = await screen.findByDisplayValue('450')
+    await userEvent.clear(amount)
+    await userEvent.click(screen.getByRole('button', { name: 'Prepare' }))
+    expect((await screen.findByRole('alert')).textContent).toBe('Amount is required.')
+    await userEvent.type(amount, '480')
+    await userEvent.click(screen.getByRole('button', { name: 'Prepare' }))
+    await screen.findByRole('group', { name: 'Expense ₹480 to Milk depot' })
+    expect(screen.getByText('Sent')).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm' }))
+    await screen.findByText('Done')
+    expect(applied).toEqual({ amount: 480, vendor: 'Milk depot' })
+  })
+
+  it('lets the app draw its own views', async () => {
+    const s = server([call('show_record', { title: 'Order #142', fields: [{ label: 'Total', value: 880 }] }), say('There.')], true, {}, { views: builtinViews })
+    render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><AssistantPanel views={{ record: ({ part }) => <p>Custom: {part.data.title}</p> }} /></AssistantProvider>)
+    await ask('order 142')
+    await screen.findByText('Custom: Order #142')
   })
 
   it("shows the server's sentence when the user is signed out", async () => {

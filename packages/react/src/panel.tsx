@@ -1,6 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { useAssistant } from './provider.js'
-import type { Action, Card, CardDecision, Step, TeovoMessage } from './types.js'
+import type { Action, Card, CardDecision, Step, TeovoMessage, View } from './types.js'
+import { defaultViews, isCurrent, type ViewComponent } from './views.js'
 
 export interface AssistantPanelProps {
   /** Shown before the first message. */
@@ -12,6 +13,8 @@ export interface AssistantPanelProps {
   renderCard?: (card: Card, decide: (d: CardDecision) => void, state: CardState) => ReactNode
   /** Friendly names for tools while they run, e.g. { get_sales: 'Looking at sales' }. */
   stepLabels?: Record<string, string>
+  /** Draw views yourself, by view name: replaces the built-in choices, table, record and form, or adds the app's own. */
+  views?: Record<string, ViewComponent>
   /** Show suggestion chips above the input. Default true (they only appear when the server has some). */
   showSuggestions?: boolean
   className?: string
@@ -41,7 +44,7 @@ export function AssistantPanel(props: AssistantPanelProps) {
     <section className={`tv-panel ${props.className ?? ''}`} aria-label="Assistant">
       <div className="tv-messages" role="log" aria-live="polite">
         {chat.messages.length === 0 && props.welcome ? <div className="tv-welcome">{props.welcome}</div> : null}
-        {chat.messages.map((m) => <Message key={m.id} message={m} {...props} />)}
+        {chat.messages.map((m) => <Message key={m.id} message={m} ask={ask} {...props} />)}
         {chat.status === 'submitted' ? <div className="tv-thinking">Thinking…</div> : null}
         {chat.error ? <div className="tv-error" role="alert">{errorText(chat.error)}</div> : null}
       </div>
@@ -71,8 +74,8 @@ export function AssistantPanel(props: AssistantPanelProps) {
   )
 }
 
-function Message({ message, ...props }: { message: TeovoMessage } & AssistantPanelProps) {
-  const { onAction } = useAssistant()
+function Message({ message, ask, ...props }: { message: TeovoMessage; ask: (t: string) => void } & AssistantPanelProps) {
+  const { onAction, submitForm, chat } = useAssistant()
   const steps = message.parts.filter((p) => p.type === 'data-step')
   const running = steps.filter((p) => (p.data as Step).state === 'running')
   return (
@@ -80,6 +83,14 @@ function Message({ message, ...props }: { message: TeovoMessage } & AssistantPan
       {message.parts.map((p, i) => {
         if (p.type === 'text') return <div key={i} className="tv-text">{props.renderText ? props.renderText(p.text) : p.text}</div>
         if (p.type === 'data-card') return <CardView key={p.id ?? i} card={p.data as Card} {...props} />
+        if (p.type === 'data-view') {
+          const v = p.data as View
+          const Draw = props.views?.[v.view] ?? defaultViews[v.view]
+          if (!Draw) return null
+          const id = p.id ?? String(i)
+          return <Draw key={id} part={{ ...v, id }} current={isCurrent(chat.messages, message.id)} ask={ask}
+            submit={(values) => submitForm(message.id, id, values)} />
+        }
         if (p.type === 'data-action') {
           const a = p.data as Action
           return <button key={p.id ?? i} type="button" className="tv-action" onClick={() => onAction?.(a)}>{a.label}</button>

@@ -8,6 +8,7 @@ import { toolsFor, type Action, type Identity, type Proposal, type TeovoTool, ty
 import { makeUntrusted, UNTRUSTED_RULE } from './untrusted.js'
 
 import { makeRedactor, type RedactOptions } from './redact.js'
+import { checkForm, type FormData, type FormHandler, type TeovoView } from './views.js'
 import { DEFAULT_SETTINGS, SettingsError, settingsText, validateSettings } from './settings.js'
 import { readPage, screenText, tidy, type Page, type ScreenFn, type SuggestionsFn } from './screens.js'
 export type { Page } from './screens.js'
@@ -39,6 +40,10 @@ export interface AssistantConfig<DB = unknown> {
   cards?: Record<string, CardApplier<any, DB>>
   /** How long a card can be confirmed, and how long after confirming it can be undone. */
   cardRules?: Partial<CardRules>
+  /** Views the model can show inside a reply (tables, forms, choices, records). Start from builtinViews. */
+  views?: readonly TeovoView[]
+  /** Turn a submitted form into a card, keyed by the form's submit.kind. A form whose kind isn't here can't be shown. */
+  forms?: Record<string, FormHandler<DB>>
   /** Hide fields and patterns (phones, emails, UPI ids, card numbers) from the model and the run log. See redact.ts. */
   redact?: RedactOptions
   /** Roles that may read and change their tenant's settings (GET/PUT …/settings). Default ['owner', 'admin']. */
@@ -79,6 +84,9 @@ interface ChatBody { threadId?: string; message?: UIMessage; page?: unknown }
 
 export function createAssistant<DB>(config: AssistantConfig<DB>) {
   if (!config.models.length) throw new Error('createAssistant: at least one model is required')
+  for (const v of config.views ?? []) {
+    if (config.tools.some((t) => t.name === `show_${v.name}`)) throw new Error(`createAssistant: tool show_${v.name} clashes with the view ${v.name}`)
+  }
 
   const redact = makeRedactor(config.redact)
 
@@ -173,6 +181,23 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
             },
           })
         }
+        for (const v of config.views ?? []) {
+          tools[`show_${v.name}`] = tool({
+            description: v.description,
+            inputSchema: v.data,
+            execute: async (data: unknown, { toolCallId }: { toolCallId: string }) => {
+              if (v.name === 'form') {
+                const kind = (data as FormData).submit.kind
+                if (!config.forms?.[kind]) throw new Error(`There is no form for "${kind}". Use one of: ${Object.keys(config.forms ?? {}).join(', ') || 'none'}.`)
+              }
+              writer.write({ type: 'data-view', id: toolCallId, data: { view: v.name, data } })
+              await storage.saveStep({ runId, seq: seq++, type: 'tool', toolCallId, name: `show_${v.name}`, input: clip(data, config.logLimit ?? 8000).value, truncated: false, durationMs: 0 })
+              return v.name === 'choices' ? 'Shown as buttons. Stop here: their pick arrives as their next message.'
+                : v.name === 'form' ? 'Shown as a form. When they submit it, a card is prepared for them to confirm; nothing has changed yet.'
+                : `Shown to the user as a ${v.name}. Don't repeat its contents in your reply.`
+            },
+          })
+        }
         // Tools only read, propose or offer buttons; none writes during a run, so switching model is always safe.
         let usedModel = first
         const model = fallbackModel(config.models, () => true, (from, e) => {
@@ -188,6 +213,11 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
           messages: await convertToModelMessages(history, {
             // Earlier cards reach the model with their status now, so it knows what the user confirmed or skipped.
             convertDataPart: (p) => {
+              if (p.type === 'data-view') {
+                const v = p.data as { view: string; data: { title?: string; question?: string }; submitted?: string }
+                const what = v.data.title ?? v.data.question
+                return { type: 'text', text: `[Shown to the user: ${v.view}${what ? ` "${what}"` : ''}${v.submitted ? ', submitted' : ''}]` }
+              }
               if (p.type !== 'data-card') return undefined
               const c = p.data as StoredCard
               return { type: 'text', text: cardForModel(statuses.get(c.id) ?? c) }
@@ -294,6 +324,38 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     return json(200, { thread: { id: thread.id, title: thread.title, createdAt: thread.createdAt }, messages })
   }
 
+  async function submitForm(req: Request, threadId: string, viewId: string): Promise<Response> {
+    const identity = await config.identify(req)
+    if (!identity) return json(401, { error: 'Sign in to use the assistant.' })
+    const { storage } = config
+    const thread = await storage.getThread(identity.tenantId, identity.userId, threadId)
+    if (!thread) return json(404, { error: 'That conversation was not found.' })
+    const messages = await storage.listMessages(thread.id)
+    const message = messages.find((m) => m.role === 'assistant' && m.parts.some((p) => p.type === 'data-view' && 'id' in p && p.id === viewId))
+    const part = message?.parts.find((p) => p.type === 'data-view' && 'id' in p && p.id === viewId) as { id: string; data: { view: string; data: FormData; submitted?: string } } | undefined
+    if (!message || !part || part.data.view !== 'form') return json(404, { error: 'That form was not found.' })
+    if (part.data.submitted) return json(409, { error: 'This form was already sent.' })
+    let body: { values?: unknown }
+    try { body = (await req.json()) as { values?: unknown } } catch { return json(400, { error: 'The request was not valid JSON.' }) }
+    const checked = checkForm(part.data.data, body.values)
+    if ('error' in checked) return json(400, { error: checked.error })
+    const handler = config.forms?.[part.data.data.submit.kind]
+    if (!handler) return json(501, { error: 'This app can’t take this form yet.' })
+    const ctx: ToolContext<DB> = { identity, db: await config.asUser(identity, req), untrusted: makeUntrusted(crypto.randomUUID().slice(0, 8)) }
+    let proposal: Proposal
+    try { proposal = await handler(checked.values, ctx) } catch (e) { return json(422, { error: e instanceof Error ? e.message : String(e) }) }
+    const runId = (message.metadata as { runId?: string } | undefined)?.runId ?? crypto.randomUUID()
+    const card: StoredCard = { ...proposal, id: crypto.randomUUID(), threadId: thread.id, runId, status: 'shown' }
+    await storage.saveCard(card)
+    config.on?.card?.(card)
+    // The card joins the reply right under its form, so a reopened conversation shows both.
+    const parts: UIMessage['parts'] = message.parts.flatMap((p): UIMessage['parts'] => (p === (part as unknown)
+      ? [{ type: 'data-view', id: part.id, data: { ...part.data, submitted: card.id, values: checked.values } }, { type: 'data-card', id: card.id, data: publicCard(card) }]
+      : [p]))
+    await storage.saveMessages(thread.id, [{ ...message, parts }])
+    return json(200, { card: publicCard(card), messageId: message.id })
+  }
+
   async function card(req: Request, id: string, decision: Decision): Promise<Response> {
     const identity = await config.identify(req)
     if (!identity) return json(401, { error: 'Sign in to use the assistant.' })
@@ -320,6 +382,8 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
       if ((req.method === 'GET' || req.method === 'PUT') && path.endsWith('/settings')) return tenantSettings(req)
       if (req.method === 'GET' && path.endsWith('/threads')) return threads(req)
       const t = /\/threads\/([0-9a-f-]{36})(\/archive)?$/i.exec(path)
+      const f = /\/threads\/([0-9a-f-]{36})\/views\/([^/]{1,100})\/submit$/i.exec(path)
+      if (req.method === 'POST' && f) return submitForm(req, f[1]!.toLowerCase(), decodeURIComponent(f[2]!))
       if (t && ((req.method === 'GET' && !t[2]) || (req.method === 'POST' && t[2]))) return threads(req, t[1]!.toLowerCase(), Boolean(t[2]))
       const m = /\/cards\/([0-9a-f-]{36})\/(confirm|skip|undo)$/i.exec(path)
       if (req.method === 'POST' && m) return card(req, m[1]!.toLowerCase(), m[2] as Decision)
