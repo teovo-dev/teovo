@@ -1,5 +1,5 @@
 import type { UIMessage } from 'ai'
-import type { Proposal } from './tools'
+import type { Proposal } from './tools.js'
 
 export interface Thread { id: string; tenantId: string; userId: string; title: string | null; createdAt: string }
 

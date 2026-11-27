@@ -1,6 +1,6 @@
 import { periodKey, type CardPatch, type Storage, type StoredCard, type Thread, type Totals, type Unit } from '@teovo/server'
 import type { UIMessage } from 'ai'
-import type { Query } from './migrate'
+import type { Query } from './migrate.js'
 
 const iso = (v: unknown) => (v ? new Date(v as string).toISOString() : undefined)
 const card = (r: any): StoredCard => {

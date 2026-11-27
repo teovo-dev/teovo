@@ -1,5 +1,5 @@
-import type { CardStatus, Storage, StoredCard } from './storage'
-import type { Identity, ToolContext } from './tools'
+import type { CardStatus, Storage, StoredCard } from './storage.js'
+import type { Identity, ToolContext } from './tools.js'
 
 /** How the app applies (and maybe takes back) one kind of card. Keyed by the card's `kind`. */
 export interface CardApplier<P = any, DB = any> {

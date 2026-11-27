@@ -1,4 +1,4 @@
-import { FEATURE_TABLES, migrations, type SchemaOptions } from './schema'
+import { FEATURE_TABLES, migrations, type SchemaOptions } from './schema.js'
 
 /** Runs one SQL statement with parameters, e.g. (text, params) => pool.query(text, params). */
 export type Query = (text: string, params?: unknown[]) => Promise<{ rows: any[] }>

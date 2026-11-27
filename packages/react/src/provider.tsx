@@ -1,7 +1,7 @@
 import { useChat } from '@ai-sdk/react'
 import { DefaultChatTransport } from 'ai'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import type { Action, Card, CardDecision, Page, TeovoMessage } from './types'
+import type { Action, Card, CardDecision, Page, TeovoMessage } from './types.js'
 
 export interface AssistantProviderProps {
   /** Where the app mounted the server handler, e.g. '/api/assistant'. The panel posts to `${endpoint}/chat`. */
