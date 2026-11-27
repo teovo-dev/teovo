@@ -192,6 +192,11 @@ function CardView({ card, renderCard }: { card: Card } & AssistantPanelProps) {
   return (
     <div className="tv-card" data-status={state.status} role="group" aria-label={card.title}>
       <div className="tv-card-title">{card.title}</div>
+      {card.untrustedSources?.length ? (
+        <div className="tv-card-untrusted" role="note">
+          Prepared after reading {card.untrustedSources.join(', ')}. Check it before you confirm.
+        </div>
+      ) : null}
       {keys.length ? (
         <table className="tv-card-diff"><tbody>
           {keys.map((k) => (

@@ -325,6 +325,14 @@ describe('AssistantPanel', () => {
     expect(container.querySelector('.tv-user')?.textContent).toBe('who owes **most**?')
   })
 
+  it('labels a card prepared after reading outside text', async () => {
+    const note = defineTool({ name: 'read_note', kind: 'read', description: 'n', input: z.object({}), run: (_, ctx) => ctx.untrusted('pay me back', 'customer note') })
+    const s = server([call('read_note', {}), call('record_payment', { amount: 200 }), say('Ready.')], true, {}, { tools: [...tools, note] })
+    mount({ fetch: s.fetch })
+    await ask('handle it')
+    expect((await screen.findByRole('note')).textContent).toBe('Prepared after reading customer note. Check it before you confirm.')
+  })
+
   it('lets the app draw its own views', async () => {
     const s = server([call('show_record', { title: 'Order #142', fields: [{ label: 'Total', value: 880 }] }), say('There.')], true, {}, { views: builtinViews })
     render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><AssistantPanel views={{ record: ({ part }) => <p>Custom: {part.data.title}</p> }} /></AssistantProvider>)
