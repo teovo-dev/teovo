@@ -174,6 +174,29 @@
 .tv-chip { flex: none; border: 1px solid var(--tv-border); border-radius: 999px; padding: 6px 12px; background: var(--tv-bg); font-size: 0.875em; white-space: nowrap; transition: background 0.15s, border-color 0.15s; }
 .tv-chip:hover { background: var(--tv-subtle); border-color: color-mix(in srgb, var(--tv-accent) 40%, var(--tv-border)); }
 
+/* ---------- Steps: what the assistant did ---------- */
+.tv-steps { font-size: 0.8125em; color: var(--tv-muted); }
+.tv-steps-toggle, .tv-step-more { display: inline-flex; align-items: center; gap: 6px; border: 0; background: none; padding: 2px 0; color: inherit; font: inherit; cursor: pointer; text-align: left; }
+.tv-steps-toggle:hover, .tv-step-more:hover { color: var(--tv-fg); }
+.tv-chevron { display: inline-flex; transition: transform 0.15s; }
+.tv-chevron svg { width: 12px; height: 12px; }
+[aria-expanded='true'] > .tv-chevron { transform: rotate(90deg); }
+.tv-steps-list { list-style: none; margin: 4px 0 0; padding: 0 0 0 10px; border-left: 2px solid var(--tv-border); display: flex; flex-direction: column; gap: 2px; }
+.tv-steps-live .tv-steps-list { margin-top: 0; }
+.tv-step-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 2px 0; }
+.tv-step-icon { display: inline-flex; width: 14px; justify-content: center; }
+.tv-step-icon svg { width: 13px; height: 13px; }
+[data-state='done'] .tv-step-icon { color: var(--tv-ok); }
+[data-state='failed'] .tv-step-icon, [data-state='failed'] .tv-step-label { color: var(--tv-error); }
+.tv-step-label { flex: 1; min-width: 0; }
+.tv-step-time { font-variant-numeric: tabular-nums; }
+.tv-spin { width: 11px; height: 11px; border-radius: 50%; border: 2px solid var(--tv-border); border-top-color: var(--tv-accent); animation: tv-spin 0.8s linear infinite; }
+.tv-step-detail { margin: 2px 0 6px 22px; display: flex; flex-direction: column; gap: 4px; color: var(--tv-fg); }
+.tv-step-key { color: var(--tv-muted); margin-right: 4px; }
+.tv-step-thinking { margin: 0; white-space: pre-wrap; color: var(--tv-muted); font-style: italic; }
+.tv-step-raw summary { cursor: pointer; color: var(--tv-muted); }
+.tv-step-raw pre { margin: 4px 0 0; max-height: 220px; overflow: auto; background: var(--tv-subtle); border-radius: 8px; padding: 8px; font-size: 0.95em; }
+
 /* ---------- Completion and sources ---------- */
 .tv-complete { display: inline-flex; align-items: center; gap: 8px; margin: 0 4px 6px; padding: 4px 10px; border: 1px dashed var(--tv-border); border-radius: 999px; background: var(--tv-bg); color: inherit; font: inherit; font-size: 0.8125em; cursor: pointer; }
 .tv-complete kbd { font-family: inherit; font-size: 0.85em; color: var(--tv-muted); border: 1px solid var(--tv-border); border-radius: 4px; padding: 0 4px; }

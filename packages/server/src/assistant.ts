@@ -294,11 +294,12 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
             description: t.description,
             inputSchema: t.input,
             execute: async (input: unknown, { toolCallId }: { toolCallId: string }) => {
-              writer.write({ type: 'data-step', id: toolCallId, data: { name: t.name, state: 'running' } })
+              writer.write({ type: 'data-step', id: toolCallId, data: { name: t.name, kind: t.kind, state: 'running' } })
               const started = Date.now()
               const step = { runId, seq: seq++, type: 'tool' as const, toolCallId, name: t.name }
               const max = config.logLimit ?? 8000
               const logged = clip(input, max)
+              let failed: string | undefined
               try {
                 const raw = await t.run(input, ctx)
                 // What a read tool found is what the model sees, so it is what gets hidden. Cards keep their payload.
@@ -332,10 +333,12 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
                 }
                 return out
               } catch (e) {
-                await storage.saveStep({ ...step, input: logged.value, truncated: logged.truncated, error: e instanceof Error ? e.message : String(e), durationMs: Date.now() - started })
+                failed = e instanceof Error ? e.message : String(e)
+                await storage.saveStep({ ...step, input: logged.value, truncated: logged.truncated, error: failed, durationMs: Date.now() - started })
                 throw e
               } finally {
-                writer.write({ type: 'data-step', id: toolCallId, data: { name: t.name, state: 'done' } })
+                // How long it took and whether it failed, for the steps list under the reply.
+                writer.write({ type: 'data-step', id: toolCallId, data: { name: t.name, kind: t.kind, state: 'done', ms: Date.now() - started, ...(failed ? { error: failed.slice(0, 300) } : {}) } })
               }
             },
           })

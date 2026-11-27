@@ -42,6 +42,13 @@ export interface AssistantPanelProps {
   pageLabel?: false | ((page: Page) => ReactNode)
   /** A quiet line above the message box when little of the allowance is left ("8 messages left today"). Default true. */
   showAllowance?: boolean
+  /**
+   * What the assistant did for a reply: each look-up, change and button, with its time. Shown live while it works,
+   * then folded into "▸ 2 steps" above the reply. 'open' keeps it unfolded; false hides it. Default true.
+   */
+  showSteps?: boolean | 'open'
+  /** Inside each step, what it asked for and what came back (the raw data under its own arrow). Default true. */
+  stepDetails?: boolean
   className?: string
 }
 
@@ -238,6 +245,9 @@ function Message({ message, ask, stopped, last, busy, ...props }: { message: Teo
   const running = steps.filter((p) => (p.data as Step).state === 'running')
   return (
     <div className={`tv-message tv-${message.role}`} data-role={message.role}>
+      {message.role === 'assistant' && props.showSteps !== false
+        ? <StepsList message={message} live={busy && last} open={props.showSteps === 'open'} labels={props.stepLabels} details={props.stepDetails !== false} />
+        : null}
       {message.parts.map((p, i) => {
         if (p.type === 'text') {
           if (!p.text) return null
@@ -279,10 +289,10 @@ function Message({ message, ask, stopped, last, busy, ...props }: { message: Teo
         }
         return null
       })}
-      {running.map((p) => {
+      {props.showSteps === false ? running.map((p) => {
         const name = (p.data as Step).name
         return <div key={p.id} className="tv-step">{props.stepLabels?.[name] ?? `Using ${name.replace(/_/g, ' ')}`}…</div>
-      })}
+      }) : null}
       {stopped ? <div className="tv-stopped">Stopped</div> : null}
       {!busy && message.role === 'user' && ownText ? (
         <div className="tv-msg-actions">
@@ -291,6 +301,109 @@ function Message({ message, ask, stopped, last, busy, ...props }: { message: Teo
       ) : null}
       {!(busy && last) && message.role === 'assistant' ? <ReplyActions message={message} last={last} text={ownText} /> : null}
     </div>
+  )
+}
+
+interface StepView { id: string; name: string; kind?: Step['kind']; state: 'running' | 'done'; ms?: number; error?: string; input?: unknown; output?: unknown; thinking?: string }
+
+/** What the assistant did for one reply, from its step parts, its tool parts (input and result) and its thinking. */
+function stepsOf(message: TeovoMessage): StepView[] {
+  const tools = new Map<string, { input?: unknown; output?: unknown; errorText?: string }>()
+  for (const p of message.parts) {
+    if (p.type.startsWith('tool-') && 'toolCallId' in p) {
+      const t = p as unknown as { toolCallId: string; input?: unknown; output?: unknown; errorText?: string }
+      tools.set(t.toolCallId, t)
+    }
+  }
+  const out: StepView[] = []
+  const thinking = message.parts.filter((p) => p.type === 'reasoning').map((p) => (p as { text: string }).text).join('\n').trim()
+  if (thinking) out.push({ id: 'thinking', name: 'thinking', state: 'done', thinking })
+  for (const p of message.parts) {
+    if (p.type !== 'data-step') continue
+    const st = p.data as Step
+    const t = tools.get(p.id ?? '')
+    out.push({ id: p.id ?? st.name, name: st.name, kind: st.kind, state: st.state, ms: st.ms, error: st.error ?? t?.errorText, input: t?.input, output: t?.output })
+  }
+  return out
+}
+
+const plain = (key: string) => key.replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ').toLowerCase()
+const brief = (v: unknown): string => (v === true ? 'yes' : v === false ? 'no' : v === null || v === undefined ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v))
+const seconds = (ms: number) => (ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(1)} s`)
+
+/** "3 items", "1 record", or the first words of a text result. */
+function foundText(v: unknown): string {
+  if (Array.isArray(v)) return `${v.length} ${v.length === 1 ? 'item' : 'items'}`
+  if (v && typeof v === 'object') return `1 record (${Object.keys(v).slice(0, 4).map(plain).join(', ')}${Object.keys(v).length > 4 ? ', …' : ''})`
+  if (typeof v === 'string') return v.length > 80 ? `${v.slice(0, 80)}…` : v
+  return brief(v)
+}
+
+function StepsList({ message, live, open, labels, details }: { message: TeovoMessage; live: boolean; open: boolean; labels?: Record<string, string>; details: boolean }) {
+  const steps = stepsOf(message)
+  const [shown, setShown] = useState(open)
+  if (!steps.length) return null
+  const label = (s: StepView) => s.name === 'thinking' ? 'Thought it through'
+    : labels?.[s.name] ?? (s.kind === 'propose' ? `Prepared a change (${plain(s.name)})` : s.kind === 'action' ? `Offered a button (${plain(s.name)})` : `Looked up ${plain(s.name)}`)
+  const failed = steps.filter((s) => s.error).length
+  const list = (
+    <ol className="tv-steps-list">
+      {steps.map((s) => (
+        <li key={s.id} className="tv-steps-item" data-state={s.error ? 'failed' : s.state}>
+          <StepRow step={s} label={label(s)} details={details} />
+        </li>
+      ))}
+    </ol>
+  )
+  // While the reply is being written: the steps as they happen, unfolded (tools are quick; the model's thinking
+  // between them is not, so they stay open until the whole reply is done).
+  if (live) return <div className="tv-steps tv-steps-live" aria-live="polite">{list}</div>
+  return (
+    <div className="tv-steps">
+      <button type="button" className="tv-steps-toggle" aria-expanded={shown} onClick={() => setShown(!shown)}>
+        <span className="tv-chevron" aria-hidden="true">{icons.chevron}</span>
+        {steps.length} {steps.length === 1 ? 'step' : 'steps'}{failed ? ` · ${failed} failed` : ''}
+      </button>
+      {shown ? list : null}
+    </div>
+  )
+}
+
+function StepRow({ step, label, details }: { step: StepView; label: string; details: boolean }) {
+  const [open, setOpen] = useState(false)
+  const hasMore = details && (step.thinking || step.input !== undefined || step.output !== undefined || step.error)
+  const head = (
+    <>
+      <span className="tv-step-icon" aria-hidden="true">{step.state === 'running' ? <span className="tv-spin" /> : step.error ? icons.cross : icons.check}</span>
+      <span className="tv-step-label">{label}{step.state === 'running' ? '…' : ''}</span>
+      {step.ms !== undefined ? <span className="tv-step-time">{seconds(step.ms)}</span> : null}
+    </>
+  )
+  if (!hasMore) return <div className="tv-step-head">{head}</div>
+  const inputs = step.input && typeof step.input === 'object' && !Array.isArray(step.input) ? Object.entries(step.input as Record<string, unknown>) : []
+  return (
+    <>
+      <button type="button" className="tv-step-head tv-step-more" aria-expanded={open} onClick={() => setOpen(!open)}>
+        {head}<span className="tv-chevron" aria-hidden="true">{icons.chevron}</span>
+      </button>
+      {open ? (
+        <div className="tv-step-detail">
+          {step.thinking ? <p className="tv-step-thinking">{step.thinking}</p> : null}
+          {step.error ? <p className="tv-error">{step.error}</p> : null}
+          {step.input !== undefined && !step.thinking ? (
+            <div><span className="tv-step-key">Asked for</span> {inputs.length ? inputs.map(([k, v]) => `${plain(k)}: ${brief(v)}`).join(' · ') : 'everything'}</div>
+          ) : null}
+          {step.output !== undefined && step.kind !== 'propose' && step.kind !== 'action' ? (
+            <>
+              <div><span className="tv-step-key">Found</span> {foundText(step.output)}</div>
+              <details className="tv-step-raw"><summary>Data</summary><pre>{JSON.stringify(step.output, null, 2).slice(0, 4000)}</pre></details>
+            </>
+          ) : null}
+          {step.kind === 'propose' ? <div><span className="tv-step-key">Result</span> a card to confirm (nothing changed yet)</div> : null}
+          {step.kind === 'action' ? <div><span className="tv-step-key">Result</span> a button under the reply</div> : null}
+        </div>
+      ) : null}
+    </>
   )
 }
 
@@ -452,6 +565,8 @@ const icons = {
   up: svg(<path d="M7 10v11M7 10l4-7a2 2 0 0 1 3 2l-1 5h6a2 2 0 0 1 2 2.3l-1.4 7A2 2 0 0 1 17.6 21H7" />),
   down: svg(<path d="M17 14V3M17 14l-4 7a2 2 0 0 1-3-2l1-5H5a2 2 0 0 1-2-2.3l1.4-7A2 2 0 0 1 6.4 3H17" />),
   again: svg(<path d="M3 12a9 9 0 0 1 15.5-6.3L21 8M21 3v5h-5M21 12a9 9 0 0 1-15.5 6.3L3 16M3 21v-5h5" />),
+  chevron: svg(<path d="M9 6l6 6-6 6" />),
+  cross: svg(<path d="M6 6l12 12M18 6L6 18" />),
 }
 
 /** True when the reply on screen already shows text, a view, a card, a button or a running step. */

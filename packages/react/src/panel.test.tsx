@@ -305,15 +305,36 @@ describe('AssistantPanel', () => {
     expect(onAction).toHaveBeenCalledWith({ label: 'Open order #2', action: 'navigate', args: { to: '/orders/2' } })
   })
 
-  it('shows a line while a tool runs and removes it when done', async () => {
+  it('shows the steps live while it works, then folds them into "1 step" with details under arrows', async () => {
     let open!: () => void
     gate = { open: () => open(), wait: new Promise<void>((r) => { open = r }) }
     mount({ fetch: server([call('get_sales', {}), say('₹950')]).fetch })
     await ask('sales?')
-    await screen.findByText('Using get sales…')
+    await screen.findByText('Looked up get sales…')                  // live, with a spinner
     await act(async () => gate!.open())
     await screen.findByText('₹950')
-    expect(screen.queryByText('Using get sales…')).toBeNull()
+    expect(screen.queryByText('Looked up get sales…')).toBeNull()
+    const toggle = screen.getByRole('button', { name: /^1 step/ })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    await userEvent.click(toggle)
+    const row = screen.getByRole('button', { name: /Looked up get sales/ })
+    await userEvent.click(row)
+    expect(screen.getByText('Asked for').parentElement!.textContent).toBe('Asked for everything')
+    expect(screen.getByText('Found').parentElement!.textContent).toBe('Found 1 record (total)')
+    expect(document.querySelector('.tv-step-raw pre')!.textContent).toContain('"total": 950')
+  })
+
+  it('marks a step that failed, with the reason', async () => {
+    const s = server([call('get_stock', {}), say('I could not read the stock.')], true, {}, {
+      tools: [defineTool({ name: 'get_stock', kind: 'read', description: 'Stock', input: z.object({}), run: () => { throw new Error('The stock sheet is offline.') } })],
+    })
+    mount({ fetch: s.fetch })
+    await ask('stock?')
+    await screen.findByText('I could not read the stock.')
+    await userEvent.click(screen.getByRole('button', { name: /1 failed/ }))
+    expect(document.querySelector('.tv-steps-item')!.getAttribute('data-state')).toBe('failed')
+    await userEvent.click(screen.getByRole('button', { name: /Looked up get stock/ }))
+    expect(document.querySelector('.tv-step-detail .tv-error')!.textContent).toBe('The stock sheet is offline.')
   })
 
   it('sends the screen the user is on, and stops after they leave it', async () => {
