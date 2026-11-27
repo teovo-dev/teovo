@@ -26,6 +26,7 @@
     "access": "public"
   },
   "dependencies": {
+    "@ai-sdk/provider": "^4.0.39",
     "ai": "^7.0.183",
     "zod": "^4.6.7"
   }
