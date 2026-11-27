@@ -92,3 +92,4 @@
 @media (max-width: 640px) {
   .tv-sheet { top: auto; left: 0; width: 100vw; height: 85vh; border-radius: var(--tv-radius) var(--tv-radius) 0 0; box-shadow: 0 -4px 24px rgb(0 0 0 / 0.2); padding-bottom: env(safe-area-inset-bottom); }
 }
+.tv-card-untrusted { font-size: 0.875em; color: var(--tv-muted); border-left: 3px solid #d97706; padding-left: 8px; }

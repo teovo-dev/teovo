@@ -24,6 +24,8 @@ export interface Card {
   status: 'shown' | 'confirmed' | 'skipped' | 'undone' | 'expired' | 'waiting_for_approval'
   /** After confirming: whether the app can take the change back. */
   reversible?: boolean
+  /** Outside text the assistant read before preparing it, e.g. ['customer note']. */
+  untrustedSources?: string[]
 }
 
 /** One conversation in the history list. */

@@ -150,12 +150,15 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     let seq = 0
     const statuses = new Map((await storage.listCards(thread.id)).map((c) => [c.id, c]))
     const nonce = crypto.randomUUID().slice(0, 8)
-    const ctx: ToolContext<DB> = { identity, db, untrusted: makeUntrusted(nonce) }
+    // Which outside text this run has read: the user's pictures, and whatever tools fenced as untrusted.
+    const seen = new Set<string>(message.parts.some((p) => p.type === 'file') ? ['picture'] : [])
+    const fence = makeUntrusted(nonce)
+    const ctx: ToolContext<DB> = { identity, db, untrusted: (text, source) => { seen.add(source.replace(/[^\w .-]/g, '').slice(0, 40) || 'outside text'); return fence(text, source) } }
     const instructions = typeof config.instructions === 'function' ? await config.instructions({ identity, page }) : config.instructions
     const summary = page && config.screen ? await Promise.resolve().then(() => config.screen!(page, ctx)).catch((e) => { config.on?.error?.(e, { identity, threadId: thread.id }); return null }) : null
     const shownSummary = summary === null ? null : String(redact(summary))
     const formats: Formats = { ...DEFAULT_FORMATS, ...config.formats, ...settings.formats }
-    const system = `${instructions}${formatsText(formats, config.now?.() ?? new Date())}${settingsText(settings)}\n\n${UNTRUSTED_RULE}${screenText(page, shownSummary, ctx.untrusted)}`
+    const system = `${instructions}${formatsText(formats, config.now?.() ?? new Date())}${settingsText(settings)}\n\n${UNTRUSTED_RULE}${screenText(page, shownSummary, fence)}`
 
     const stream = createUIMessageStream<UIMessage<{ runId: string; threadId: string; formats: Formats }>>({
       originalMessages: history as UIMessage<{ runId: string; threadId: string; formats: Formats }>[],
@@ -182,7 +185,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
                 await storage.saveStep({ ...step, input: logged.value, output: result.value, truncated: logged.truncated || result.truncated, durationMs: Date.now() - started })
                 if (t.kind === 'propose') {
                   const p = out as Proposal
-                  const card: StoredCard = { ...p, id: crypto.randomUUID(), threadId: thread.id, runId, status: 'shown' }
+                  const card: StoredCard = { ...p, id: crypto.randomUUID(), threadId: thread.id, runId, status: 'shown', ...(seen.size ? { untrustedSources: [...seen] } : {}) }
                   await storage.saveCard(card)
                   config.on?.card?.(card)
                   writer.write({ type: 'data-card', id: card.id, data: publicCard(card) })

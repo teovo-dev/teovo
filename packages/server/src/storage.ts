@@ -17,6 +17,11 @@ export interface StoredCard extends Proposal {
   /** What the app's undo needs, returned by its apply. Never sent to the browser. */
   undo?: unknown
   undoneAt?: string
+  /**
+   * Outside text the assistant had read in this run before preparing the card (e.g. 'customer note', 'picture').
+   * The panel labels the card so the user checks it before confirming.
+   */
+  untrustedSources?: string[]
 }
 
 export type CardStatus = 'shown' | 'confirmed' | 'skipped' | 'undone' | 'expired' | 'waiting_for_approval'
