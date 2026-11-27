@@ -87,4 +87,19 @@ describe('AssistantSheet', () => {
     await userEvent.click(screen.getByRole('button', { name: 'Close assistant' }))
     expect(document.documentElement.dataset.tvSheet).toBeUndefined()
   })
+
+  it('floats as a window over the page when asked, still without a backdrop', async () => {
+    render(<AssistantSheet label="Ask" layout="floating"><textarea aria-label="Message" /></AssistantSheet>)
+    await userEvent.click(screen.getByRole('button', { name: 'Ask' }))
+    const panel = screen.getByRole('dialog')
+    expect(panel.className).toContain('tv-sheet-floating')
+    expect(panel.getAttribute('aria-modal')).toBe('false')
+    expect(document.querySelector('.tv-sheet-backdrop')).toBeNull()
+    expect(document.documentElement.dataset.tvSheet).toBe('floating')
+    // The page needn't make room for a floating window.
+    expect(document.documentElement.style.getPropertyValue('--tv-sheet-width')).toBe('')
+    // The open button stays below it and closes it.
+    await userEvent.click(screen.getByRole('button', { name: 'Ask' }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
 })

@@ -47,6 +47,13 @@ export interface AssistantSheetProps {
    * html[data-tv-sheet="docked"] .app { margin-right: var(--tv-sheet-width) }
    */
   modal?: boolean | 'phone'
+  /**
+   * How it opens when it doesn't cover the app (wide screens, unless modal is true). 'panel' (default): docked on the
+   * right, full height; the page can make room for it. 'floating': a chat window above the open button in the
+   * bottom-right corner, over the page's edge, with the page still usable around it. While floating, <html> gets
+   * data-tv-sheet="floating".
+   */
+  layout?: 'panel' | 'floating'
 }
 
 const PHONE = '(max-width: 640px)'
@@ -101,14 +108,15 @@ export function AssistantSheet(props: AssistantSheetProps) {
   }, [open, modal, props.shortcut])
 
   // Docked: tell the page, so it can make room for the panel instead of sitting under it.
-  const docked = open && !modal
+  const floating = props.layout === 'floating'
+  const beside = open && !modal ? (floating ? 'floating' : 'docked') : null
   useEffect(() => {
-    if (!docked || typeof document === 'undefined') return
+    if (!beside || typeof document === 'undefined') return
     const html = document.documentElement
-    html.dataset.tvSheet = 'docked'
-    html.style.setProperty('--tv-sheet-width', SHEET_WIDTH)
+    html.dataset.tvSheet = beside
+    if (beside === 'docked') html.style.setProperty('--tv-sheet-width', SHEET_WIDTH)
     return () => { delete html.dataset.tvSheet; html.style.removeProperty('--tv-sheet-width') }
-  }, [docked])
+  }, [beside])
 
   const wasOpen = useRef(open)
   useEffect(() => {
@@ -129,8 +137,8 @@ export function AssistantSheet(props: AssistantSheetProps) {
       {open ? (
         <>
           {modal ? <div className="tv-sheet-backdrop" onClick={() => set(false)} /> : null}
-          <div ref={sheet} id="tv-sheet" className={modal ? 'tv-sheet' : 'tv-sheet tv-sheet-docked'} role="dialog" aria-modal={modal} aria-label="Assistant"
-            style={modal ? undefined : { width: `min(${SHEET_WIDTH}, 100vw)` }}>
+          <div ref={sheet} id="tv-sheet" className={modal ? 'tv-sheet' : floating ? 'tv-sheet tv-sheet-floating' : 'tv-sheet tv-sheet-docked'} role="dialog" aria-modal={modal} aria-label="Assistant"
+            style={modal || floating ? undefined : { width: `min(${SHEET_WIDTH}, 100vw)` }}>
             <div className="tv-sheet-header">
               <div className="tv-sheet-title">{props.header ?? props.label ?? 'Assistant'}</div>
               <button type="button" className="tv-sheet-close" aria-label="Close assistant" onClick={() => set(false)}>
