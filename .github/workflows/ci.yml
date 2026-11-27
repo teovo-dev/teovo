@@ -24,4 +24,4 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - name: Built packages load in plain Node
-        run: node --input-type=module -e "await import('@teovo/server'); await import('@teovo/server/testing'); await import('@teovo/react'); await import('@teovo/db'); await import('teovo')"
+        run: node --input-type=module -e "await import('@teovo/server'); await import('@teovo/server/testing'); await import('@teovo/server/workers-ai'); await import('@teovo/react'); await import('@teovo/db'); await import('teovo')"

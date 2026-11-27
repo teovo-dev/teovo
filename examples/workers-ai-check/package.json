@@ -1,0 +1,17 @@
+{
+  "name": "teovo-example-workers-ai-check",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --port 8790",
+    "check": "node check.mjs"
+  },
+  "dependencies": {
+    "@teovo/server": "0.0.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20261127.1",
+    "wrangler": "4.161.0"
+  }
+}

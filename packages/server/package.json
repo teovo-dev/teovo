@@ -17,6 +17,10 @@
     "./testing": {
       "types": "./dist/testing.d.ts",
       "import": "./dist/testing.js"
+    },
+    "./workers-ai": {
+      "types": "./dist/workers-ai.d.ts",
+      "import": "./dist/workers-ai.js"
     }
   },
   "files": [

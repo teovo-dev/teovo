@@ -7,6 +7,9 @@
       "node"
     ],
     "paths": {
+      "@teovo/server/workers-ai": [
+        "./packages/server/src/workers-ai.ts"
+      ],
       "@teovo/server/testing": [
         "./packages/server/src/testing.ts"
       ],

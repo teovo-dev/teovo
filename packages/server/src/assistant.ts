@@ -85,6 +85,13 @@ export interface AssistantConfig<DB = unknown> {
 
 const FAILED = 'The assistant could not finish this reply. Try again.'
 
+/**
+ * Said whenever the model can prepare changes. A model once told a shop owner "Payment recorded" when it had only
+ * shown a card; the user must never believe something changed before they confirmed it.
+ */
+export const CARDS_RULE = 'Tools that prepare a change (cards and forms) change nothing by themselves: the user confirms or skips each card. ' +
+  'Say a change is ready to confirm, never that it is done, recorded or saved, unless a later message says the user confirmed it.'
+
 const DEFAULT_TIMEOUTS = { firstChunkMs: 30_000, chunkMs: 20_000, totalMs: 120_000 }
 
 function clip(v: unknown, max: number): { value: unknown; truncated: boolean } {
@@ -185,7 +192,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     const summary = page && config.screen ? await Promise.resolve().then(() => config.screen!(page, ctx)).catch((e) => { config.on?.error?.(e, { identity, threadId: thread.id }); return null }) : null
     const shownSummary = summary === null ? null : String(redact(summary))
     const formats: Formats = { ...DEFAULT_FORMATS, ...config.formats, ...settings.formats }
-    const system = `${instructions}${formatsText(formats, config.now?.() ?? new Date())}${settingsText(settings)}${screensText(config.screens ?? [])}${config.views?.length ? `\n\n${VIEWS_RULE}${formsText(config.forms ?? {})}` : ''}\n\n${UNTRUSTED_RULE}${screenText(page, shownSummary, fence)}`
+    const system = `${instructions}${formatsText(formats, config.now?.() ?? new Date())}${settingsText(settings)}${screensText(config.screens ?? [])}${config.views?.length ? `\n\n${VIEWS_RULE}${formsText(config.forms ?? {})}` : ''}${config.tools.some((t) => t.kind === 'propose') || config.views?.some((v) => v.name === 'form') ? `\n\n${CARDS_RULE}` : ''}\n\n${UNTRUSTED_RULE}${screenText(page, shownSummary, fence)}`
 
     const stream = createUIMessageStream<UIMessage<{ runId: string; threadId: string; formats: Formats }>>({
       originalMessages: history as UIMessage<{ runId: string; threadId: string; formats: Formats }>[],
@@ -216,7 +223,9 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
                   await storage.saveCard(card)
                   config.on?.card?.(card)
                   writer.write({ type: 'data-card', id: card.id, data: publicCard(card) })
-                  return `Shown to the user as a card: "${p.title}". Nothing has changed yet; the user confirms or skips it.`
+                  // Worded for small models too: they lean on the last tool result more than on the system prompt.
+                  return `NOT DONE YET. "${p.title}" is shown to the user as a card with Confirm and Skip; nothing has changed. ` +
+                    'In your reply, say it is ready for them to confirm. Do not say it is recorded, saved or done.'
                 }
                 if (t.kind === 'action') {
                   writer.write({ type: 'data-action', id: toolCallId, data: out as Action })
@@ -318,6 +327,10 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
           const rows: UsageRow[] = []
           if (u?.inputTokens) rows.push({ ...base, unit: 'input_tokens', amount: u.inputTokens })
           if (u?.outputTokens) rows.push({ ...base, unit: 'output_tokens', amount: u.outputTokens })
+          // Providers with their own cost unit report it per step (Workers AI: neurons).
+          const steps = await Promise.resolve(result.steps).catch(() => [])
+          const neurons = steps.reduce((n, s) => n + (Number((s.providerMetadata?.workersAi as { neurons?: number } | undefined)?.neurons) || 0), 0)
+          if (neurons > 0) rows.push({ ...base, unit: 'neurons', amount: neurons })
           if (rows.length) { await storage.addUsage(rows); config.on?.usage?.(rows) }
         }
       },
