@@ -3,14 +3,14 @@
 What each release holds. "Proven in" names the apps where it already works today; "Built on" is what Teovo uses for it.
 Status numbers are pull requests in this repository. Rows with no status are planned for that release.
 "Checked in the app" means someone used it in examples/shop as a user, with a real model, and it looked and behaved
-right (last walk-through: 27 Nov 2026, Gemini 2.5 Flash, desktop and phone width). "Tests only" means automated tests
+right (last walk-through: 27 Nov 2026, Gemini 2.5 Flash and flash-lite, desktop and phone width). "Tests only" means automated tests
 cover it but nobody has tried it by hand. A feature counts as done only when this column says Yes.
 
 | Feature | Release | Status | Checked in the app | Proven in | Built on |
 | --- | --- | --- | --- | --- | --- |
 | Tool loop with step cap, retries and timeouts | v1 | Built (#3) | Yes | all five apps | Vercel AI SDK |
 | Ordered model fallback, with no switch after a tool has changed something | v1 | Built (#3) | Yes: Flash overloaded, flash-lite answered | scoops, bricks | kit |
-| Stalled-reply watchdog: first-output and idle timeouts | v1 | Built (#3) | Tests only | bricks | Vercel AI SDK |
+| Stalled-reply watchdog: first-output and idle timeouts | v1 | Built (#3, fixed #27) | Yes (#27: it never fired with Gemini; now times the wait itself and hands over to the next model) | bricks | Vercel AI SDK |
 | Three tool types: read, propose, action | v1 | Built (#3) | Yes | scoops | kit |
 | Confirm and skip cards | v1 | Built (#7) | Yes (#26: labels, ₹ and dates, new-record layout) | scoops | kit |
 | Undo by reversing the change, stored so it survives a reload | v1 | Built (#7) | Yes, after a reload too | scoops, in memory only | kit tables |
@@ -21,7 +21,7 @@ cover it but nobody has tried it by hand. A feature counts as done only when thi
 | Voice input and image reading | v1 | Built (#17) | Pictures yes; voice needs a real microphone | scoops | kit, Vercel AI SDK |
 | Threads and message history | v1 | Built (#4, #13) | Yes | parityai, scobly | kit tables |
 | One rule for what history the model sees, including earlier tool results | v1 | Built (#7, #21) | Tests only | new | kit |
-| Per-tenant budgets and a usage ledger | v1 | Built (#6) | Usage rows yes; a limit being hit, tests only | scoops, scobly | kit tables |
+| Per-tenant budgets and a usage ledger | v1 | Built (#6) | Yes: a budget row stopped the 7th message with a clear sentence | scoops, scobly | kit tables |
 | Run log of every model and tool call, with retention and trimming | v1 | Built (#6, prune in #8) | Yes (stopped runs marked) | scobly, bricks | kit tables |
 | Fake model and record/replay for tests | v1 | Built (#20) | Tests (it is a test tool) | scobly, parityai | kit |
 | Tools filtered by role, so staff never see owner-only tools | v1 | Built (#3) | Yes (#26: says who can) | scoops, told in the prompt only | kit |
@@ -30,9 +30,9 @@ cover it but nobody has tried it by hand. A feature counts as done only when thi
 | Interactive replies as typed views: choices, form, table, record card, plus views the app registers | v1 | Built (#14) | Yes, all four (#26: Continue button) | scoops, hard-wired expense and payment cards | kit, assistant-ui |
 | Setup command (npx teovo init) and table migrations with an upgrade path | v1 | Built (#4, #8) | Yes: init, migrate, status, prune | not checked | kit |
 | Theming from the app: colours, fonts, corner radius, dark mode, bottom sheet on phones | v1 | Built (#18) | Yes: dark mode, phone sheet | not checked | kit, assistant-ui |
-| Per-task model choice: a cheap model for simple reads, a stronger one for hard questions | v1 | Built (#15) | Tests only (the example does not route) | scoops, chosen by hand | kit |
+| Per-task model choice: a cheap model for simple reads, a stronger one for hard questions | v1 | Built (#15) | Yes (#27: the example routes short look-ups to flash-lite) | scoops, chosen by hand | kit |
 | Local formats: dates, currency such as ₹, and the tenant's time zone in replies and views | v1 | Built (#16) | Yes | scoops, chosen by hand | kit |
-| Row-level rules on the tv\_ tables that match the app's own tenancy | v1 | Built (#4) | Tests only | scoops, scobly, parityai (their own tables) | kit tables |
+| Row-level rules on the tv\_ tables that match the app's own tenancy | v1 | Built (#4) | Yes, by hand in Postgres as a non-owner role; how-to in docs/architecture.md (#27) | scoops, scobly, parityai (their own tables) | kit tables |
 | Placeholder that cycles through examples for the screen | v1.1 | Partly: one hint per screen, Tab accepts (#9) |  | new | kit |
 | Completion while typing: customer, product and phrase matches on the device, Tab or tap to accept, no model call | v1.1 |  |  | new | kit |
 | Remaining allowance shown in the panel | v1.1 |  |  | bricks, scobly | kit |
