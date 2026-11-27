@@ -95,3 +95,47 @@ export function useVoice(onText: (text: string) => void, lang?: string) {
   }
   return { supported: Boolean(Rec), listening, error, toggle }
 }
+
+/**
+ * Voice through the app's own speech-to-text: records with the microphone, then hands the recording to
+ * `transcribe` (say, a server endpoint that turns Hindi or Hinglish into English text). Use it where the browser's
+ * own speech recognition is missing or can't do the language.
+ */
+export function useRecorder(onText: (text: string) => void, transcribe: ((audio: Blob) => Promise<string>) | undefined) {
+  const supported = Boolean(transcribe) && typeof window !== 'undefined' && typeof window.MediaRecorder !== 'undefined' && Boolean(navigator.mediaDevices?.getUserMedia)
+  const [listening, setListening] = useState(false)
+  const [working, setWorking] = useState(false)
+  const [error, setError] = useState<string>()
+  const rec = useRef<MediaRecorder | null>(null)
+  const latest = useRef({ onText, transcribe })
+  latest.current = { onText, transcribe }
+  useEffect(() => () => { if (rec.current?.state === 'recording') rec.current.stop() }, [])
+
+  async function toggle() {
+    if (!supported || working) return
+    if (listening) { rec.current?.stop(); return }
+    setError(undefined)
+    let stream: MediaStream
+    try { stream = await navigator.mediaDevices.getUserMedia({ audio: true }) } catch { setError('Allow the microphone to speak to the assistant.'); return }
+    const chunks: Blob[] = []
+    const r = new MediaRecorder(stream)
+    r.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data) }
+    r.onstop = async () => {
+      for (const t of stream.getTracks()) t.stop()
+      setListening(false)
+      if (!chunks.length) return
+      setWorking(true)
+      try {
+        const said = (await latest.current.transcribe!(new Blob(chunks, { type: r.mimeType || 'audio/webm' }))).trim()
+        if (said) latest.current.onText(said)
+        else setError('Couldn’t hear that. Try again.')
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Couldn’t hear that. Try again.')
+      } finally { setWorking(false) }
+    }
+    rec.current = r
+    r.start()
+    setListening(true)
+  }
+  return { supported, listening, working, error, toggle }
+}

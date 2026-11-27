@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
-import { readFile, useVoice, type PendingFile } from './input.js'
+import { readFile, useRecorder, useVoice, type PendingFile } from './input.js'
 import { Markdown } from './markdown.js'
 import { themeStyle, type Theme } from './sheet.js'
 import { useAssistant } from './provider.js'
@@ -26,6 +26,13 @@ export interface AssistantPanelProps {
   voice?: boolean
   /** Language for speech, e.g. 'hi-IN'. Default: the browser's. */
   voiceLang?: string
+  /**
+   * Turn speech into text with the app's own service instead of the browser's: the microphone button records, and
+   * the recording is passed here. Return the text to put in the message box; throw to show an error.
+   */
+  transcribe?: (audio: Blob) => Promise<string>
+  /** Draw a button the assistant offered yourself (e.g. a real link, so phones open WhatsApp without a popup block). */
+  renderAction?: (action: Action) => ReactNode
   /** Show suggestion chips above the input. Default true (they only appear when the server has some). */
   showSuggestions?: boolean
   /**
@@ -70,7 +77,10 @@ export function AssistantPanel(props: AssistantPanelProps) {
     el.style.height = `${el.scrollHeight}px`
   }, [text])
   const attach = props.attach ? (props.attach === true ? {} : props.attach) : null
-  const voice = useVoice((said) => setText((t) => (t ? `${t} ${said}` : said)), props.voiceLang)
+  const addSaid = (said: string) => setText((t) => (t ? `${t} ${said}` : said))
+  const browserVoice = useVoice(addSaid, props.voiceLang)
+  const recorded = useRecorder(addSaid, props.transcribe)
+  const voice = props.transcribe ? recorded : { ...browserVoice, working: false }
 
   function ask(t: string) {
     if ((!t.trim() && !files.length) || busy) return
@@ -152,8 +162,9 @@ export function AssistantPanel(props: AssistantPanelProps) {
               </>
             ) : null}
             {props.voice !== false && voice.supported && !busy ? (
-              <button type="button" className="tv-icon tv-mic" aria-pressed={voice.listening} aria-label={voice.listening ? 'Stop listening' : 'Speak'}
-                title={voice.listening ? 'Stop listening' : 'Speak'} onClick={voice.toggle}>
+              <button type="button" className="tv-icon tv-mic" aria-pressed={voice.listening} disabled={voice.working}
+                aria-label={voice.working ? 'Writing down what you said' : voice.listening ? 'Stop listening' : 'Speak'}
+                title={voice.working ? 'Writing down what you said…' : voice.listening ? 'Stop listening' : 'Speak'} onClick={() => void voice.toggle()}>
                 {voice.listening ? icons.stop : icons.mic}
               </button>
             ) : null}
@@ -200,6 +211,7 @@ function Message({ message, ask, stopped, ...props }: { message: TeovoMessage; a
         }
         if (p.type === 'data-action') {
           const a = p.data as Action
+          if (props.renderAction) return <span key={p.id ?? i} className="tv-action-own">{props.renderAction(a)}</span>
           return <button key={p.id ?? i} type="button" className="tv-action" onClick={() => onAction?.(a)}>{a.label}</button>
         }
         return null
