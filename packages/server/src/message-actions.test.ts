@@ -67,18 +67,26 @@ describe('rating a reply', () => {
 })
 
 describe('a model that goes quiet after a tool', () => {
-  it('is asked once more, with tools off, so the user always gets an answer in words', async () => {
+  it('carries on once with tools on, then is asked with tools off, so the user always gets an answer in words', async () => {
     const storage = memoryStorage()
-    const model = scriptedModel([callTool('get_dues', {}), say(''), say('Riya K owes ₹250.')])
+    const model = scriptedModel([callTool('get_dues', {}), say(''), say(''), say('Riya K owes ₹250.')])
     const teovo = createAssistant({
       identify: () => u1, asUser: () => null, instructions: 'Help.', storage, models: [model],
       tools: [defineTool({ name: 'get_dues', kind: 'read', description: 'Dues', input: z.object({}), run: () => [{ customer: 'Riya K', due: 250 }] })],
     })
     const r = await chat(teovo, 'how much does Riya K owe?')
     expect(r.text).toBe('Riya K owes ₹250.')
-    expect(model.doStreamCalls).toHaveLength(3)
-    expect(model.doStreamCalls[2]!.toolChoice).toEqual({ type: 'none' })
+    expect(model.doStreamCalls).toHaveLength(4)
+    expect(model.doStreamCalls[2]!.toolChoice).not.toEqual({ type: 'none' })
+    expect(model.doStreamCalls[3]!.toolChoice).toEqual({ type: 'none' })
     const saved = (await storage.listMessages(r.threadId!)).at(-1)!
     expect(JSON.stringify(saved.parts)).toContain('Riya K owes ₹250.')
+  })
+
+  it('ends with a plain sentence when even the last try has no words', async () => {
+    const model = scriptedModel([say(''), say(''), say('')])
+    const teovo = createAssistant({ identify: () => u1, asUser: () => null, instructions: 'Help.', storage: memoryStorage(), models: [model], tools: [] })
+    const r = await chat(teovo, 'hello?')
+    expect(r.text).toBe('I could not put an answer together for that. Try asking in another way.')
   })
 })

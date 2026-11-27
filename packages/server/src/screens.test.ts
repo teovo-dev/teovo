@@ -83,3 +83,26 @@ describe('suggestions', () => {
     expect(saved).not.toContain('Send a reminder')
   })
 })
+
+describe('screenPath', () => {
+  const screens = [
+    { path: '/orders', title: 'Orders', filters: { unpaid: 'yes for money due' } },
+    { path: '/orders/new', title: 'New order' },
+    { path: '/orders/:id', title: 'Order' },
+  ]
+  it('reads a path with its values filled in, literal screens first', async () => {
+    const { screenPath } = await import('./screens')
+    expect(screenPath(screens, '/orders/142')).toEqual({ path: '/orders/142', title: 'Order' })
+    expect(screenPath(screens, '/orders/new')).toEqual({ path: '/orders/new', title: 'New order' })
+    expect(screenPath(screens, '/orders?unpaid=yes')).toEqual({ path: '/orders?unpaid=yes', title: 'Orders' })
+    expect(screenPath(screens, 'Orders')).toEqual({ path: '/orders', title: 'Orders' })
+    expect(screenPath(screens, '/orders/:id', { id: 7 })).toEqual({ path: '/orders/7', title: 'Order' })
+  })
+  it('refuses odd values, unknown filters and paths that fit no screen', async () => {
+    const { screenPath } = await import('./screens')
+    expect(screenPath(screens, '/orders/..%2Fadmin')).toBeNull()
+    expect(screenPath(screens, '/orders/142?tab=items')).toBeNull()
+    expect(screenPath(screens, '/orders/142/edit')).toBeNull()
+    expect(screenPath(screens, '/admin')).toBeNull()
+  })
+})

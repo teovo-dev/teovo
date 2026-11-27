@@ -1,5 +1,5 @@
 import type { LanguageModelV4 } from '@ai-sdk/provider'
-import { convertToModelMessages, createUIMessageStream, createUIMessageStreamResponse, isStepCount, streamText, tool, toUIMessageStream, type ToolSet, type UIMessage } from 'ai'
+import { convertToModelMessages, createUIMessageStream, createUIMessageStreamResponse, isStepCount, streamText, tool, toUIMessageStream, type ModelMessage, type ToolSet, type UIMessage } from 'ai'
 import { fallbackModel } from './fallback.js'
 import { CardError, cardForModel, decide, publicCard, type CardHandler, type CardRules, type Decision } from './cards.js'
 import type { CardEventKind, Miss } from './storage.js'
@@ -14,7 +14,7 @@ import { checkMessage, type AttachmentRules } from './attachments.js'
 import { picturesOnce, storeFiles, type FileRules } from './files.js'
 import { checkFormats, DEFAULT_FORMATS, formatsText, todayText, type Formats } from './formats.js'
 import { DEFAULT_SETTINGS, noticeId, SettingsError, settingsText, validateSettings, type TenantSettings } from './settings.js'
-import { readPage, screenPath, screensText, screenText, tidy, type Page, type ScreenFn, type ScreenInfo, type SuggestionsFn } from './screens.js'
+import { findScreen, readPage, screenPath, screensText, screenText, tidy, type Page, type ScreenFn, type ScreenInfo, type SuggestionsFn } from './screens.js'
 import { z } from 'zod'
 export type { Page } from './screens.js'
 
@@ -379,16 +379,17 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
         if (config.screens?.length) {
           const screens = config.screens
           tools.open_screen = tool({
-            description: 'Offer the user a button that opens one of the app\'s screens. Give the screen\'s path from the list, and in params the values for its :params and any of its filters. Only the listed filters work.',
+            description: 'Offer the user a button that opens one of the app\'s screens. Only the listed screens and filters work.',
+            // One plain path, not a pattern plus an object of values: Gemini often failed to call the tool at all with
+            // a free-form params object.
             inputSchema: z.object({
-              screen: z.string(),
-              params: z.record(z.string(), z.union([z.string(), z.number()])).optional(),
+              screen: z.string().describe('The screen\'s path from the list with its :params filled in and any filters as a query, e.g. "/orders/142" or "/orders?unpaid=yes"'),
               label: z.string().max(40).describe('What the button does, in the user\'s words, e.g. "Show unpaid orders" or "Open order #142"'),
             }),
-            execute: async ({ screen, params, label }, { toolCallId }) => {
-              const to = screenPath(screens, screen, params ?? {})
+            execute: async ({ screen, label }, { toolCallId }) => {
+              const to = screenPath(screens, screen)
               if (!to) {
-                const s = screens.find((x) => x.path === screen.split('?')[0] || x.title === screen)
+                const s = findScreen(screens, screen)?.screen
                 throw new Error(s
                   ? `${s.title} (${s.path}) can't take those values. ${s.filters ? `Its filters are: ${Object.keys(s.filters).join(', ')}.` : 'It has no filters.'} Offer it without the rest, or say the app can't do that.`
                   : `There is no screen "${screen}". Use one of: ${screens.map((x) => x.path).join(', ')}.`)
@@ -422,36 +423,60 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
               return { type: 'text', text: cardForModel(statuses.get(c.id) ?? c) }
             },
           })
-        const result = streamText({
-          onError: ({ error }) => { streamError ??= error },
-          model,
-          system,
-          messages: modelMessages,
-          tools,
-          stopWhen: isStepCount(config.maxSteps ?? 8),
-          // First output is timed by fallbackModel (per model, so a stalled one hands over to the next); the SDK
-          // keeps the gaps between chunks and the total.
-          timeout: { chunkMs: timeouts.chunkMs, totalMs: timeouts.totalMs },
-          maxRetries: 1,
-          abortSignal: req.signal,
-        })
-        // Our sentence for the user, not the SDK's "An error occurred."; tool errors still reach the model as they are.
-        writer.merge(toUIMessageStream({ stream: result.stream, sendStart: false, sendFinish: false, onError: () => FAILED, redactToolErrors: false }))
+        const run = (messages: ModelMessage[]) => {
+          const r = streamText({
+            onError: ({ error }) => { streamError ??= error },
+            model,
+            system,
+            messages,
+            tools,
+            stopWhen: isStepCount(config.maxSteps ?? 8),
+            // First output is timed by fallbackModel (per model, so a stalled one hands over to the next); the SDK
+            // keeps the gaps between chunks and the total.
+            timeout: { chunkMs: timeouts.chunkMs, totalMs: timeouts.totalMs },
+            maxRetries: 1,
+            abortSignal: req.signal,
+          })
+          // Our sentence for the user, not the SDK's "An error occurred."; tool errors still reach the model as they are.
+          writer.merge(toUIMessageStream({ stream: r.stream, sendStart: false, sendFinish: false, onError: () => FAILED, redactToolErrors: false }))
+          return r
+        }
+        let result = run(modelMessages)
         const results = [result]
         try {
           let text = await result.text
+          let sofar = [...modelMessages, ...(await result.responseMessages)]
+          const said = async () => (await Promise.all(results.map((r) => r.steps))).flat().some((st) => st.text.trim())
+          // Gemini sometimes ends a step with nothing at all (no text, no tool call, no output tokens), at the start or
+          // right after a tool result. That is a blip, not an answer: carry on once from there with tools still on, so
+          // a reply that needs one (a button, a table, a card) can still use it.
+          const last = (await result.steps).at(-1)
+          if (last && !last.text.trim() && !last.toolCalls.length && !shown && !(await said()) && !req.signal.aborted) {
+            result = run(sofar)
+            results.push(result)
+            text = await result.text
+            sofar = [...sofar, ...(await result.responseMessages)]
+          }
           // Models sometimes end a turn in silence after a tool call. Never leave the user with an empty reply: ask
           // once more, with tools off, for the answer in words. (Not after a view or card: those are the answer.)
-          const said = (await result.steps).some((st) => st.text.trim())
-          if (!said && !shown && !req.signal.aborted) {
+          if (!(await said()) && !shown && !req.signal.aborted) {
             const again = streamText({
               model, system: `${system}\n\nYou have what you need from the tools above. Now answer the user in words; do not call tools.`,
-              messages: [...modelMessages, ...(await result.response).messages], tools, toolChoice: 'none', maxRetries: 1, abortSignal: req.signal,
+              messages: sofar, tools, toolChoice: 'none', maxRetries: 1, abortSignal: req.signal,
               timeout: { chunkMs: timeouts.chunkMs, totalMs: timeouts.totalMs },
             })
             results.push(again)
             writer.merge(toUIMessageStream({ stream: again.stream, sendStart: false, sendFinish: false, onError: () => NO_ANSWER, redactToolErrors: false }))
             text = await Promise.resolve(again.text).catch(() => NO_ANSWER)
+            // Still nothing (Gemini can end even this one with no words, e.g. UNEXPECTED_TOOL_CALL): a plain sentence,
+            // never a blank reply.
+            if (!text.trim() && !req.signal.aborted) {
+              const id = `no-answer-${runId}`
+              writer.write({ type: 'text-start', id })
+              writer.write({ type: 'text-delta', id, delta: NO_ANSWER })
+              writer.write({ type: 'text-end', id })
+              text = NO_ANSWER
+            }
           }
           if (links.size) writer.write({ type: 'data-sources', id: `sources-${runId}`, data: { links: [...links.values()] } })
           if (config.suggestions) {

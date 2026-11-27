@@ -117,6 +117,29 @@ describe('createAssistant', () => {
     expect(actions[0]!.data).toEqual({ label: 'Open order', action: 'navigate', args: { to: '/sales/142' } })
   })
 
+  it('asks again, tools on, when the model sends back nothing at all', async () => {
+    // Gemini sometimes ends a turn with no text, no tool call and no output tokens.
+    const empty = streamOf([{ type: 'finish', finishReason: { unified: 'stop', raw: 'STOP' }, usage }] as LanguageModelV4StreamPart[])
+    const m = model(empty, call('open_screen', { to: '/sales/142' }), say('Here you go.'))
+    const { teovo } = setup([m])
+    const reply = await finalMessage(await post(teovo, { message: userMessage('take me to order 142') }))
+    expect(m.doStreamCalls[1]!.toolChoice).not.toEqual({ type: 'none' })
+    expect(reply.parts.filter((p) => p.type === 'data-action')).toHaveLength(1)
+    expect(textOf(reply)).toBe('Here you go.')
+  })
+
+  it('carries on, tools on, when the model goes blank right after a tool result', async () => {
+    const empty = streamOf([{ type: 'finish', finishReason: { unified: 'stop', raw: 'STOP' }, usage }] as LanguageModelV4StreamPart[])
+    const m = model(call('get_order', { no: 142 }), empty, call('open_screen', { to: '/sales/142' }), say('Order 142 has ₹880 due.'))
+    const { teovo } = setup([m])
+    const reply = await finalMessage(await post(teovo, { message: userMessage('what is due on 142?') }))
+    expect(m.doStreamCalls[2]!.toolChoice).not.toEqual({ type: 'none' })
+    // It picks up from the tool result, not from scratch.
+    expect(JSON.stringify(m.doStreamCalls[2]!.prompt)).toContain('"toolName":"get_order"')
+    expect(reply.parts.filter((p) => p.type === 'data-action')).toHaveLength(1)
+    expect(textOf(reply)).toBe('Order 142 has ₹880 due.')
+  })
+
   it('never offers a tool to a role that may not use it', async () => {
     const m = model(say('ok'))
     const { teovo } = setup([m], staff)
