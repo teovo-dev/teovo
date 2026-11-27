@@ -1,3 +1,9 @@
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitest/config'
 
-export default defineConfig({ test: { include: ['packages/*/src/**/*.test.{ts,tsx}'] } })
+const src = (p: string) => fileURLToPath(new URL(`./packages/${p}/src/index.ts`, import.meta.url))
+
+export default defineConfig({
+  resolve: { alias: { '@teovo/server': src('server'), '@teovo/react': src('react'), '@teovo/db': src('db') } },
+  test: { include: ['packages/*/src/**/*.test.{ts,tsx}'], fileParallelism: false },
+})
