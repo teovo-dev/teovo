@@ -38,8 +38,24 @@ describe('screens map', () => {
     expect(system(m, 0)).toContain('Screens in this app (offer one with open_screen when it helps the user):\n- Orders: /orders (all orders, filter by unpaid)\n- Order: /orders/:id')
     expect(r.actions).toEqual([{ label: 'Open Order', action: 'navigate', args: { to: '/orders/142' } }])
     const later = JSON.stringify(m.doStreamCalls[3]!.prompt)
-    expect(later).toContain('There is no screen \\"/admin\\" with those values. Use one of: /orders, /orders/:id.')
-    expect(later.match(/There is no screen/g)).toHaveLength(2)
+    expect(later).toContain('There is no screen \\"/admin\\". Use one of: /orders, /orders/:id.')
+    expect(later).toContain("Order (/orders/:id) can't take those values. It has no filters.")
+  })
+
+  it("keeps a screen's filters on the link, and refuses values the screen can't use instead of dropping them", async () => {
+    const withFilters = [{ path: '/orders', title: 'Orders', filters: { unpaid: "'yes' for orders with money due" } }, { path: '/orders/:id', title: 'Order' }]
+    const m = scriptedModel([
+      callTool('open_screen', { screen: '/orders', params: { unpaid: 'yes' }, label: 'Show unpaid orders' }),
+      callTool('open_screen', { screen: '/orders', params: { filter: 'unpaid' } }),
+      callTool('open_screen', { screen: '/orders/:id', params: { id: 142, tab: 'payments' } }),
+      say('Here.'),
+    ])
+    const r = await chat(setup(m, { screens: withFilters }), 'unpaid orders')
+    expect(system(m, 0)).toContain(`- Orders: /orders; filters: unpaid ('yes' for orders with money due)`)
+    expect(r.actions).toEqual([{ label: 'Show unpaid orders', action: 'navigate', args: { to: '/orders?unpaid=yes' } }])
+    const later = JSON.stringify(m.doStreamCalls[3]!.prompt)
+    expect(later).toContain("Orders (/orders) can't take those values. Its filters are: unpaid.")
+    expect(later).toContain("Order (/orders/:id) can't take those values. It has no filters.")
   })
 
   it('offers no open_screen tool without a map, and refuses a clashing tool name', () => {

@@ -30,8 +30,10 @@ function usePath(): [string, (to: string) => void] {
   return [path, (to) => { location.hash = to }]
 }
 
-function Orders({ orders, go }: { orders: Order[]; go: (to: string) => void }) {
-  const [unpaid, setUnpaid] = useState(false)
+function Orders({ orders, go, query }: { orders: Order[]; go: (to: string) => void; query: URLSearchParams }) {
+  // The filter lives in the link (#/orders?unpaid=yes), so the assistant's "Show unpaid orders" button can set it.
+  const unpaid = query.get('unpaid') === 'yes'
+  const setUnpaid = (on: boolean) => go(on ? '/orders?unpaid=yes' : '/orders')
   useAssistantContext({ path: '/orders', title: 'Orders', state: { filter: unpaid ? 'unpaid' : 'all' } })
   return (
     <section>
@@ -84,11 +86,14 @@ function App() {
   const [path, go] = usePath()
   const [user, setUser] = useState<'owner' | 'staff'>('owner')
   const [history, setHistory] = useState(false)
-  const match = /^\/orders\/(\d+)$/.exec(path)
+  const [open, setOpen] = useState(false)
+  const [route, search = ''] = path.split('?') as [string, string?]
+  const match = /^\/orders\/(\d+)$/.exec(route)
   return (
     <AssistantProvider key={user} endpoint="/api/assistant" headers={{ 'x-demo-user': user }}
       threadId={saved(user)} onThread={(id) => save(user, id)}
-      onAction={(a) => { if (a.action === 'navigate' && typeof a.args?.to === 'string') go(a.args.to) }}>
+      // A button under a reply: go there and close the sheet, so the user sees the page it opened.
+      onAction={(a) => { if (a.action === 'navigate' && typeof a.args?.to === 'string') { go(a.args.to); setOpen(false) } }}>
       <header className="bar">
         <strong>Teovo shop</strong>
         <a href="#/orders">Orders</a>
@@ -100,10 +105,10 @@ function App() {
       </header>
       <main>
         {match ? <OrderPage order={shop.orders.find((o) => o.no === Number(match[1]))} />
-          : path === '/expenses' ? <Expenses expenses={shop.expenses} />
-          : <Orders orders={shop.orders} go={go} />}
+          : route === '/expenses' ? <Expenses expenses={shop.expenses} />
+          : <Orders orders={shop.orders} go={go} query={new URLSearchParams(search)} />}
       </main>
-      <AssistantSheet label="Ask Teovo" theme={{ accent: '#b45309' }} header={
+      <AssistantSheet label="Ask Teovo" theme={{ accent: '#b45309' }} open={open} onOpenChange={setOpen} header={
         <div className="tv-tabs" role="group" aria-label="View">
           <button type="button" aria-pressed={!history} onClick={() => setHistory(false)}>Chat</button>
           <button type="button" aria-pressed={history} onClick={() => setHistory(true)}>History</button>
@@ -116,4 +121,7 @@ function App() {
   )
 }
 
-createRoot(document.getElementById('root')!).render(<StrictMode><App /></StrictMode>)
+// One React root, even when Vite reloads this file: a second createRoot on the same element breaks the page.
+const el = document.getElementById('root')! as HTMLElement & { root?: ReturnType<typeof createRoot> }
+el.root ??= createRoot(el)
+el.root.render(<StrictMode><App /></StrictMode>)
