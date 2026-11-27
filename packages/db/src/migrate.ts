@@ -34,7 +34,7 @@ export function generateSql(options: SchemaOptions = {}): string {
 
 /** Start-up check: the tables every enabled feature needs. Returns the missing ones (empty when ready). */
 export async function missingTables(query: Query, features: SchemaOptions['features'] = {}): Promise<string[]> {
-  const need = [...FEATURE_TABLES.core!, ...(features.proposals ? FEATURE_TABLES.proposals! : [])]
+  const need = [...FEATURE_TABLES.core!, ...(features.proposals ? FEATURE_TABLES.proposals! : []), ...(features.files ? FEATURE_TABLES.files! : [])]
   const have = new Set((await query(`select table_name from information_schema.tables where table_schema = any (current_schemas(false))`)).rows.map((r) => r.table_name as string))
   return need.filter((t) => !have.has(t))
 }

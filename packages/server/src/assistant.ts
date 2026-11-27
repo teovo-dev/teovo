@@ -10,6 +10,7 @@ import { makeUntrusted, UNTRUSTED_RULE } from './untrusted.js'
 import { makeRedactor, type RedactOptions } from './redact.js'
 import { checkForm, formHandler, formsText, missingFields, VIEWS_RULE, type FormData, type FormHandler, type FormSpec, type TeovoView } from './views.js'
 import { checkMessage, type AttachmentRules } from './attachments.js'
+import { picturesOnce, storeFiles, type FileRules } from './files.js'
 import { checkFormats, DEFAULT_FORMATS, formatsText, type Formats } from './formats.js'
 import { DEFAULT_SETTINGS, SettingsError, settingsText, validateSettings } from './settings.js'
 import { readPage, screenPath, screensText, screenText, tidy, type Page, type ScreenFn, type ScreenInfo, type SuggestionsFn } from './screens.js'
@@ -59,6 +60,11 @@ export interface AssistantConfig<DB = unknown> {
   formats?: Partial<Formats>
   /** Let users attach pictures (a bill, a screenshot). Off unless given. The model must be able to read images. */
   attachments?: AttachmentRules
+  /**
+   * Keep attached pictures in a file store instead of inside the conversation. Strongly recommended with
+   * attachments: the message keeps only a reference, served to its owner by GET …/files/:id.
+   */
+  files?: FileRules
   /** The clock, for tests. */
   now?: () => Date
   /** Views the model can show inside a reply (tables, forms, choices, records). Start from builtinViews. */
@@ -169,8 +175,11 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
 
     const earlier = await storage.listMessages(thread.id)
     if (!earlier.length && !thread.title) await storage.setThreadTitle(thread.id, titleFrom(message))
-    const history = trimToolResults([...earlier, message].slice(-(config.historyMessages ?? 30)), config.historyToolChars ?? 1500)
-    await storage.saveMessages(thread.id, [message])
+    // Pictures go to the file store; the saved message keeps a reference. The model still reads this message's
+    // pictures in full, and earlier ones only as a note.
+    const saved = config.files ? await storeFiles(message, config.files, { tenantId: identity.tenantId, userId: identity.userId, threadId: thread.id }) : message
+    const history = trimToolResults(picturesOnce([...earlier, message].slice(-(config.historyMessages ?? 30)), message), config.historyToolChars ?? 1500)
+    await storage.saveMessages(thread.id, [saved])
 
     const db = await config.asUser(identity, req)
     const runId = crypto.randomUUID()
@@ -438,6 +447,19 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     return json(200, { card: publicCard(card), messageId: message.id })
   }
 
+  async function file(req: Request, id: string): Promise<Response> {
+    const identity = await config.identify(req)
+    if (!identity) return json(401, { error: 'Sign in to use the assistant.' })
+    if (!config.files) return json(404, { error: 'That picture was not found.' })
+    const f = await config.files.store.get(identity.tenantId, id)
+    // Only the person who sent it (it is in their conversation); anyone else gets the same answer as for a missing file.
+    if (!f || f.userId !== identity.userId) return json(404, { error: 'That picture was not found. Pictures are removed after a while.' })
+    return new Response(f.bytes as Uint8Array<ArrayBuffer>, { headers: {
+      'content-type': f.mediaType, 'content-length': String(f.bytes.length), 'cache-control': 'private, max-age=86400, immutable',
+      'x-content-type-options': 'nosniff', 'content-disposition': `inline${f.filename ? `; filename="${f.filename.replace(/["\\\r\n]/g, '')}"` : ''}`,
+    } })
+  }
+
   async function card(req: Request, id: string, decision: Decision): Promise<Response> {
     const identity = await config.identify(req)
     if (!identity) return json(401, { error: 'Sign in to use the assistant.' })
@@ -456,11 +478,22 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
   }
 
   return {
+    /**
+     * Delete pictures older than `files.keepDays`. Call it on a schedule (a cron, a Worker scheduled event).
+     * Returns how many were removed; 0 when no keepDays or the store can't list by age.
+     */
+    async removeOldFiles(now = new Date()): Promise<number> {
+      const f = config.files
+      if (!f?.keepDays || !f.store.removeOlderThan) return 0
+      return f.store.removeOlderThan(new Date(now.getTime() - f.keepDays * 86_400_000))
+    },
     /** Mount under any path, e.g. app.all('/api/assistant/*', teovo.fetch). Handles POST …/chat, GET …/threads, GET …/threads/:id, POST …/threads/:id/archive, GET …/suggestions, GET/PUT …/settings and POST …/cards/:id/(confirm|skip|undo). */
     async fetch(req: Request): Promise<Response> {
       const path = new URL(req.url).pathname
       if (req.method === 'POST' && path.endsWith('/chat')) return chat(req)
       if (req.method === 'GET' && path.endsWith('/suggestions')) return suggestions(req)
+      const fm = /\/files\/([0-9a-f-]{36})$/i.exec(path)
+      if (req.method === 'GET' && fm) return file(req, fm[1]!.toLowerCase())
       if ((req.method === 'GET' || req.method === 'PUT') && path.endsWith('/settings')) return tenantSettings(req)
       if (req.method === 'GET' && path.endsWith('/threads')) return threads(req)
       const t = /\/threads\/([0-9a-f-]{36})(\/archive)?$/i.exec(path)

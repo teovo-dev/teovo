@@ -5,7 +5,7 @@ import { MockLanguageModelV4 } from 'ai/test'
 import pg from 'pg'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import { z } from 'zod'
-import { generateSql, migrate, missingTables, postgresStorage, type Query } from './index'
+import { generateSql, migrate, missingTables, postgresFiles, postgresStorage, prune, type Query } from './index'
 
 const url = process.env.TEOVO_TEST_DATABASE_URL
 const suite = url ? describe : describe.skip
@@ -155,6 +155,28 @@ suite('@teovo/db on Postgres', () => {
     expect(await s.archiveThread('shop-1', 'u1', a.id)).toBe(false)
     expect((await s.listThreads('shop-1', 'u1', 10)).map((t) => t.id)).toEqual([b.id])
     expect(await s.getThread('shop-1', 'u1', a.id)).toBeNull()
+    client.release()
+  })
+
+  it('stores pictures in tv_files per tenant, and prune removes old ones', async () => {
+    const { query, client } = await freshSchema()
+    expect(await missingTables(query, { files: true })).toContain('tv_files')
+    expect(await migrate(query, { features: { files: true } })).toContain('0005_files')
+    const s = postgresStorage(query)
+    const t = await s.createThread('shop-1', 'u1')
+    const files = postgresFiles(query)
+    const id = crypto.randomUUID()
+    await files.put({ id, tenantId: 'shop-1', userId: 'u1', threadId: t.id, mediaType: 'image/png', filename: 'bill.png', bytes: new Uint8Array([9, 8, 7]) })
+    expect(await files.get('shop-1', id)).toMatchObject({ userId: 'u1', threadId: t.id, mediaType: 'image/png', filename: 'bill.png', bytes: new Uint8Array([9, 8, 7]) })
+    expect(await files.get('shop-2', id)).toBeNull()
+    expect((await query('select size from tv_files')).rows).toEqual([{ size: 3 }])
+
+    await query(`update tv_files set created_at = now() - interval '40 days'`)
+    expect(await prune(query, { days: 365, fileDays: 30, dryRun: true })).toEqual({ threads: 0, usageRows: 0, files: 1 })
+    expect(await prune(query, { days: 365, fileDays: 30 })).toMatchObject({ files: 1 })
+    expect(await files.get('shop-1', id)).toBeNull()
+    await files.put({ id: crypto.randomUUID(), tenantId: 'shop-1', userId: 'u1', threadId: t.id, mediaType: 'image/png', bytes: new Uint8Array([1]) })
+    expect(await files.removeOlderThan!(new Date(Date.now() + 1000))).toBe(1)
     client.release()
   })
 

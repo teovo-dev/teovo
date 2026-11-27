@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 // The panel against the real server handler (createAssistant) with a scripted model: no network, no mocks of our own code.
 import type { LanguageModelV4StreamPart } from '@ai-sdk/provider'
-import { builtinViews, createAssistant, defineTool, memoryStorage, type AssistantConfig, type CardApplier } from '@teovo/server'
+import { builtinViews, createAssistant, defineTool, memoryFiles, memoryStorage, type AssistantConfig, type CardApplier } from '@teovo/server'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MockLanguageModelV4 } from 'ai/test'
@@ -292,6 +292,35 @@ describe('AssistantPanel', () => {
     const file = s.bodies[0].message.parts.find((p: { type: string }) => p.type === 'file')
     expect(file).toMatchObject({ mediaType: 'image/png', filename: 'bill.png' })
     expect(screen.getAllByRole('img', { name: 'bill.png' })).toHaveLength(1)   // in the message; the preview is gone
+  })
+
+  it('shows a stored picture again after reopening, fetched with the app headers', async () => {
+    const files = memoryFiles()
+    const s = server([say('A bill for ₹450.')], true, {}, { attachments: {}, files: { store: files } })
+    const seen: { url: string; auth: string | null }[] = []
+    const fetchSpy = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      seen.push({ url: String(input), auth: new Headers(init?.headers).get('authorization') })
+      return s.fetch(input, init)
+    }) as typeof fetch
+    let id = ''
+    const first = render(<AssistantProvider endpoint="/api/assistant" fetch={fetchSpy} headers={{ authorization: 'Bearer test' }} onThread={(t) => { id = t }}><AssistantPanel attach /></AssistantProvider>)
+    await userEvent.upload(screen.getByLabelText('Attach pictures'), new File(['fake picture bytes'], 'bill.png', { type: 'image/png' }))
+    await screen.findByRole('img', { name: 'bill.png' })
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await screen.findByText('A bill for ₹450.')
+    expect(files.files.size).toBe(1)
+    first.unmount()
+
+    render(<AssistantProvider endpoint="/api/assistant" fetch={fetchSpy} headers={{ authorization: 'Bearer test' }} threadId={id}><AssistantPanel /></AssistantProvider>)
+    const img = await screen.findByRole('img', { name: 'bill.png' })
+    expect(img.getAttribute('src')).toMatch(/^blob:/)
+    const fileCall = seen.find((c) => c.url.includes('/files/'))!
+    expect(fileCall).toEqual({ url: `/api/assistant/files/${[...files.files.keys()][0]}`, auth: 'Bearer test' })
+
+    cleanup()
+    files.files.clear()
+    render(<AssistantProvider endpoint="/api/assistant" fetch={fetchSpy} threadId={id}><AssistantPanel /></AssistantProvider>)
+    await screen.findByText('bill.png (no longer kept)')
   })
 
   it('turns speech into text in the box, where the browser supports it', async () => {
