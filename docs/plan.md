@@ -12,7 +12,7 @@ Each phase ends with a test in a real app.
    - Status: done in the scoops repository (10 recorded conversations).
 2. **Build the packages.** The tool loop, the three tool types, cards with undo, screen context, limits, the run log, the tables, the setup command and the panel.
    - Ends when: every v1 row in [features](features.md) is built and tested here.
-   - Status: in progress (pull requests 1–10 and 12–20).
+   - Status: every v1 row is built, in pull requests 1–10 and 12–21, waiting for review.
 3. **Move scoops onto the packages.** Scoops' behaviour does not change; its phase 1 replays still pass. Starts only after phase 2 is finished.
    - Ends when: scoops runs on the packages in production, and a thread opens on a second device.
 4. **Ready for other businesses (v1.1).**

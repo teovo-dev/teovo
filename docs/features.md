@@ -11,13 +11,13 @@ Status numbers are pull requests in this repository. Rows with no status are pla
 | Three tool types: read, propose, action | v1 | Built (#3) | scoops | kit |
 | Confirm and skip cards | v1 | Built (#7) | scoops | kit |
 | Undo by reversing the change, stored so it survives a reload | v1 | Built (#7) | scoops, in memory only | kit tables |
-| Screen awareness: route, record on screen, component state | v1 | Partly: route and record (#9); component state to do | scoops | kit |
-| Screens map and navigation buttons | v1 | Partly: buttons from action tools (#3, #5); screens map to do | scoops | kit |
+| Screen awareness: route, record on screen, component state | v1 | Built (#9, #21) | scoops | kit |
+| Screens map and navigation buttons | v1 | Built (#3, #21) | scoops | kit |
 | Chat panel: streaming, markdown, attachments, stop | v1 | Built (#5, #17, #18) | none of ours has all of these | assistant-ui |
 | Suggestions above the box: follow-ups to the last reply, and chips for the screen and its record using real names | v1 | Built (#9) | scoops, fixed starters in an empty chat only | kit |
 | Voice input and image reading | v1 | Built (#17) | scoops | kit, Vercel AI SDK |
 | Threads and message history | v1 | Built (#4, #13) | parityai, scobly | kit tables |
-| One rule for what history the model sees, including earlier tool results | v1 | Partly: last 30 messages, cards with their current status (#3, #7) | new | kit |
+| One rule for what history the model sees, including earlier tool results | v1 | Built (#7, #21) | new | kit |
 | Per-tenant budgets and a usage ledger | v1 | Built (#6) | scoops, scobly | kit tables |
 | Run log of every model and tool call, with retention and trimming | v1 | Built (#6, prune in #8) | scobly, bricks | kit tables |
 | Fake model and record/replay for tests | v1 | Built (#20) | scobly, parityai | kit |
