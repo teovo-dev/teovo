@@ -101,6 +101,15 @@ const FAILED = 'The assistant could not finish this reply. Try again.'
 export const CARDS_RULE = 'Tools that prepare a change (cards and forms) change nothing by themselves: the user confirms or skips each card. ' +
   'Say a change is ready to confirm, never that it is done, recorded or saved, unless a later message says the user confirmed it.'
 
+/** A UUID that is always the same for the same text (from its SHA-256). */
+async function stableId(text: string): Promise<string> {
+  const h = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))].slice(0, 16)
+  h[6] = (h[6]! & 0x0f) | 0x50   // version 5-style: name-based
+  h[8] = (h[8]! & 0x3f) | 0x80
+  const x = h.map((b) => b.toString(16).padStart(2, '0')).join('')
+  return `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20)}`
+}
+
 const DEFAULT_TIMEOUTS = { firstChunkMs: 30_000, chunkMs: 20_000, totalMs: 120_000 }
 
 function clip(v: unknown, max: number): { value: unknown; truncated: boolean } {
@@ -177,6 +186,25 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     if (!thread) return json(404, { error: 'That conversation was not found.' })   // also when it is someone else's
 
     const earlier = await storage.listMessages(thread.id)
+    const runId = crypto.randomUUID()
+    const page = readPage(body.page)
+    const text = message.parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join(' ')
+    const routed = config.route ? await Promise.resolve().then(() => config.route!({ identity, page, text, history: earlier.length })).catch((e) => { config.on?.error?.(e, { identity, threadId: thread.id }); return undefined }) : undefined
+    const models = routed?.length ? routed : config.models
+    const first = models[0]!
+    await storage.startRun({ id: runId, threadId: thread.id, tenantId: identity.tenantId, userId: identity.userId, model: first.modelId, promptVersion: config.promptVersion })
+    // Count again now that this reply is registered: two messages sent at the same moment both passed the check
+    // above, and only now can one see the other. Nothing is saved or paid for yet, so backing off costs nothing.
+    const maxRunning = config.limits?.maxRunning ?? 2
+    const running = await storage.runningRuns(identity.tenantId, identity.userId, new Date(Date.now() - timeouts.totalMs * 2))
+    if (running > maxRunning) {
+      await storage.finishRun(runId, { status: 'failed', error: 'Too many replies at once' })
+      if (!body.threadId && !earlier.length) await storage.archiveThread(identity.tenantId, identity.userId, thread.id)   // the empty one just made
+      const raced: LimitHit = { scope: 'running', limit: maxRunning, used: running }
+      config.on?.limit?.(raced, identity)
+      return json(429, { error: limitMessage(raced), limit: raced })
+    }
+
     if (!earlier.length && !thread.title) await storage.setThreadTitle(thread.id, titleFrom(message))
     // Pictures go to the file store; the saved message keeps a reference. The model still reads this message's
     // pictures in full, and earlier ones only as a note.
@@ -185,13 +213,6 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     await storage.saveMessages(thread.id, [saved])
 
     const db = await config.asUser(identity, req)
-    const runId = crypto.randomUUID()
-    const page = readPage(body.page)
-    const text = message.parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join(' ')
-    const routed = config.route ? await Promise.resolve().then(() => config.route!({ identity, page, text, history: earlier.length })).catch((e) => { config.on?.error?.(e, { identity, threadId: thread.id }); return undefined }) : undefined
-    const models = routed?.length ? routed : config.models
-    const first = models[0]!
-    await storage.startRun({ id: runId, threadId: thread.id, tenantId: identity.tenantId, userId: identity.userId, model: first.modelId, promptVersion: config.promptVersion })
     await storage.addUsage([{ tenantId: identity.tenantId, userId: identity.userId, runId, provider: first.provider, model: first.modelId, unit: 'messages', amount: 1 }])
     let seq = 0
     const statuses = new Map((await storage.listCards(thread.id)).map((c) => [c.id, c]))
@@ -460,7 +481,9 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     const runId = (message.metadata as { runId?: string } | undefined)?.runId ?? crypto.randomUUID()
     // The card shows the form's fields, labels and order, unless the app's handler chose its own.
     const fields = proposal.fields ?? part.data.data.fields.map((f) => ({ key: f.name, label: f.label, format: f.type === 'date' ? 'date' as const : f.type === 'number' ? 'number' as const : 'text' as const }))
-    const card: StoredCard = { ...proposal, fields, id: crypto.randomUUID(), threadId: thread.id, runId, status: 'shown' }
+    // One card per form: its id comes from the conversation and the form, so a double tap (or two tabs) that both
+    // get past the "already sent" check above save the same card, not two.
+    const card: StoredCard = { ...proposal, fields, id: await stableId(`${thread.id}:${viewId}`), threadId: thread.id, runId, status: 'shown' }
     await storage.saveCard(card)
     config.on?.card?.(card)
     // The card joins the reply right under its form, so a reopened conversation shows both.
