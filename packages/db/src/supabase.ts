@@ -74,11 +74,15 @@ export function supabaseStorage(db: SupabaseLike): Storage {
         await ok(db.from('tv_messages').upsert({ id: m.id, thread_id: threadId, role: m.role, parts: m.parts, metadata: m.metadata ?? null }, { onConflict: 'thread_id,id' }))
       }
     },
+    async removeMessagesFrom(threadId, messageId) {
+      const rows = await ok(db.from('tv_messages').select('seq').eq('thread_id', threadId).eq('id', messageId).limit(1))
+      if (rows[0]) await ok(db.from('tv_messages').delete().eq('thread_id', threadId).gte('seq', rows[0].seq))
+    },
     async saveCard(c) {
       await ok(db.from('tv_proposals').upsert({
         id: c.id, thread_id: c.threadId, run_id: c.runId, kind: c.kind, title: c.title, before: c.before ?? null, after: c.after ?? null,
         payload: c.payload ?? null, status: c.status, untrusted_sources: c.untrustedSources ?? null, fields: c.fields ?? null,
-      }, { onConflict: 'id' }))
+      }, { onConflict: 'id', ignoreDuplicates: true }))   // the same card saved twice keeps the first (and its decision)
     },
     async getCard(tenantId, userId, id) {
       if (!UUID.test(id)) return null
@@ -118,6 +122,12 @@ export function supabaseStorage(db: SupabaseLike): Storage {
     },
     async finishRun(id, end) {
       await ok(db.from('tv_runs').update({ status: end.status, ...(end.model ? { model: end.model } : {}), error: end.error ?? null, finished_at: new Date().toISOString() }).eq('id', id))
+    },
+    async rateRun(tenantId, userId, runId, rating, note) {
+      if (!UUID.test(runId)) return false
+      const rows = await ok(db.from('tv_runs').update({ rating, rating_note: note ?? null, rated_at: new Date().toISOString() })
+        .eq('id', runId).eq('tenant_id', tenantId).eq('user_id', userId).select('id'))
+      return rows.length > 0
     },
     async saveStep(s) {
       await ok(db.from('tv_run_steps').insert({

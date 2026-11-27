@@ -92,6 +92,8 @@ export interface AssistantConfig<DB = unknown> {
     limit?: (hit: LimitHit, identity: Identity) => void
     usage?: (rows: UsageRow[]) => void
     decision?: (card: StoredCard, decision: Decision, identity: Identity) => void
+    /** Someone rated a reply (value null: took the rating back). */
+    rating?: (r: { runId: string; value: 1 | -1 | null; note?: string }, identity: Identity) => void
     /** The assistant couldn't answer or do something (it called cannot_help). */
     miss?: (miss: Miss) => void
   }
@@ -109,6 +111,18 @@ export const CARDS_RULE = 'Tools that prepare a change (cards and forms) change 
 
 /** Said when the misses log is on: so the team learns what people ask for that the assistant can't do. */
 export const MISS_RULE = 'When you cannot answer or do what the user asks (there is no tool for it, the data is missing, or it is not allowed), call cannot_help first, then tell them plainly.'
+
+/** A UUID that is always the same for the same text (from its SHA-256). */
+async function stableId(text: string): Promise<string> {
+  const h = [...new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text)))].slice(0, 16)
+  h[6] = (h[6]! & 0x0f) | 0x50   // version 5-style: name-based
+  h[8] = (h[8]! & 0x3f) | 0x80
+  const x = h.map((b) => b.toString(16).padStart(2, '0')).join('')
+  return `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20)}`
+}
+
+/** Said when the model, asked twice, still gives no answer in words. */
+const NO_ANSWER = 'I could not put an answer together for that. Try asking in another way.'
 
 const DEFAULT_TIMEOUTS = { firstChunkMs: 30_000, chunkMs: 20_000, totalMs: 120_000 }
 
@@ -185,7 +199,34 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
       : await storage.createThread(identity.tenantId, identity.userId)
     if (!thread) return json(404, { error: 'That conversation was not found.' })   // also when it is someone else's
 
-    const earlier = await storage.listMessages(thread.id)
+    let earlier = await storage.listMessages(thread.id)
+    // A message the thread already has: the user edited it, or asked for the reply again (same id). Everything from
+    // it on is replaced. Only the user's own messages can be sent again.
+    const again = earlier.findIndex((m) => m.id === message.id)
+    if (again >= 0) {
+      if (earlier[again]!.role !== 'user') return json(400, { error: 'Only your own messages can be sent again.' })
+      await storage.removeMessagesFrom(thread.id, message.id)
+      earlier = earlier.slice(0, again)
+    }
+    const runId = crypto.randomUUID()
+    const page = readPage(body.page)
+    const text = message.parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join(' ')
+    const routed = config.route ? await Promise.resolve().then(() => config.route!({ identity, page, text, history: earlier.length })).catch((e) => { config.on?.error?.(e, { identity, threadId: thread.id }); return undefined }) : undefined
+    const models = routed?.length ? routed : config.models
+    const first = models[0]!
+    await storage.startRun({ id: runId, threadId: thread.id, tenantId: identity.tenantId, userId: identity.userId, model: first.modelId, promptVersion: config.promptVersion })
+    // Count again now that this reply is registered: two messages sent at the same moment both passed the check
+    // above, and only now can one see the other. Nothing is saved or paid for yet, so backing off costs nothing.
+    const maxRunning = config.limits?.maxRunning ?? 2
+    const running = await storage.runningRuns(identity.tenantId, identity.userId, new Date(Date.now() - timeouts.totalMs * 2))
+    if (running > maxRunning) {
+      await storage.finishRun(runId, { status: 'failed', error: 'Too many replies at once' })
+      if (!body.threadId && !earlier.length) await storage.archiveThread(identity.tenantId, identity.userId, thread.id)   // the empty one just made
+      const raced: LimitHit = { scope: 'running', limit: maxRunning, used: running }
+      config.on?.limit?.(raced, identity)
+      return json(429, { error: limitMessage(raced), limit: raced })
+    }
+
     if (!earlier.length && !thread.title) await storage.setThreadTitle(thread.id, titleFrom(message))
     // Pictures go to the file store; the saved message keeps a reference. The model still reads this message's
     // pictures in full, and earlier ones only as a note.
@@ -194,13 +235,6 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     await storage.saveMessages(thread.id, [saved])
 
     const db = await config.asUser(identity, req)
-    const runId = crypto.randomUUID()
-    const page = readPage(body.page)
-    const text = message.parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join(' ')
-    const routed = config.route ? await Promise.resolve().then(() => config.route!({ identity, page, text, history: earlier.length })).catch((e) => { config.on?.error?.(e, { identity, threadId: thread.id }); return undefined }) : undefined
-    const models = routed?.length ? routed : config.models
-    const first = models[0]!
-    await storage.startRun({ id: runId, threadId: thread.id, tenantId: identity.tenantId, userId: identity.userId, model: first.modelId, promptVersion: config.promptVersion })
     await storage.addUsage([{ tenantId: identity.tenantId, userId: identity.userId, runId, provider: first.provider, model: first.modelId, unit: 'messages', amount: 1 }])
     let seq = 0
     const statuses = new Map((await storage.listCards(thread.id)).map((c) => [c.id, c]))
@@ -249,12 +283,14 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
                   await storage.saveCard(card)
                   await logEvent(card, 'proposed', identity!)
                   config.on?.card?.(card)
+                  shown = true
                   writer.write({ type: 'data-card', id: card.id, data: publicCard(card) })
                   // Worded for small models too: they lean on the last tool result more than on the system prompt.
                   return `NOT DONE YET. "${p.title}" is shown to the user as a card with Confirm and Skip; nothing has changed. ` +
                     'In your reply, say it is ready for them to confirm. Do not say it is recorded, saved or done.'
                 }
                 if (t.kind === 'action') {
+                  shown = true
                   writer.write({ type: 'data-action', id: toolCallId, data: out as Action })
                   return 'A button is shown under your reply.'
                 }
@@ -280,6 +316,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
                 const missing = missingFields(spec, data as FormData)
                 if (missing) throw new Error(missing)
               }
+              shown = true
               writer.write({ type: 'data-view', id: toolCallId, data: { view: v.name, data } })
               await storage.saveStep({ runId, seq: seq++, type: 'tool', toolCallId, name: `show_${v.name}`, input: clip(data, config.logLimit ?? 8000).value, truncated: false, durationMs: 0 })
               return v.name === 'choices' ? 'Shown as buttons. Stop here: their pick arrives as their next message.'
@@ -317,6 +354,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
                   ? `${s.title} (${s.path}) can't take those values. ${s.filters ? `Its filters are: ${Object.keys(s.filters).join(', ')}.` : 'It has no filters.'} Offer it without the rest, or say the app can't do that.`
                   : `There is no screen "${screen}". Use one of: ${screens.map((x) => x.path).join(', ')}.`)
               }
+              shown = true
               writer.write({ type: 'data-action', id: toolCallId, data: { label: label?.trim() || `Open ${to.title}`, action: 'navigate', args: { to: to.path } } })
               return 'A button is shown under your reply.'
             },
@@ -330,11 +368,8 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
           config.on?.modelSwitch?.(from, e)
         }, timeouts.firstChunkMs)
         let streamError: unknown
-        const result = streamText({
-          onError: ({ error }) => { streamError ??= error },
-          model,
-          system,
-          messages: await convertToModelMessages(history, {
+        let shown = false   // a card, view or button reached the user in this reply
+        const modelMessages = await convertToModelMessages(history, {
             // Earlier cards reach the model with their status now, so it knows what the user confirmed or skipped.
             convertDataPart: (p) => {
               if (p.type === 'data-view') {
@@ -346,7 +381,12 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
               const c = p.data as StoredCard
               return { type: 'text', text: cardForModel(statuses.get(c.id) ?? c) }
             },
-          }),
+          })
+        const result = streamText({
+          onError: ({ error }) => { streamError ??= error },
+          model,
+          system,
+          messages: modelMessages,
           tools,
           stopWhen: isStepCount(config.maxSteps ?? 8),
           // First output is timed by fallbackModel (per model, so a stalled one hands over to the next); the SDK
@@ -356,9 +396,24 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
           abortSignal: req.signal,
         })
         // Our sentence for the user, not the SDK's "An error occurred."; tool errors still reach the model as they are.
-        writer.merge(toUIMessageStream({ stream: result.stream, sendStart: false, onError: () => FAILED, redactToolErrors: false }))
+        writer.merge(toUIMessageStream({ stream: result.stream, sendStart: false, sendFinish: false, onError: () => FAILED, redactToolErrors: false }))
+        const results = [result]
         try {
-          const text = await result.text
+          let text = await result.text
+          // Models sometimes end a turn in silence after a tool call. Never leave the user with an empty reply: ask
+          // once more, with tools off, for the answer in words. (Not after a view or card: those are the answer.)
+          const said = (await result.steps).some((st) => st.text.trim())
+          if (!said && !shown && !req.signal.aborted) {
+            const again = streamText({
+              model, system: `${system}\n\nYou have what you need from the tools above. Now answer the user in words; do not call tools.`,
+              messages: [...modelMessages, ...(await result.response).messages], tools, toolChoice: 'none', maxRetries: 1, abortSignal: req.signal,
+              timeout: { chunkMs: timeouts.chunkMs, totalMs: timeouts.totalMs },
+            })
+            results.push(again)
+            writer.merge(toUIMessageStream({ stream: again.stream, sendStart: false, sendFinish: false, onError: () => NO_ANSWER, redactToolErrors: false }))
+            text = await Promise.resolve(again.text).catch(() => NO_ANSWER)
+          }
+          writer.write({ type: 'finish' })
           await finish('done')
           if (config.suggestions) {
             // Follow-ups ride along as a transient part: shown under this reply, never saved in the history.
@@ -372,13 +427,14 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
 
         async function finish(status: 'done' | 'failed' | 'stopped', error?: unknown) {
           await storage.finishRun(runId, { status, model: usedModel.modelId, ...(error ? { error: error instanceof Error ? error.message : String(error) } : {}) })
-          const u = await Promise.resolve(result.totalUsage).catch(() => undefined)
+          const all = await Promise.all(results.map((r) => Promise.resolve(r.totalUsage).catch(() => undefined)))
+          const u = { inputTokens: all.reduce((n, x) => n + (x?.inputTokens ?? 0), 0), outputTokens: all.reduce((n, x) => n + (x?.outputTokens ?? 0), 0) }
           const base = { tenantId: identity!.tenantId, userId: identity!.userId, runId, provider: usedModel.provider, model: usedModel.modelId }
           const rows: UsageRow[] = []
           if (u?.inputTokens) rows.push({ ...base, unit: 'input_tokens', amount: u.inputTokens })
           if (u?.outputTokens) rows.push({ ...base, unit: 'output_tokens', amount: u.outputTokens })
           // Providers with their own cost unit report it per step (Workers AI: neurons).
-          const steps = await Promise.resolve(result.steps).catch(() => [])
+          const steps = (await Promise.all(results.map((r) => Promise.resolve(r.steps).catch(() => [])))).flat()
           const neurons = steps.reduce((n, s) => n + (Number((s.providerMetadata?.workersAi as { neurons?: number } | undefined)?.neurons) || 0), 0)
           if (neurons > 0) rows.push({ ...base, unit: 'neurons', amount: neurons })
           if (rows.length) { await storage.addUsage(rows); config.on?.usage?.(rows) }
@@ -482,7 +538,9 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     const runId = (message.metadata as { runId?: string } | undefined)?.runId ?? crypto.randomUUID()
     // The card shows the form's fields, labels and order, unless the app's handler chose its own.
     const fields = proposal.fields ?? part.data.data.fields.map((f) => ({ key: f.name, label: f.label, format: f.type === 'date' ? 'date' as const : f.type === 'number' ? 'number' as const : 'text' as const }))
-    const card: StoredCard = { ...proposal, fields, id: crypto.randomUUID(), threadId: thread.id, runId, status: 'shown' }
+    // One card per form: its id comes from the conversation and the form, so a double tap (or two tabs) that both
+    // get past the "already sent" check above save the same card, not two.
+    const card: StoredCard = { ...proposal, fields, id: await stableId(`${thread.id}:${viewId}`), threadId: thread.id, runId, status: 'shown' }
     await storage.saveCard(card)
     await logEvent(card, 'proposed', identity)
     config.on?.card?.(card)
@@ -492,6 +550,21 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
       : [p]))
     await storage.saveMessages(thread.id, [{ ...message, parts }])
     return json(200, { card: publicCard(card), messageId: message.id })
+  }
+
+  /** Thumbs up or down on one reply: POST …/runs/:runId/rating { value: 'up' | 'down' | null, note? }. */
+  async function rate(req: Request, runId: string): Promise<Response> {
+    const identity = await config.identify(req)
+    if (!identity) return json(401, { error: 'Sign in to use the assistant.' })
+    let body: { value?: unknown; note?: unknown }
+    try { body = (await req.json()) as typeof body } catch { return json(400, { error: 'The request was not valid JSON.' }) }
+    const value = body.value === 'up' ? 1 : body.value === 'down' ? -1 : body.value === null ? null : undefined
+    if (value === undefined) return json(400, { error: 'Send value "up", "down" or null.' })
+    const note = typeof body.note === 'string' ? body.note.trim().slice(0, 500) || undefined : undefined
+    const ok = await config.storage.rateRun(identity.tenantId, identity.userId, runId, value, note)
+    if (!ok) return json(404, { error: 'That reply was not found.' })
+    config.on?.rating?.({ runId, value, note }, identity)
+    return json(200, { ok: true })
   }
 
   async function file(req: Request, id: string): Promise<Response> {
@@ -584,7 +657,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
       if (!f?.keepDays || !f.store.removeOlderThan) return 0
       return f.store.removeOlderThan(new Date(now.getTime() - f.keepDays * 86_400_000))
     },
-    /** Mount under any path, e.g. app.all('/api/assistant/*', teovo.fetch). Handles POST …/chat, GET …/threads, GET …/threads/:id, POST …/threads/:id/archive, GET …/suggestions, GET/PUT …/settings and POST …/cards/:id/(confirm|skip|undo). */
+    /** Mount under any path, e.g. app.all('/api/assistant/*', teovo.fetch). Handles POST …/chat (a message sent again replaces it and what came after), POST …/runs/:id/rating, GET …/threads, GET …/threads/:id, POST …/threads/:id/archive, GET …/suggestions, GET/PUT …/settings and POST …/cards/:id/(confirm|skip|undo). */
     async fetch(req: Request): Promise<Response> {
       const path = new URL(req.url).pathname
       if (req.method === 'POST' && path.endsWith('/chat')) return chat(req)
@@ -597,6 +670,8 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
       const f = /\/threads\/([0-9a-f-]{36})\/views\/([^/]{1,100})\/submit$/i.exec(path)
       if (req.method === 'POST' && f) return submitForm(req, f[1]!.toLowerCase(), decodeURIComponent(f[2]!))
       if (t && ((req.method === 'GET' && !t[2]) || (req.method === 'POST' && t[2]))) return threads(req, t[1]!.toLowerCase(), Boolean(t[2]))
+      const rt = /\/runs\/([0-9a-f-]{36})\/rating$/i.exec(path)
+      if (req.method === 'POST' && rt) return rate(req, rt[1]!.toLowerCase())
       if (req.method === 'GET' && path.endsWith('/audit')) return adminList(req, 'audit')
       if (req.method === 'GET' && path.endsWith('/misses')) return adminList(req, 'misses')
       if (req.method === 'POST' && path.endsWith('/wipe')) return wipeRoute(req)

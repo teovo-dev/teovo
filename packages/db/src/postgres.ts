@@ -62,10 +62,13 @@ export function postgresStorage(query: Query): Storage {
           [m.id, threadId, m.role, JSON.stringify(m.parts), m.metadata === undefined ? null : JSON.stringify(m.metadata)])
       }
     },
+    async removeMessagesFrom(threadId, messageId) {
+      await query(`delete from tv_messages where thread_id = $1 and seq >= (select seq from tv_messages where thread_id = $1 and id = $2)`, [threadId, messageId])
+    },
     async saveCard(c: StoredCard) {
       await query(
         `insert into tv_proposals (id, thread_id, run_id, kind, title, before, after, payload, status, untrusted_sources, fields) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-         on conflict (id) do update set status = excluded.status`,
+         on conflict (id) do nothing`,
         [c.id, c.threadId, c.runId, c.kind, c.title, json(c.before), json(c.after), json(c.payload), c.status, json(c.untrustedSources), json(c.fields)])
     },
     async getCard(tenantId, userId, id) {
@@ -109,6 +112,11 @@ export function postgresStorage(query: Query): Storage {
     },
     async finishRun(id, end) {
       await query('update tv_runs set status = $2, model = coalesce($3, model), error = $4, finished_at = now() where id = $1', [id, end.status, end.model ?? null, end.error ?? null])
+    },
+    async rateRun(tenantId, userId, runId, rating, note) {
+      if (!/^[0-9a-f-]{36}$/i.test(runId)) return false
+      const r = await query('update tv_runs set rating = $4, rating_note = $5, rated_at = now() where id = $1 and tenant_id = $2 and user_id = $3 returning id', [runId, tenantId, userId, rating, note ?? null])
+      return r.rows.length > 0
     },
     async saveStep(s) {
       await query(

@@ -44,6 +44,8 @@ interface AssistantState {
   clearSuggestions: () => void
   /** Confirm, skip or undo a card. Resolves to the card as it is now; rejects with the sentence to show. */
   decideCard: (card: Card, decision: CardDecision) => Promise<Partial<Card>>
+  /** Thumbs up or down on a reply (its metadata.runId), or null to take it back. */
+  rate: (runId: string, value: 'up' | 'down' | null) => Promise<void>
   onAction: AssistantProviderProps['onAction']
 }
 
@@ -162,6 +164,11 @@ export function AssistantProvider(props: AssistantProviderProps) {
   }, [])
   const clearSuggestions = useCallback(() => setSuggestions({ suggestions: [] }), [])
 
+  const rate = useCallback(async (runId: string, value: 'up' | 'down' | null) => {
+    const res = await request(`/runs/${encodeURIComponent(runId)}/rating`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ value }) })
+    if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error ?? 'Could not save that.')
+  }, [request])
+
   const decideCard = useCallback(async (card: Card, decision: CardDecision): Promise<Partial<Card>> => {
     const p = latest.current
     if (p.onCard) {
@@ -182,8 +189,8 @@ export function AssistantProvider(props: AssistantProviderProps) {
   }, [])
 
   const currentPage = useMemo(() => (pageKey && pageKey !== 'null' ? JSON.parse(pageKey) as Page : undefined), [pageKey])
-  const value = useMemo<AssistantState>(() => ({ chat, threadId, newChat, openThread, submitForm, request, setPage, page: currentPage, suggestions, clearSuggestions, decideCard, onAction: props.onAction }),
-    [chat, threadId, newChat, openThread, submitForm, request, setPage, currentPage, suggestions, clearSuggestions, decideCard, props.onAction])
+  const value = useMemo<AssistantState>(() => ({ chat, threadId, newChat, openThread, submitForm, request, setPage, page: currentPage, suggestions, clearSuggestions, decideCard, rate, onAction: props.onAction }),
+    [chat, threadId, newChat, openThread, submitForm, request, setPage, currentPage, suggestions, clearSuggestions, decideCard, rate, props.onAction])
   return <Ctx.Provider value={value}>{props.children}</Ctx.Provider>
 }
 

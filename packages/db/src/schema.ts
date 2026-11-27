@@ -165,6 +165,14 @@ revoke all on function tv_add_usage_daily(text, text, date, text, numeric) from 
 revoke all on function tv_list_threads(text, text, int) from public;`,
 }
 
+/** Thumbs up or down on a reply, kept with its run. */
+const ratings: Migration = {
+  id: '0009_ratings',
+  sql: `alter table tv_runs add column if not exists rating smallint check (rating in (-1, 1));
+alter table tv_runs add column if not exists rating_note text;
+alter table tv_runs add column if not exists rated_at timestamptz;`,
+}
+
 /** Who proposed, confirmed, skipped or undid each change, and when; and the questions the assistant couldn't answer. */
 const auditAndMisses: Migration = {
   id: '0010_audit_misses',
@@ -276,7 +284,7 @@ export function migrations(options: SchemaOptions = {}): Migration[] {
   list.push(formats)
   if (options.features?.proposals) list.push(proposalSources, proposalFields)
   if (options.features?.files) { list.push(files); tables.push('tv_files') }
-  list.push(apiFunctions)
+  list.push(apiFunctions, ratings)
   if (options.features?.files) list.push(fileIndex)
   const suffix = `${options.features?.proposals ? 'with_proposals' : 'core'}${options.features?.files ? '_files' : ''}`
   if (options.rls === 'server-only') list.push({ ...serverOnlyMigration(tables), id: `0101_server_only_${suffix}` })

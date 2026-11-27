@@ -69,6 +69,22 @@
 .tv-error { color: var(--tv-error); font-size: 0.875em; }
 .tv-stopped { color: var(--tv-muted); font-size: 0.8125em; font-style: italic; }
 
+/* ---------- Actions under a message ---------- */
+.tv-msg-actions { display: flex; align-items: center; gap: 2px; opacity: 0; transition: opacity 0.15s; }
+.tv-user { position: relative; }
+/* Beside the bubble, not under it, so it takes no room. */
+.tv-user .tv-msg-actions { position: absolute; right: 100%; top: 2px; margin-right: 4px; }
+.tv-message:hover .tv-msg-actions, .tv-msg-actions:focus-within, .tv-message:last-child .tv-msg-actions { opacity: 1; }
+@media (hover: none) { .tv-msg-actions { opacity: 1; } }
+.tv-icon-sm { width: 28px; height: 28px; border-radius: 8px; }
+.tv-icon-sm svg { width: 15px; height: 15px; }
+.tv-msg-actions .tv-icon[aria-pressed='true'] { color: var(--tv-accent); background: color-mix(in srgb, var(--tv-accent) 12%, transparent); }
+.tv-editing { align-self: stretch; max-width: 100%; gap: 6px; }
+.tv-editing textarea { width: 100%; resize: vertical; border: 1px solid var(--tv-accent); border-radius: 12px; padding: 8px 12px; background: var(--tv-bg); font: inherit; color: inherit; }
+.tv-edit-buttons { display: flex; justify-content: flex-end; gap: 8px; }
+.tv-btn-primary { background: var(--tv-accent); color: var(--tv-accent-text); border-color: transparent; }
+.tv-edit-note { margin: 0; font-size: 0.75em; color: var(--tv-muted); text-align: right; }
+
 /* ---------- Buttons ---------- */
 .tv-btn, .tv-card-buttons button, .tv-form button[type='submit'], .tv-choices-options button, .tv-action, .tv-card-done button {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 36px; padding: 0 14px;

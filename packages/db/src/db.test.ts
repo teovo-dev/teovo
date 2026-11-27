@@ -31,7 +31,7 @@ suite('@teovo/db on Postgres', () => {
 
   it('creates core tables only, adds a feature later, and never repeats a migration', async () => {
     const { query, client } = await freshSchema()
-    expect(await migrate(query)).toEqual(['0001_core', '0003_tenant_formats', '0007_api_functions', '0010_audit_misses'])
+    expect(await migrate(query)).toEqual(['0001_core', '0003_tenant_formats', '0007_api_functions', '0009_ratings', '0010_audit_misses'])
     expect(await missingTables(query, { proposals: true })).toEqual(['tv_proposals'])
     expect(await migrate(query, { features: { proposals: true } })).toEqual(['0002_proposals', '0004_proposal_sources', '0006_proposal_fields'])
     expect(await migrate(query, { features: { proposals: true } })).toEqual([])
@@ -134,6 +134,11 @@ suite('@teovo/db on Postgres', () => {
     expect(await s.updateCard(id, ['confirmed'], { reversible: true, undo: { paymentId: 'p9' } })).toMatchObject({ status: 'confirmed', decidedBy: 'u1', decidedAt: at, reversible: true, undo: { paymentId: 'p9' } })
     expect(await s.updateCard(id, ['confirmed'], { status: 'shown', decidedBy: undefined, decidedAt: undefined })).not.toHaveProperty('decidedBy')
     expect((await s.listCards(t.id)).map((c) => c.status)).toEqual(['shown'])
+
+    // Saving the same card again (a form sent twice) keeps the first and its decision.
+    await s.updateCard(id, ['shown'], { status: 'confirmed', decidedBy: 'u1', decidedAt: at })
+    await s.saveCard({ id, threadId: t.id, runId: crypto.randomUUID(), kind: 'pay', title: 'Pay again', payload: {}, status: 'shown' })
+    expect(await s.getCard('shop-1', 'u1', id)).toMatchObject({ title: 'Pay', status: 'confirmed' })
     client.release()
   })
 

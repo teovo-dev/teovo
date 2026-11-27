@@ -140,8 +140,11 @@ describe('createAssistant', () => {
   it('stops at the step cap', async () => {
     const loop = new MockLanguageModelV4({ doStream: async () => call('get_order', { no: 1 }) })
     const { teovo } = setup([loop], owner, { maxSteps: 3 })
-    await finalMessage(await post(teovo, { message: userMessage('loop') }))
-    expect(loop.doStreamCalls).toHaveLength(3)
+    const res = await post(teovo, { message: userMessage('loop') })
+    const body = await res.text()
+    // 3 steps, then one request for the answer in words; a model that still only calls tools gets a plain sentence.
+    expect(loop.doStreamCalls).toHaveLength(4)
+    expect(body).toContain('I could not put an answer together for that. Try asking in another way.')
   })
 
   it('rejects a body without user text', async () => {
