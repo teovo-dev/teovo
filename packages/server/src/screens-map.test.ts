@@ -35,7 +35,7 @@ describe('screens map', () => {
   it('lists the screens and opens only those, with safe values', async () => {
     const m = scriptedModel([callTool('open_screen', { screen: '/orders/:id', params: { id: 142 } }), callTool('open_screen', { screen: '/admin' }), callTool('open_screen', { screen: '/orders/:id', params: { id: '../../admin' } }), say('Here it is.')])
     const r = await chat(setup(m, { screens }), 'open order 142')
-    expect(system(m, 0)).toContain('Screens in this app (offer one with open_screen when it helps the user):\n- Orders: /orders (all orders, filter by unpaid)\n- Order: /orders/:id')
+    expect(system(m, 0)).toContain('then offer a screen with open_screen if it helps.\n- Orders: /orders (all orders, filter by unpaid)\n- Order: /orders/:id')
     expect(r.actions).toEqual([{ label: 'Open Order', action: 'navigate', args: { to: '/orders/142' } }])
     const later = JSON.stringify(m.doStreamCalls[3]!.prompt)
     expect(later).toContain('There is no screen \\"/admin\\". Use one of: /orders, /orders/:id.')

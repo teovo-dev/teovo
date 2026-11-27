@@ -65,6 +65,7 @@
 @keyframes tv-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .tv-thinking span, .tv-step::before { animation: none; } }
 .tv-error { color: var(--tv-error); font-size: 0.875em; }
+.tv-stopped { color: var(--tv-muted); font-size: 0.8125em; font-style: italic; }
 
 /* ---------- Buttons ---------- */
 .tv-btn, .tv-card-buttons button, .tv-form button[type='submit'], .tv-choices-options button, .tv-action, .tv-card-done button {
@@ -90,6 +91,8 @@
 .tv-card-diff td:nth-child(2) { color: var(--tv-muted); text-decoration: line-through; }
 .tv-card-diff td:nth-child(3) { color: var(--tv-muted); }
 .tv-card-diff td:last-child { font-weight: 500; }
+.tv-card-new td:nth-child(2) { color: var(--tv-fg); text-decoration: none; }
+.tv-card-diff th { white-space: nowrap; }
 .tv-card-buttons { display: flex; gap: 8px; }
 .tv-card-buttons button { flex: 1; }
 .tv-card-done { color: var(--tv-ok); font-size: 0.875em; font-weight: 500; display: flex; gap: 10px; align-items: center; }

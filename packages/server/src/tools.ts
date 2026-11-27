@@ -23,7 +23,14 @@ export interface Proposal {
   after?: Record<string, unknown>
   /** Everything the app needs to apply the change later. */
   payload: unknown
+  /**
+   * How the card shows the values: which fields, in this order, with labels and formats (money shows as ₹1,320.00,
+   * dates as 26 Nov 2026). Omitted: every key of before/after, named from the key. Cards from a form get the form's.
+   */
+  fields?: CardField[]
 }
+
+export interface CardField { key: string; label?: string; format?: 'text' | 'number' | 'money' | 'date' }
 
 /** A button under the reply. */
 export interface Action {

@@ -13,6 +13,7 @@ const card = (r: any): StoredCard => {
   if (r.undo !== null && r.undo !== undefined) c.undo = r.undo
   if (r.undone_at) c.undoneAt = iso(r.undone_at)
   if (r.untrusted_sources) c.untrustedSources = r.untrusted_sources
+  if (r.fields) c.fields = r.fields
   return c
 }
 const COLUMN: Record<keyof CardPatch, string> = { status: 'status', decidedBy: 'decided_by', decidedAt: 'decided_at', reversible: 'reversible', undo: 'undo', undoneAt: 'undone_at' }
@@ -63,9 +64,9 @@ export function postgresStorage(query: Query): Storage {
     },
     async saveCard(c: StoredCard) {
       await query(
-        `insert into tv_proposals (id, thread_id, run_id, kind, title, before, after, payload, status, untrusted_sources) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        `insert into tv_proposals (id, thread_id, run_id, kind, title, before, after, payload, status, untrusted_sources, fields) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          on conflict (id) do update set status = excluded.status`,
-        [c.id, c.threadId, c.runId, c.kind, c.title, json(c.before), json(c.after), json(c.payload), c.status, json(c.untrustedSources)])
+        [c.id, c.threadId, c.runId, c.kind, c.title, json(c.before), json(c.after), json(c.payload), c.status, json(c.untrustedSources), json(c.fields)])
     },
     async getCard(tenantId, userId, id) {
       if (!/^[0-9a-f-]{36}$/i.test(id)) return null

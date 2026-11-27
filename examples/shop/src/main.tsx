@@ -34,7 +34,7 @@ function Orders({ orders, go, query }: { orders: Order[]; go: (to: string) => vo
   // The filter lives in the link (#/orders?unpaid=yes), so the assistant's "Show unpaid orders" button can set it.
   const unpaid = query.get('unpaid') === 'yes'
   const setUnpaid = (on: boolean) => go(on ? '/orders?unpaid=yes' : '/orders')
-  useAssistantContext({ path: '/orders', title: 'Orders', state: { filter: unpaid ? 'unpaid' : 'all' } })
+  useAssistantContext({ path: '/orders', title: 'Orders', ...(unpaid ? { state: { filter: 'unpaid only' } } : {}) })
   return (
     <section>
       <h1>Orders</h1>

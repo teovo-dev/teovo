@@ -24,12 +24,12 @@ const HELP = `Usage: teovo <command> [options]
 Commands
   init        Write teovo.config.json (features and row-level rules)
   generate    Write the tables as SQL, for apps that keep their own migrations (e.g. Supabase)
-  migrate     Create or update the tables in the database at DATABASE_URL
+  migrate     Create or update the tables in the database at TEOVO_DATABASE_URL (or DATABASE_URL)
   status      Show which migrations ran and which tables are missing
   prune       Delete conversations older than --days (asks for --yes)
 
 Options
-  --url <postgres-url>     Instead of DATABASE_URL
+  --url <postgres-url>     Instead of TEOVO_DATABASE_URL / DATABASE_URL
   --features <list>        For init: comma list, e.g. proposals
   --tenant-sql <expr>      For init: SQL that returns the current tenant id as text
   --user-sql <expr>        For init: SQL that returns the current user id as text
@@ -58,8 +58,8 @@ export async function main(argv: string[], io: Io): Promise<number> {
     return JSON.parse(readFileSync(configPath, 'utf8')) as CliConfig
   }
   const withDb = async <T>(fn: (q: Query) => Promise<T>): Promise<T> => {
-    const url = values.url ?? io.env.DATABASE_URL
-    if (!url) throw new UserError('Set DATABASE_URL or pass --url.')
+    const url = values.url ?? io.env.TEOVO_DATABASE_URL ?? io.env.DATABASE_URL
+    if (!url) throw new UserError('Set TEOVO_DATABASE_URL (or DATABASE_URL) or pass --url.')
     const db = await io.connect(url)
     try { return await fn(db.query) } finally { await db.close() }
   }

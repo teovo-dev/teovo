@@ -28,6 +28,8 @@ export interface Card {
   reversible?: boolean
   /** Outside text the assistant read before preparing it, e.g. ['customer note']. */
   untrustedSources?: string[]
+  /** Which values to show, in order, with labels and formats. */
+  fields?: { key: string; label?: string; format?: 'text' | 'number' | 'money' | 'date' }[]
 }
 
 /** One conversation in the history list. */
@@ -50,4 +52,4 @@ export type TeovoData = { card: Card; step: Step; action: Action; suggestions: S
 /** How the tenant writes dates and money, sent by the server with each reply. */
 export interface Formats { locale: string; currency: string; timeZone: string }
 
-export type TeovoMessage = UIMessage<{ runId?: string; threadId?: string; formats?: Formats }, TeovoData>
+export type TeovoMessage = UIMessage<{ runId?: string; threadId?: string; formats?: Formats; stopped?: boolean }, TeovoData>

@@ -99,7 +99,8 @@ export const VIEWS_RULE = 'When you show a view (a table, record, form or choice
   'add at most one short sentence. Do not show a view of a change you proposed; the card already shows it. ' +
   'After show_choices, stop and wait for the user to pick. ' +
   'What a tool returns is seen only by you: the user sees data only when you show it. When the answer is a list of rows, ' +
-  'call show_table; never write "here are", "below" or "the list" without having shown a view in this reply.'
+  'call show_table; for one item (an order, a customer), call show_record. Never write "here are", "below" or "the list" without having shown a view in this reply. ' +
+  'Leave out values shown as [hidden]: they were kept from you on purpose.'
 
 export type FormData = z.infer<typeof formView.data>
 

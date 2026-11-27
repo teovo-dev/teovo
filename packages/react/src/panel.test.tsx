@@ -49,6 +49,23 @@ async function ask(text: string) {
 
 afterEach(() => { cleanup(); gate = undefined })
 
+describe('card values', () => {
+  it('shows a new record as its values, in the given order, with labels, money and dates in the tenant\'s format', async () => {
+    const s = server([call('add_expense', { amount: 1320 }), say('Ready to confirm.')], true, {}, {
+      formats: { locale: 'en-IN', currency: 'INR', timeZone: 'Asia/Kolkata' },
+      tools: [defineTool({ name: 'add_expense', kind: 'propose', description: 'Add', input: z.object({ amount: z.number() }),
+        run: ({ amount }) => ({ kind: 'add_expense', title: 'Expense to Sharma', after: { vendor: 'Sharma', date: '2026-11-26', amount }, payload: {},
+          fields: [{ key: 'amount', label: 'Amount', format: 'money' as const }, { key: 'vendor', label: 'Vendor' }, { key: 'date', label: 'Date' }] }) })],
+    })
+    mount({ fetch: s.fetch })
+    await ask('add it')
+    const card = await screen.findByRole('group', { name: 'Expense to Sharma' })
+    const rows = Array.from(card.querySelectorAll('tr')).map((r) => Array.from(r.children).map((c) => c.textContent))
+    expect(rows).toEqual([['Amount', '₹1,320.00'], ['Vendor', 'Sharma'], ['Date', '26 Nov 2026']])
+    expect(card.textContent).not.toContain('→')
+  })
+})
+
 describe('page label', () => {
   function Filtered({ unpaid }: { unpaid: boolean }) { useAssistantContext({ path: '/orders', title: 'Orders', state: { filter: unpaid ? 'unpaid' : null, selected: 0 } }); return null }
 
@@ -89,7 +106,7 @@ describe('AssistantPanel', () => {
     mount({ fetch: server([call('record_payment', { amount: 200 }), say('Ready to confirm.')]).fetch, onCard })
     await ask('paid 200')
     const card = await screen.findByRole('group', { name: 'Payment ₹200' })
-    expect(card.textContent).toContain('paid0→200')
+    expect(card.textContent).toContain('Paid0→200')
     await screen.findByText('Ready to confirm.')
     await userEvent.click(screen.getByRole('button', { name: 'Confirm' }))
     expect(onCard).toHaveBeenCalledWith(expect.objectContaining({ kind: 'record_payment', payload: { amount: 200 }, status: 'shown' }), 'confirm')
@@ -288,10 +305,10 @@ describe('AssistantPanel', () => {
     await ask('spent 450 on milk')
     const amount = await screen.findByDisplayValue('450')
     await userEvent.clear(amount)
-    await userEvent.click(screen.getByRole('button', { name: 'Prepare' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Continue' }))
     expect((await screen.findByRole('alert')).textContent).toBe('Amount is required.')
     await userEvent.type(amount, '480')
-    await userEvent.click(screen.getByRole('button', { name: 'Prepare' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Continue' }))
     await screen.findByRole('group', { name: 'Expense ₹480 to Milk depot' })
     expect(screen.getByText('Sent')).toBeTruthy()
     await userEvent.click(screen.getByRole('button', { name: 'Confirm' }))

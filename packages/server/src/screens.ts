@@ -48,7 +48,7 @@ export function screenPath(screens: readonly ScreenInfo[], name: string, params:
 /** The screens map for the model. */
 export function screensText(screens: readonly ScreenInfo[]): string {
   if (!screens.length) return ''
-  return `\n\nScreens in this app (offer one with open_screen when it helps the user):\n${screens.map((s) => `- ${s.title}: ${s.path}${s.description ? ` (${s.description})` : ''}${s.filters ? `; filters: ${Object.entries(s.filters).map(([k, d]) => `${k} (${d})`).join(', ')}` : ''}`).join('\n')}`
+  return `\n\nScreens in this app. A button to one is an extra, never the answer: when the user asks about something, look it up with your tools and answer (or show it); then offer a screen with open_screen if it helps.\n${screens.map((s) => `- ${s.title}: ${s.path}${s.description ? ` (${s.description})` : ''}${s.filters ? `; filters: ${Object.entries(s.filters).map(([k, d]) => `${k} (${d})`).join(', ')}` : ''}`).join('\n')}`
 }
 
 /**
