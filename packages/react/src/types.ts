@@ -47,7 +47,16 @@ export type CardDecision = 'confirm' | 'skip' | 'undo'
 export interface Action { label: string; action: string; args?: Record<string, unknown> }
 
 /** A tool the assistant is running, shown as a short line while it works. */
-export interface Step { name: string; state: 'running' | 'done' }
+export interface Step {
+  name: string
+  state: 'running' | 'done'
+  /** read (looked something up), propose (prepared a change), action (offered a button). */
+  kind?: 'read' | 'propose' | 'action'
+  /** How long it took, once done. */
+  ms?: number
+  /** Why it failed, if it did (the model saw this too). */
+  error?: string
+}
 
 /** The data parts Teovo's server streams. Same names as on the server: data-card, data-step, data-action. */
 /** A view the assistant showed: its name, its data, and for a form whether it was sent. */
