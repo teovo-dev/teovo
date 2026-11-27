@@ -31,6 +31,8 @@ interface AssistantState {
   newChat: () => void
   /** Load an earlier conversation into the panel; the next message continues it. Rejects with the sentence to show. */
   openThread: (id: string) => Promise<void>
+  /** Send a form the assistant showed. The server turns it into a card, which appears under the form. */
+  submitForm: (messageId: string, viewId: string, values: Record<string, unknown>) => Promise<void>
   /** Calls the handler: path under the endpoint, with the provider's headers and fetch. */
   request: (path: string, init?: RequestInit) => Promise<Response>
   setPage: (page: Page | undefined) => void
@@ -115,6 +117,22 @@ export function AssistantProvider(props: AssistantProviderProps) {
     chat.setMessages(body.messages)
   }, [chat, request])
 
+  const submitForm = useCallback(async (messageId: string, viewId: string, values: Record<string, unknown>) => {
+    if (!thread.current) throw new Error('Send a message first.')
+    const res = await request(`/threads/${thread.current}/views/${encodeURIComponent(viewId)}/submit`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ values }),
+    })
+    const body = (await res.json().catch(() => ({}))) as { card?: Card; error?: string }
+    if (!res.ok || !body.card) throw new Error(body.error ?? 'The form could not be sent.')
+    const card = body.card
+    chat.setMessages((list) => list.map((m) => (m.id !== messageId ? m : {
+      ...m,
+      parts: m.parts.flatMap((p) => (p.type === 'data-view' && p.id === viewId
+        ? [{ ...p, data: { ...p.data, submitted: card.id, values: values as Record<string, string> } }, { type: 'data-card' as const, id: card.id, data: card }]
+        : [p])),
+    })))
+  }, [chat, request])
+
   // Continue the conversation the app passed in, e.g. from the URL.
   const initial = useRef(props.threadId)
   useEffect(() => {
@@ -146,8 +164,8 @@ export function AssistantProvider(props: AssistantProviderProps) {
     return body.card ?? {}
   }, [])
 
-  const value = useMemo<AssistantState>(() => ({ chat, threadId, newChat, openThread, request, setPage, suggestions, clearSuggestions, decideCard, onAction: props.onAction }),
-    [chat, threadId, newChat, openThread, request, setPage, suggestions, clearSuggestions, decideCard, props.onAction])
+  const value = useMemo<AssistantState>(() => ({ chat, threadId, newChat, openThread, submitForm, request, setPage, suggestions, clearSuggestions, decideCard, onAction: props.onAction }),
+    [chat, threadId, newChat, openThread, submitForm, request, setPage, suggestions, clearSuggestions, decideCard, props.onAction])
   return <Ctx.Provider value={value}>{props.children}</Ctx.Provider>
 }
 

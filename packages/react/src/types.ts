@@ -38,6 +38,9 @@ export interface Action { label: string; action: string; args?: Record<string, u
 export interface Step { name: string; state: 'running' | 'done' }
 
 /** The data parts Teovo's server streams. Same names as on the server: data-card, data-step, data-action. */
-export type TeovoData = { card: Card; step: Step; action: Action; suggestions: Suggestions }
+/** A view the assistant showed: its name, its data, and for a form whether it was sent. */
+export interface View { view: string; data: any; submitted?: string; values?: Record<string, string | number | boolean | null> }
+
+export type TeovoData = { card: Card; step: Step; action: Action; suggestions: Suggestions; view: View }
 
 export type TeovoMessage = UIMessage<{ runId?: string; threadId?: string }, TeovoData>

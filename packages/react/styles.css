@@ -26,3 +26,16 @@
 .tv-thread { flex: 1; text-align: left; background: none; border: 0; padding: 8px; border-radius: 8px; font: inherit; cursor: pointer; }
 .tv-threads li[aria-current] .tv-thread { background: #eef2ff; }
 .tv-thread-remove { background: none; border: 0; color: #6b7280; cursor: pointer; }
+.tv-view { border: 1px solid #e5e7eb; border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
+.tv-view-title { font-weight: 600; }
+.tv-choices-options { display: flex; flex-wrap: wrap; gap: 6px; }
+.tv-table { overflow-x: auto; }
+.tv-table table { border-collapse: collapse; width: 100%; }
+.tv-table th button { background: none; border: 0; font: inherit; font-weight: 600; cursor: pointer; padding: 0; }
+.tv-table th, .tv-table td { text-align: left; padding: 4px 8px; border-bottom: 1px solid #e5e7eb; }
+.tv-record dl { margin: 0; display: grid; gap: 4px; }
+.tv-record dl > div { display: flex; justify-content: space-between; gap: 12px; }
+.tv-record dt { color: #6b7280; }
+.tv-record dd { margin: 0; }
+.tv-form label { display: flex; flex-direction: column; gap: 2px; }
+.tv-form label span { color: #6b7280; font-size: 0.875em; }
