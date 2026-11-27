@@ -5,6 +5,7 @@ export { defineTool, toolsFor, type Action, type Identity, type Proposal, type T
 export { memoryStorage, periodKey, type Budget, type CardPatch, type CardStatus, type Period, type RunRecord, type StepRecord, type Storage, type StoredCard, type Thread, type Totals, type Unit, type UsageRow } from './storage.js'
 export { builtinViews, checkForm, choicesView, defineView, formView, recordView, tableView, type FormHandler, type TeovoView } from './views.js'
 export { makeRedactor, type RedactOptions, type Redactor } from './redact.js'
+export { checkMessage, type AttachmentRules } from './attachments.js'
 export { checkFormats, DEFAULT_FORMATS, formatsText, type Formats } from './formats.js'
 export { DEFAULT_SETTINGS, settingsText, validateSettings, type TenantSettings } from './settings.js'
 export { cardForModel, CardError, publicCard, type ApplyResult, type CardApplier, type CardRules, type Decision } from './cards.js'

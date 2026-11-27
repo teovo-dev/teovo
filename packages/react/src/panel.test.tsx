@@ -280,6 +280,41 @@ describe('AssistantPanel', () => {
     expect(screen.getByText('1 Nov 2026')).toBeTruthy()
   })
 
+  it('attaches a picture, shows it before and after sending, and sends it with the message', async () => {
+    const s = server([say('A bill for ₹450.')], true, {}, { attachments: {} })
+    render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><AssistantPanel attach /></AssistantProvider>)
+    const picture = new File(['fake picture bytes'], 'bill.png', { type: 'image/png' })
+    await userEvent.upload(screen.getByLabelText('Attach pictures'), picture)
+    const preview = await screen.findByRole('img', { name: 'bill.png' })
+    expect(preview.getAttribute('src')).toMatch(/^data:image\/png;base64,/)
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await screen.findByText('A bill for ₹450.')
+    const file = s.bodies[0].message.parts.find((p: { type: string }) => p.type === 'file')
+    expect(file).toMatchObject({ mediaType: 'image/png', filename: 'bill.png' })
+    expect(screen.getAllByRole('img', { name: 'bill.png' })).toHaveLength(1)   // in the message; the preview is gone
+  })
+
+  it('turns speech into text in the box, where the browser supports it', async () => {
+    let instance: any
+    class FakeRecognition { lang = ''; interimResults = true; continuous = true; onresult: any; onend: any; onerror: any
+      constructor() { instance = this } start() {} stop() { this.onend?.() } }
+    const w = window as unknown as Record<string, unknown>
+    const s = server([])
+    const first = render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><AssistantPanel /></AssistantProvider>)
+    expect(screen.queryByRole('button', { name: 'Speak' })).toBeNull()
+    first.unmount()
+    w.webkitSpeechRecognition = FakeRecognition
+    try {
+      render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><AssistantPanel voiceLang="hi-IN" /></AssistantProvider>)
+      await userEvent.click(screen.getByRole('button', { name: 'Speak' }))
+      expect(instance.lang).toBe('hi-IN')
+      await act(async () => instance.onresult({ results: [Object.assign([{ transcript: 'Riya paid 200' }], { isFinal: true })] }))
+      await act(async () => instance.stop())
+      expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('Riya paid 200')
+      expect(screen.getByRole('button', { name: 'Speak' })).toBeTruthy()
+    } finally { delete w.webkitSpeechRecognition }
+  })
+
   it('lets the app draw its own views', async () => {
     const s = server([call('show_record', { title: 'Order #142', fields: [{ label: 'Total', value: 880 }] }), say('There.')], true, {}, { views: builtinViews })
     render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><AssistantPanel views={{ record: ({ part }) => <p>Custom: {part.data.title}</p> }} /></AssistantProvider>)

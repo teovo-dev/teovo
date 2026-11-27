@@ -1,4 +1,5 @@
-import { useState, type FormEvent, type ReactNode } from 'react'
+import { useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { readFile, useVoice, type PendingFile } from './input.js'
 import { useAssistant } from './provider.js'
 import type { Action, Card, CardDecision, Step, TeovoMessage, View } from './types.js'
 import { defaultViews, isCurrent, type ViewComponent } from './views.js'
@@ -15,6 +16,12 @@ export interface AssistantPanelProps {
   stepLabels?: Record<string, string>
   /** Draw views yourself, by view name: replaces the built-in choices, table, record and form, or adds the app's own. */
   views?: Record<string, ViewComponent>
+  /** Let the user attach pictures. Turn it on only when the server has `attachments` set. Default off. */
+  attach?: boolean | { accept?: string; maxFiles?: number }
+  /** Show a microphone button where the browser can turn speech into text. Default true. */
+  voice?: boolean
+  /** Language for speech, e.g. 'hi-IN'. Default: the browser's. */
+  voiceLang?: string
   /** Show suggestion chips above the input. Default true (they only appear when the server has some). */
   showSuggestions?: boolean
   className?: string
@@ -28,16 +35,34 @@ export function AssistantPanel(props: AssistantPanelProps) {
   const [text, setText] = useState('')
   const busy = chat.status === 'submitted' || chat.status === 'streaming'
   const hint = suggestions.placeholder
+  const [files, setFiles] = useState<PendingFile[]>([])
+  const [fileError, setFileError] = useState<string>()
+  const picker = useRef<HTMLInputElement>(null)
+  const attach = props.attach ? (props.attach === true ? {} : props.attach) : null
+  const voice = useVoice((said) => setText((t) => (t ? `${t} ${said}` : said)), props.voiceLang)
 
   function ask(t: string) {
-    if (!t.trim() || busy) return
+    if ((!t.trim() && !files.length) || busy) return
     setText('')
     clearSuggestions()
-    void chat.sendMessage({ text: t.trim() })
+    const parts = files.map((f) => ({ type: 'file' as const, mediaType: f.mediaType, filename: f.name, url: f.url }))
+    setFiles([])
+    void chat.sendMessage(parts.length ? { text: t.trim(), files: parts } : { text: t.trim() })
   }
   function send(e: FormEvent) {
     e.preventDefault()
     ask(text)
+  }
+  async function pick(list: FileList | null) {
+    if (!list || !attach) return
+    setFileError(undefined)
+    const max = attach.maxFiles ?? 4
+    const chosen = Array.from(list).slice(0, Math.max(0, max - files.length))
+    try {
+      const read = await Promise.all(chosen.map(readFile))
+      setFiles((f) => [...f, ...read])
+    } catch (e) { setFileError(e instanceof Error ? e.message : String(e)) }
+    if (picker.current) picker.current.value = ''
   }
 
   return (
@@ -53,7 +78,25 @@ export function AssistantPanel(props: AssistantPanelProps) {
           {suggestions.suggestions.map((s) => <button key={s} type="button" className="tv-chip" onClick={() => ask(s)}>{s}</button>)}
         </div>
       ) : null}
+      {files.length ? (
+        <ul className="tv-pending" aria-label="Attached">
+          {files.map((f, i) => (
+            <li key={`${f.name}-${i}`}>
+              <img src={f.url} alt={f.name} />
+              <button type="button" aria-label={`Remove ${f.name}`} onClick={() => setFiles((all) => all.filter((_, j) => j !== i))}>×</button>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {fileError || voice.error ? <div className="tv-error" role="alert">{fileError ?? voice.error}</div> : null}
       <form className="tv-input" onSubmit={send}>
+        {attach ? (
+          <>
+            <input ref={picker} type="file" hidden multiple accept={attach.accept ?? 'image/jpeg,image/png,image/webp'} aria-label="Attach pictures"
+              onChange={(e) => void pick(e.target.files)} />
+            <button type="button" className="tv-attach" aria-label="Attach a picture" onClick={() => picker.current?.click()}>＋</button>
+          </>
+        ) : null}
         <textarea
           aria-label="Message"
           value={text}
@@ -67,7 +110,12 @@ export function AssistantPanel(props: AssistantPanelProps) {
         />
         {busy
           ? <button type="button" onClick={() => void chat.stop()}>Stop</button>
-          : <button type="submit" disabled={!text.trim()}>Send</button>}
+          : <button type="submit" disabled={!text.trim() && !files.length}>Send</button>}
+        {props.voice !== false && voice.supported && !busy ? (
+          <button type="button" className="tv-mic" aria-pressed={voice.listening} aria-label={voice.listening ? 'Stop listening' : 'Speak'} onClick={voice.toggle}>
+            {voice.listening ? '■' : '🎤'}
+          </button>
+        ) : null}
         {chat.messages.length > 0 && !busy ? <button type="button" className="tv-new" onClick={newChat}>New chat</button> : null}
       </form>
     </section>
@@ -81,7 +129,12 @@ function Message({ message, ask, ...props }: { message: TeovoMessage; ask: (t: s
   return (
     <div className={`tv-message tv-${message.role}`} data-role={message.role}>
       {message.parts.map((p, i) => {
-        if (p.type === 'text') return <div key={i} className="tv-text">{props.renderText ? props.renderText(p.text) : p.text}</div>
+        if (p.type === 'text') return p.text ? <div key={i} className="tv-text">{props.renderText ? props.renderText(p.text) : p.text}</div> : null
+        if (p.type === 'file') {
+          return p.mediaType.startsWith('image/')
+            ? <img key={i} className="tv-attachment" src={p.url} alt={p.filename ?? 'Picture'} />
+            : <div key={i} className="tv-attachment">{p.filename ?? 'File'}</div>
+        }
         if (p.type === 'data-card') return <CardView key={p.id ?? i} card={p.data as Card} {...props} />
         if (p.type === 'data-view') {
           const v = p.data as View
