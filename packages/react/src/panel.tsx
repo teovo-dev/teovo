@@ -12,6 +12,8 @@ export interface AssistantPanelProps {
   renderCard?: (card: Card, decide: (d: CardDecision) => void, state: CardState) => ReactNode
   /** Friendly names for tools while they run, e.g. { get_sales: 'Looking at sales' }. */
   stepLabels?: Record<string, string>
+  /** Show suggestion chips above the input. Default true (they only appear when the server has some). */
+  showSuggestions?: boolean
   className?: string
 }
 
@@ -19,16 +21,20 @@ export type CardState = { status: 'open' | 'busy' | 'confirmed' | 'skipped' | 'u
 
 /** A ready-made chat panel. Unstyled apart from `tv-` class names; import '@teovo/react/styles.css' for defaults. */
 export function AssistantPanel(props: AssistantPanelProps) {
-  const { chat, newChat } = useAssistant()
+  const { chat, newChat, suggestions, clearSuggestions } = useAssistant()
   const [text, setText] = useState('')
   const busy = chat.status === 'submitted' || chat.status === 'streaming'
+  const hint = suggestions.placeholder
 
+  function ask(t: string) {
+    if (!t.trim() || busy) return
+    setText('')
+    clearSuggestions()
+    void chat.sendMessage({ text: t.trim() })
+  }
   function send(e: FormEvent) {
     e.preventDefault()
-    const t = text.trim()
-    if (!t || busy) return
-    setText('')
-    void chat.sendMessage({ text: t })
+    ask(text)
   }
 
   return (
@@ -39,13 +45,21 @@ export function AssistantPanel(props: AssistantPanelProps) {
         {chat.status === 'submitted' ? <div className="tv-thinking">Thinking…</div> : null}
         {chat.error ? <div className="tv-error" role="alert">{errorText(chat.error)}</div> : null}
       </div>
+      {props.showSuggestions !== false && !busy && suggestions.suggestions.length ? (
+        <div className="tv-chips" role="group" aria-label="Suggestions">
+          {suggestions.suggestions.map((s) => <button key={s} type="button" className="tv-chip" onClick={() => ask(s)}>{s}</button>)}
+        </div>
+      ) : null}
       <form className="tv-input" onSubmit={send}>
         <textarea
           aria-label="Message"
           value={text}
-          placeholder={props.placeholder ?? 'Ask anything'}
+          placeholder={hint ? `${hint}  (Tab)` : (props.placeholder ?? 'Ask anything')}
           onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) send(e) }}
+          onKeyDown={(e) => {
+            if (e.key === 'Tab' && !text && hint) { e.preventDefault(); setText(hint) }   // accept the hint, like autocomplete
+            else if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) send(e)
+          }}
           rows={1}
         />
         {busy

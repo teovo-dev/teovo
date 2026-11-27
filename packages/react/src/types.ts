@@ -1,7 +1,15 @@
 import type { UIMessage } from 'ai'
 
 /** The screen the user is on. The server adds it to the model's instructions. */
-export interface Page { path?: string; title?: string }
+export interface Page {
+  path?: string
+  title?: string
+  /** The record open on screen; the server's `screen` callback looks it up as the user. */
+  record?: { type: string; id: string }
+}
+
+/** Chips above the input, and the hint inside it. */
+export interface Suggestions { suggestions: string[]; placeholder?: string }
 
 /** A change the user must confirm (a `propose` tool's result, saved by the server). */
 export interface Card {
@@ -27,6 +35,6 @@ export interface Action { label: string; action: string; args?: Record<string, u
 export interface Step { name: string; state: 'running' | 'done' }
 
 /** The data parts Teovo's server streams. Same names as on the server: data-card, data-step, data-action. */
-export type TeovoData = { card: Card; step: Step; action: Action }
+export type TeovoData = { card: Card; step: Step; action: Action; suggestions: Suggestions }
 
 export type TeovoMessage = UIMessage<{ runId?: string; threadId?: string }, TeovoData>

@@ -7,7 +7,8 @@ import type { Storage, StoredCard, UsageRow } from './storage.js'
 import { toolsFor, type Action, type Identity, type Proposal, type TeovoTool, type ToolContext } from './tools.js'
 import { makeUntrusted, UNTRUSTED_RULE } from './untrusted.js'
 
-export interface Page { path?: string; title?: string }
+import { readPage, screenText, tidy, type Page, type ScreenFn, type SuggestionsFn } from './screens.js'
+export type { Page } from './screens.js'
 
 export interface AssistantConfig<DB = unknown> {
   /** Who is asking, from the request (cookie, token, header). Return null to refuse with 401. Required. */
@@ -28,6 +29,10 @@ export interface AssistantConfig<DB = unknown> {
   timeouts?: { firstChunkMs?: number; chunkMs?: number; totalMs?: number }
   /** Messages and tokens per person and per tenant, checked before every reply. Tenants can set their own in tv_budgets. */
   limits?: Limits
+  /** Describe the screen and its open record for the model, as the user. See screens.ts. */
+  screen?: ScreenFn<DB>
+  /** Chips above the input and the hint inside it; also called after each reply for follow-ups. */
+  suggestions?: SuggestionsFn<DB>
   /** How to apply each kind of card when the user confirms it, keyed by the card's `kind`. */
   cards?: Record<string, CardApplier<any, DB>>
   /** How long a card can be confirmed, and how long after confirming it can be undone. */
@@ -58,7 +63,7 @@ const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 
 /** The request body the panel sends: only the new message; the history stays on the server. */
-interface ChatBody { threadId?: string; message?: UIMessage; page?: Page }
+interface ChatBody { threadId?: string; message?: UIMessage; page?: unknown }
 
 export function createAssistant<DB>(config: AssistantConfig<DB>) {
   if (!config.models.length) throw new Error('createAssistant: at least one model is required')
@@ -100,9 +105,10 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     const statuses = new Map((await storage.listCards(thread.id)).map((c) => [c.id, c]))
     const nonce = crypto.randomUUID().slice(0, 8)
     const ctx: ToolContext<DB> = { identity, db, untrusted: makeUntrusted(nonce) }
-    const instructions = typeof config.instructions === 'function' ? await config.instructions({ identity, page: body.page }) : config.instructions
-    const where = body.page?.path ? `\n\nThe user is on the screen ${body.page.title ? `"${body.page.title}" ` : ''}at ${body.page.path}.` : ''
-    const system = `${instructions}\n\n${UNTRUSTED_RULE}${where}`
+    const page = readPage(body.page)
+    const instructions = typeof config.instructions === 'function' ? await config.instructions({ identity, page }) : config.instructions
+    const summary = page && config.screen ? await Promise.resolve().then(() => config.screen!(page, ctx)).catch((e) => { config.on?.error?.(e, { identity, threadId: thread.id }); return null }) : null
+    const system = `${instructions}\n\n${UNTRUSTED_RULE}${screenText(page, summary, ctx.untrusted)}`
 
     const stream = createUIMessageStream<UIMessage<{ runId: string; threadId: string }>>({
       originalMessages: history as UIMessage<{ runId: string; threadId: string }>[],
@@ -173,8 +179,13 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
         })
         writer.merge(toUIMessageStream({ stream: result.stream, sendStart: false }))
         try {
-          await result.text
+          const text = await result.text
           await finish('done')
+          if (config.suggestions) {
+            // Follow-ups ride along as a transient part: shown under this reply, never saved in the history.
+            const s = await Promise.resolve().then(() => config.suggestions!({ identity: identity!, page, after: text, db })).catch(() => null)
+            if (s && s.suggestions.length) writer.write({ type: 'data-suggestions', data: tidy(s), transient: true })
+          }
         } catch (e) {
           await finish(req.signal.aborted ? 'stopped' : 'failed', streamError ?? e)
           throw e
@@ -204,6 +215,20 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
 
   const rules: CardRules = { ttlMs: 24 * 3600_000, undoMs: 10 * 60_000, ...config.cardRules }
 
+  async function suggestions(req: Request): Promise<Response> {
+    const identity = await config.identify(req)
+    if (!identity) return json(401, { error: 'Sign in to use the assistant.' })
+    if (!config.suggestions) return json(200, { suggestions: [] })
+    const q = new URL(req.url).searchParams
+    const page = readPage({ path: q.get('path'), title: q.get('title'), record: { type: q.get('recordType'), id: q.get('recordId') } })
+    try {
+      return json(200, tidy(await config.suggestions({ identity, page, db: await config.asUser(identity, req) })))
+    } catch (e) {
+      config.on?.error?.(e, { identity, threadId: '' })
+      return json(200, { suggestions: [] })
+    }
+  }
+
   async function card(req: Request, id: string, decision: Decision): Promise<Response> {
     const identity = await config.identify(req)
     if (!identity) return json(401, { error: 'Sign in to use the assistant.' })
@@ -222,10 +247,11 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
   }
 
   return {
-    /** Mount under any path, e.g. app.all('/api/assistant/*', teovo.fetch). Handles POST …/chat and POST …/cards/:id/(confirm|skip|undo). */
+    /** Mount under any path, e.g. app.all('/api/assistant/*', teovo.fetch). Handles POST …/chat, GET …/suggestions and POST …/cards/:id/(confirm|skip|undo). */
     async fetch(req: Request): Promise<Response> {
       const path = new URL(req.url).pathname
       if (req.method === 'POST' && path.endsWith('/chat')) return chat(req)
+      if (req.method === 'GET' && path.endsWith('/suggestions')) return suggestions(req)
       const m = /\/cards\/([0-9a-f-]{36})\/(confirm|skip|undo)$/i.exec(path)
       if (req.method === 'POST' && m) return card(req, m[1]!.toLowerCase(), m[2] as Decision)
       return json(404, { error: 'Not found.' })
