@@ -1,0 +1,130 @@
+import { useState, type FormEvent, type ReactNode } from 'react'
+import { useAssistant } from './provider'
+import type { Action, Card, Step, TeovoMessage } from './types'
+
+export interface AssistantPanelProps {
+  /** Shown before the first message. */
+  welcome?: ReactNode
+  placeholder?: string
+  /** Draw the reply text yourself, e.g. with a Markdown renderer. Default: plain text. */
+  renderText?: (text: string) => ReactNode
+  /** Draw a card yourself. `decide` sends Confirm or Skip through the provider's onCard. */
+  renderCard?: (card: Card, decide: (d: 'confirm' | 'skip') => void, state: CardState) => ReactNode
+  /** Friendly names for tools while they run, e.g. { get_sales: 'Looking at sales' }. */
+  stepLabels?: Record<string, string>
+  className?: string
+}
+
+export type CardState = { status: 'open' | 'busy' | 'confirmed' | 'skipped'; error?: string }
+
+/** A ready-made chat panel. Unstyled apart from `tv-` class names; import '@teovo/react/styles.css' for defaults. */
+export function AssistantPanel(props: AssistantPanelProps) {
+  const { chat, newChat } = useAssistant()
+  const [text, setText] = useState('')
+  const busy = chat.status === 'submitted' || chat.status === 'streaming'
+
+  function send(e: FormEvent) {
+    e.preventDefault()
+    const t = text.trim()
+    if (!t || busy) return
+    setText('')
+    void chat.sendMessage({ text: t })
+  }
+
+  return (
+    <section className={`tv-panel ${props.className ?? ''}`} aria-label="Assistant">
+      <div className="tv-messages" role="log" aria-live="polite">
+        {chat.messages.length === 0 && props.welcome ? <div className="tv-welcome">{props.welcome}</div> : null}
+        {chat.messages.map((m) => <Message key={m.id} message={m} {...props} />)}
+        {chat.status === 'submitted' ? <div className="tv-thinking">Thinking…</div> : null}
+        {chat.error ? <div className="tv-error" role="alert">{errorText(chat.error)}</div> : null}
+      </div>
+      <form className="tv-input" onSubmit={send}>
+        <textarea
+          aria-label="Message"
+          value={text}
+          placeholder={props.placeholder ?? 'Ask anything'}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) send(e) }}
+          rows={1}
+        />
+        {busy
+          ? <button type="button" onClick={() => void chat.stop()}>Stop</button>
+          : <button type="submit" disabled={!text.trim()}>Send</button>}
+        {chat.messages.length > 0 && !busy ? <button type="button" className="tv-new" onClick={newChat}>New chat</button> : null}
+      </form>
+    </section>
+  )
+}
+
+function Message({ message, ...props }: { message: TeovoMessage } & AssistantPanelProps) {
+  const { onAction } = useAssistant()
+  const steps = message.parts.filter((p) => p.type === 'data-step')
+  const running = steps.filter((p) => (p.data as Step).state === 'running')
+  return (
+    <div className={`tv-message tv-${message.role}`} data-role={message.role}>
+      {message.parts.map((p, i) => {
+        if (p.type === 'text') return <div key={i} className="tv-text">{props.renderText ? props.renderText(p.text) : p.text}</div>
+        if (p.type === 'data-card') return <CardView key={p.id ?? i} card={p.data as Card} {...props} />
+        if (p.type === 'data-action') {
+          const a = p.data as Action
+          return <button key={p.id ?? i} type="button" className="tv-action" onClick={() => onAction?.(a)}>{a.label}</button>
+        }
+        return null
+      })}
+      {running.map((p) => {
+        const name = (p.data as Step).name
+        return <div key={p.id} className="tv-step">{props.stepLabels?.[name] ?? `Using ${name.replace(/_/g, ' ')}`}…</div>
+      })}
+    </div>
+  )
+}
+
+function CardView({ card, renderCard }: { card: Card } & AssistantPanelProps) {
+  const { onCard } = useAssistant()
+  const done = card.status === 'confirmed' ? 'confirmed' : card.status === 'skipped' ? 'skipped' : undefined
+  const [state, setState] = useState<CardState>({ status: done ?? 'open' })
+
+  async function decide(d: 'confirm' | 'skip') {
+    if (state.status !== 'open') return
+    setState({ status: 'busy' })
+    try {
+      await onCard?.(card, d)
+      setState({ status: d === 'confirm' ? 'confirmed' : 'skipped' })
+    } catch (e) {
+      setState({ status: 'open', error: e instanceof Error ? e.message : String(e) })
+    }
+  }
+
+  if (renderCard) return <>{renderCard(card, (d) => void decide(d), state)}</>
+  const keys = [...new Set([...Object.keys(card.before ?? {}), ...Object.keys(card.after ?? {})])]
+  return (
+    <div className="tv-card" data-status={state.status} role="group" aria-label={card.title}>
+      <div className="tv-card-title">{card.title}</div>
+      {keys.length ? (
+        <table className="tv-card-diff"><tbody>
+          {keys.map((k) => (
+            <tr key={k}><th scope="row">{k}</th><td>{show(card.before?.[k])}</td><td>→</td><td>{show(card.after?.[k])}</td></tr>
+          ))}
+        </tbody></table>
+      ) : null}
+      {state.error ? <div className="tv-error" role="alert">{state.error}</div> : null}
+      {state.status === 'confirmed' ? <div className="tv-card-done">Done</div>
+        : state.status === 'skipped' ? <div className="tv-card-done">Skipped</div>
+        : (
+          <div className="tv-card-buttons">
+            <button type="button" disabled={state.status === 'busy'} onClick={() => void decide('confirm')}>Confirm</button>
+            <button type="button" disabled={state.status === 'busy'} onClick={() => void decide('skip')}>Skip</button>
+          </div>
+        )}
+    </div>
+  )
+}
+
+const show = (v: unknown) => (v === undefined || v === null ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v))
+
+/** Server errors arrive as JSON ({ error }) or plain text; show the sentence, not the JSON. */
+function errorText(e: Error): string {
+  try { const j = JSON.parse(e.message) as { error?: string }; if (j.error) return j.error } catch { /* not JSON */ }
+  return e.message || 'Something went wrong. Try again.'
+}
