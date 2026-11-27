@@ -101,6 +101,19 @@ const teovo = createAssistant({
       },
     }),
     defineTool({
+      name: 'settle_orders', kind: 'propose', description: 'Prepare marking several orders as paid in full, as one card.',
+      input: z.object({ nos: z.array(z.number()).min(2).max(20) }),
+      run: ({ nos }) => {
+        const list = nos.map(order).filter((o) => due(o) > 0)
+        if (list.length < 2) throw new Error('Fewer than two of those orders have money due; record a single payment instead.')
+        return {
+          kind: 'settle_orders', title: `Mark ${list.length} orders paid in full`, payload: { nos: list.map((o) => o.no) },
+          fields: [{ key: 'paid', label: 'Paid', format: 'money' as const }],
+          items: list.map((o) => ({ label: `#${o.no} ${o.customer}`, before: { paid: o.paid }, after: { paid: o.total } })),
+        }
+      },
+    }),
+    defineTool({
       name: 'change_total', kind: 'propose', roles: ['owner'], description: 'Prepare changing an order total.',
       input: z.object({ no: z.number(), total: z.number().positive() }),
       run: ({ no, total }) => ({ kind: 'change_total', title: `Order #${no} total ₹${order(no).total} → ₹${total}`, before: { total: order(no).total }, after: { total }, payload: { no, total }, fields: [{ key: 'total', label: 'Total', format: 'money' as const }] }),
@@ -124,6 +137,14 @@ const teovo = createAssistant({
       current: ({ no }: { no: number }) => ({ paid: order(no).paid }),
       apply: ({ no, amount }: { no: number; amount: number }) => { order(no).paid += amount; return { undo: { no, amount } } },
       undo: (u) => { const { no, amount } = u as { no: number; amount: number }; order(no).paid -= amount },
+    },
+    settle_orders: {
+      apply: ({ nos }: { nos: number[] }) => {
+        const before = nos.map((no) => ({ no, paid: order(no).paid }))
+        for (const no of nos) order(no).paid = order(no).total
+        return { undo: before }
+      },
+      undo: (u) => { for (const { no, paid } of u as { no: number; paid: number }[]) order(no).paid = paid },
     },
     change_total: {
       roles: ['owner'],

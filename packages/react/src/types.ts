@@ -33,6 +33,9 @@ export interface Card {
   untrustedSources?: string[]
   /** Which values to show, in order, with labels and formats. */
   fields?: { key: string; label?: string; format?: 'text' | 'number' | 'money' | 'date' }[]
+  /** A change to many records: each row's own before and after. */
+  items?: { label: string; before?: Record<string, unknown>; after?: Record<string, unknown> }[]
+  version?: number
 }
 
 /** One conversation in the history list. */

@@ -210,6 +210,13 @@ const privacySwitches: Migration = {
 alter table tv_tenant_settings add column if not exists models_off jsonb;`,
 }
 
+/** One card for many records (items), and the version of the tool that made a card. */
+const cardItemsVersions: Migration = {
+  id: '0012_card_items_versions',
+  sql: `alter table tv_proposals add column if not exists items jsonb;
+alter table tv_proposals add column if not exists version int;`,
+}
+
 /** Pictures kept in an object store (Supabase Storage, R2) only need their owner row here, not the bytes. */
 const fileIndex: Migration = {
   id: '0008_file_index',
@@ -298,6 +305,7 @@ export function migrations(options: SchemaOptions = {}): Migration[] {
   else if (options.rls) list.push({ ...rlsMigration(tables, options.rls), id: `0100_rls_${suffix}` })
   // Tables added later get their rules in their own migration, so apps that already ran the ones above get them too.
   list.push(auditAndMisses, privacySwitches)
+  if (options.features?.proposals) list.push(cardItemsVersions)
   const later = ['tv_card_events', 'tv_misses']
   if (options.rls === 'server-only') list.push({ ...serverOnlyMigration(later), id: '0111_server_only_audit_misses' })
   else if (options.rls) list.push({ ...rlsMigration(later, options.rls), id: '0110_rls_audit_misses' })

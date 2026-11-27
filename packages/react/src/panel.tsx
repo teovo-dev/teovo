@@ -390,7 +390,28 @@ function CardView({ card, renderCard, formats }: { card: Card; formats?: Formats
           Prepared after reading {card.untrustedSources.join(', ')}. Check it before you confirm.
         </div>
       ) : null}
-      {fields.length ? (
+      {card.items?.length ? (
+        <>
+          <div className="tv-card-count">{card.items.length} {card.items.length === 1 ? 'change' : 'changes'}</div>
+          <table className="tv-card-diff tv-card-items"><tbody>
+            {card.items.map((it, i) => {
+              const keys = card.fields ?? [...new Set([...Object.keys(it.after ?? {}), ...Object.keys(it.before ?? {})])].map((key) => ({ key } as NonNullable<Card['fields']>[number]))
+              return (
+                <tr key={i}>
+                  <th scope="row">{it.label}</th>
+                  <td>{keys.map((f) => (
+                    <span key={f.key} className="tv-item-change">
+                      {keys.length > 1 ? `${f.label ?? labelFor(f.key)}: ` : ''}
+                      {it.before && f.key in it.before ? <><s>{value(it.before[f.key], f.format)}</s> → </> : null}
+                      <b>{value(it.after?.[f.key], f.format)}</b>
+                    </span>
+                  ))}</td>
+                </tr>
+              )
+            })}
+          </tbody></table>
+        </>
+      ) : fields.length ? (
         <table className={`tv-card-diff${isNew ? ' tv-card-new' : ''}`}><tbody>
           {fields.map((f) => (
             <tr key={f.key}>

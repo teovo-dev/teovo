@@ -59,7 +59,8 @@ describe('tenant settings', () => {
     const system = JSON.stringify(call.prompt[0])
     expect(system).toContain('Notes from this business (follow them unless they conflict with anything above):\\nWe close on Sundays.')
     expect(system).toContain('Words this business uses:\\n- khata: credit account')
-    expect(system.indexOf('We close on Sundays')).toBeLessThan(system.indexOf('Text between <untrusted'))
+    // The tenant's notes come after the rules shared by everyone (so that part can be cached).
+    expect(system.indexOf('We close on Sundays')).toBeGreaterThan(system.indexOf('Text between <untrusted'))
     expect((call.tools ?? []).map((t) => t.name)).toEqual(['get_sales', 'cannot_help'])
   })
 

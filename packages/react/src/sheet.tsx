@@ -58,6 +58,16 @@ export function AssistantSheet(props: AssistantSheetProps) {
     const onKey = (e: KeyboardEvent) => {
       if (key && (e.metaKey || e.ctrlKey) && e.key.toLowerCase() === key) { e.preventDefault(); latest.current(!open) }
       else if (e.key === 'Escape' && open) latest.current(false)
+      else if (e.key === 'Tab' && open && sheet.current) {
+        // Keep the keyboard inside the open sheet (it is a modal dialog): Tab from the last control goes to the first.
+        const all = Array.from(sheet.current.querySelectorAll<HTMLElement>('button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])'))
+          .filter((el) => el.offsetParent !== null || el === document.activeElement)
+        if (!all.length) return
+        const first = all[0]!, last = all[all.length - 1]!
+        if (!sheet.current.contains(document.activeElement)) { e.preventDefault(); first.focus() }
+        else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus() }
+        else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus() }
+      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)

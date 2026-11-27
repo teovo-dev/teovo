@@ -23,10 +23,16 @@ export function checkFormats(f: Partial<Formats>): string | null {
  * The prompt lines that fix "today" and the way numbers are written, so the model never guesses the date or
  * writes $ for a shop that counts in ₹.
  */
-export function formatsText(f: Formats, now: Date): string {
+/** How to write money and dates. The same for a tenant every day (a fixed example date), so it can be cached. */
+export function formatsText(f: Formats): string {
+  const money = new Intl.NumberFormat(f.locale, { style: 'currency', currency: f.currency }).format(1250)
+  const short = new Intl.DateTimeFormat(f.locale, { timeZone: 'UTC', day: 'numeric', month: 'short', year: 'numeric' }).format(new Date(Date.UTC(2026, 2, 14)))
+  return `\n\nWrite amounts like ${money} and dates like ${short}. When a tool needs a date, use YYYY-MM-DD.`
+}
+
+/** The date and time now, in the tenant's time zone. Placed at the end of the prompt, with the screen: it changes. */
+export function todayText(f: Formats, now: Date): string {
   const date = new Intl.DateTimeFormat(f.locale, { timeZone: f.timeZone, weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }).format(now)
   const time = new Intl.DateTimeFormat(f.locale, { timeZone: f.timeZone, hour: 'numeric', minute: '2-digit' }).format(now)
-  const money = new Intl.NumberFormat(f.locale, { style: 'currency', currency: f.currency }).format(1250)
-  const short = new Intl.DateTimeFormat(f.locale, { timeZone: f.timeZone, day: 'numeric', month: 'short', year: 'numeric' }).format(now)
-  return `\n\nToday is ${date}, ${time} (${f.timeZone}). Write amounts like ${money} and dates like ${short}. When a tool needs a date, use YYYY-MM-DD.`
+  return `\n\nToday is ${date}, ${time} (${f.timeZone}).`
 }

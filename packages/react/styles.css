@@ -113,6 +113,11 @@
 .tv-card-new td:nth-child(2) { color: var(--tv-fg); text-decoration: none; }
 .tv-card-diff th { white-space: nowrap; }
 .tv-card-buttons { display: flex; gap: 8px; }
+.tv-card-count { font-size: 0.8125em; color: var(--tv-muted); margin-top: -4px; }
+.tv-card-items { max-height: 220px; overflow-y: auto; display: block; }
+.tv-card-diff.tv-card-items td { color: var(--tv-fg); text-decoration: none; font-weight: 400; }
+.tv-card-items s { color: var(--tv-muted); }
+.tv-item-change + .tv-item-change::before { content: ' · '; color: var(--tv-muted); }
 .tv-card-buttons button { flex: 1; }
 .tv-card-done { color: var(--tv-ok); font-size: 0.875em; font-weight: 500; display: flex; gap: 10px; align-items: center; }
 .tv-card-untrusted { font-size: 0.875em; color: var(--tv-muted); border-left: 3px solid #d97706; padding-left: 8px; }

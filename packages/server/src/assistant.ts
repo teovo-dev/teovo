@@ -12,7 +12,7 @@ import { makeRedactor, type RedactOptions } from './redact.js'
 import { checkForm, formHandler, formsText, missingFields, VIEWS_RULE, type FormData, type FormHandler, type FormSpec, type TeovoView } from './views.js'
 import { checkMessage, type AttachmentRules } from './attachments.js'
 import { picturesOnce, storeFiles, type FileRules } from './files.js'
-import { checkFormats, DEFAULT_FORMATS, formatsText, type Formats } from './formats.js'
+import { checkFormats, DEFAULT_FORMATS, formatsText, todayText, type Formats } from './formats.js'
 import { DEFAULT_SETTINGS, noticeId, SettingsError, settingsText, validateSettings, type TenantSettings } from './settings.js'
 import { readPage, screenPath, screensText, screenText, tidy, type Page, type ScreenFn, type ScreenInfo, type SuggestionsFn } from './screens.js'
 import { z } from 'zod'
@@ -272,7 +272,12 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     const rolesText = otherRoles.length
       ? `\n\nNot available to this user (role: ${identity.role}): ${otherRoles.map((t) => `${t.description.replace(/\.$/, '')} (${t.roles!.join(' or ')} only)`).join('; ')}. If they ask for one, say who can do it; never try another way.`
       : ''
-    const system = `${instructions}${formatsText(formats, config.now?.() ?? new Date())}${settingsText(settings)}${rolesText}${screensText(config.screens ?? [])}${config.views?.length ? `\n\n${VIEWS_RULE}${formsText(config.forms ?? {})}` : ''}${config.tools.some((t) => t.kind === 'propose') || config.views?.some((v) => v.name === 'form') ? `\n\n${CARDS_RULE}` : ''}${config.misses !== false && !(settings.toolsOff ?? []).includes('cannot_help') ? `\n\n${MISS_RULE}` : ''}\n\n${UNTRUSTED_RULE}${screenText(page, shownSummary, fence)}`
+    // Ordered from most to least shared, so providers can cache the start: first what is the same for everyone (the
+    // app's instructions and Teovo's rules), then what is the same for this tenant and person, then what changes
+    // every message (the time, the screen).
+    const shared = `${instructions}${screensText(config.screens ?? [])}${config.views?.length ? `\n\n${VIEWS_RULE}${formsText(config.forms ?? {})}` : ''}${config.tools.some((t) => t.kind === 'propose') || config.views?.some((v) => v.name === 'form') ? `\n\n${CARDS_RULE}` : ''}\n\n${UNTRUSTED_RULE}`
+    const tenantPart = `${formatsText(formats)}${settingsText(settings)}${rolesText}${config.misses !== false && !(settings.toolsOff ?? []).includes('cannot_help') ? `\n\n${MISS_RULE}` : ''}`
+    const system = `${shared}${tenantPart}${todayText(formats, config.now?.() ?? new Date())}${screenText(page, shownSummary, fence)}`
 
     const stream = createUIMessageStream<UIMessage<{ runId: string; threadId: string; formats: Formats }>>({
       originalMessages: history as UIMessage<{ runId: string; threadId: string; formats: Formats }>[],
@@ -307,7 +312,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
                 await storage.saveStep({ ...step, input: logged.value, output: result.value, truncated: logged.truncated || result.truncated, durationMs: Date.now() - started })
                 if (t.kind === 'propose') {
                   const p = out as Proposal
-                  const card: StoredCard = { ...p, id: crypto.randomUUID(), threadId: thread.id, runId, status: 'shown', ...(seen.size ? { untrustedSources: [...seen] } : {}) }
+                  const card: StoredCard = { ...p, ...(t.version ? { version: t.version } : {}), id: crypto.randomUUID(), threadId: thread.id, runId, status: 'shown', ...(seen.size ? { untrustedSources: [...seen] } : {}) }
                   await storage.saveCard(card)
                   await logEvent(card, 'proposed', identity!)
                   config.on?.card?.(card)

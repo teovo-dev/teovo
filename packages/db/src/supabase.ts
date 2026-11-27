@@ -24,6 +24,8 @@ const card = (r: any): StoredCard => {
   if (r.undone_at) c.undoneAt = iso(r.undone_at)
   if (r.untrusted_sources) c.untrustedSources = r.untrusted_sources
   if (r.fields) c.fields = r.fields
+  if (r.items) c.items = r.items
+  if (r.version !== null && r.version !== undefined) c.version = r.version
   return c
 }
 const COLUMN: Record<keyof CardPatch, string> = { status: 'status', decidedBy: 'decided_by', decidedAt: 'decided_at', reversible: 'reversible', undo: 'undo', undoneAt: 'undone_at' }
@@ -82,6 +84,7 @@ export function supabaseStorage(db: SupabaseLike): Storage {
       await ok(db.from('tv_proposals').upsert({
         id: c.id, thread_id: c.threadId, run_id: c.runId, kind: c.kind, title: c.title, before: c.before ?? null, after: c.after ?? null,
         payload: c.payload ?? null, status: c.status, untrusted_sources: c.untrustedSources ?? null, fields: c.fields ?? null,
+        items: c.items ?? null, version: c.version ?? null,
       }, { onConflict: 'id', ignoreDuplicates: true }))   // the same card saved twice keeps the first (and its decision)
     },
     async getCard(tenantId, userId, id) {
