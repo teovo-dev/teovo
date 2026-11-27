@@ -68,7 +68,7 @@ export function postgresStorage(query: Query): Storage {
     async saveCard(c: StoredCard) {
       await query(
         `insert into tv_proposals (id, thread_id, run_id, kind, title, before, after, payload, status, untrusted_sources, fields) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-         on conflict (id) do update set status = excluded.status`,
+         on conflict (id) do nothing`,
         [c.id, c.threadId, c.runId, c.kind, c.title, json(c.before), json(c.after), json(c.payload), c.status, json(c.untrustedSources), json(c.fields)])
     },
     async getCard(tenantId, userId, id) {

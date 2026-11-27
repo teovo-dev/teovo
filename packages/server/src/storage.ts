@@ -46,6 +46,7 @@ export interface Storage {
   saveMessages(threadId: string, messages: UIMessage[]): Promise<void>
   /** Remove this message and every one after it (the user edited it, or asked for the reply again). */
   removeMessagesFrom(threadId: string, messageId: string): Promise<void>
+  /** Save a new card. Saving one whose id already exists changes nothing: the first save (and its decision) stands. */
   saveCard(card: StoredCard): Promise<void>
   /** A card, only if it is in one of this person's threads. */
   getCard(tenantId: string, userId: string, id: string): Promise<StoredCard | null>
@@ -145,7 +146,7 @@ export function memoryStorage() {
       const at = list.findIndex((m) => m.id === messageId)
       if (at >= 0) messages.set(id, list.slice(0, at))
     },
-    async saveCard(card) { cards.set(card.id, structuredClone({ createdAt: new Date().toISOString(), ...card })) },
+    async saveCard(card) { if (!cards.has(card.id)) cards.set(card.id, structuredClone({ createdAt: new Date().toISOString(), ...card })) },
     async getCard(tenantId, userId, id) {
       const c = cards.get(id)
       const t = c && threads.get(c.threadId)

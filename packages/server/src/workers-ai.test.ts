@@ -37,6 +37,60 @@ function shop(models: AssistantConfig['models'], extra: Partial<AssistantConfig>
   return { teovo, storage }
 }
 
+/** A Workers AI stream in the real gpt-oss-20b shape (captured 27 Nov 2026): reasoning, then text or a tool call in pieces. */
+function sse(chunks: unknown[]): ReadableStream<Uint8Array> {
+  const text = chunks.map((c) => `data: ${JSON.stringify(c)}\n\n`).join('') + 'data: [DONE]\n\n'
+  const bytes = new TextEncoder().encode(text)
+  // Split mid-line on purpose: a network chunk can end anywhere.
+  return new ReadableStream({ start(ctl) { for (let i = 0; i < bytes.length; i += 37) ctl.enqueue(bytes.slice(i, i + 37)); ctl.close() } })
+}
+const chunk = (delta: Record<string, unknown>, finish: string | null = null) => ({ object: 'chat.completion.chunk', choices: [{ index: 0, delta, finish_reason: finish }], usage: { prompt_tokens: 0, completion_tokens: 1, neurons: 0.027 } })
+const totals = (prompt: number, completion: number, neurons: number) => ({ response: '', usage: { prompt_tokens: prompt, completion_tokens: completion, neurons } })
+const toolStream = () => sse([
+  chunk({ role: 'assistant', content: '' }), chunk({ reasoning_content: 'Need' }), chunk({ reasoning_content: ' the tool.' }),
+  chunk({ tool_calls: [{ id: 'chatcmpl-tool-1', type: 'function', index: 0, function: { name: 'get_dues', arguments: '' } }] }),
+  chunk({ tool_calls: [{ index: 0, function: { arguments: '{"min"' } }] }), chunk({ tool_calls: [{ index: 0, function: { arguments: ':1}' } }] }),
+  chunk({}, 'tool_calls'), { choices: [], usage: { neurons: 0 } }, totals(121, 27, 2.94),
+])
+const textStream = (words: string[]) => sse([
+  chunk({ role: 'assistant', content: '' }), chunk({ reasoning_content: 'Answer.' }), ...words.map((w) => chunk({ content: w })), chunk({}, 'stop'), totals(150, 20, 1.99),
+])
+
+describe('workersAi streaming', () => {
+  it('streams text as it comes, puts tool-call arguments together from their pieces, and records the closing neuron total', async () => {
+    const asked: Record<string, unknown>[] = []
+    const streams = [toolStream(), textStream(['Riya', ' owes', ' ₹880.'])]
+    const binding: WorkersAiBinding = { async run(_m, input) { asked.push(input); return streams.shift() } }
+    const s = shop([workersAi(binding, '@cf/openai/gpt-oss-20b')])
+    const r = await chat(s.teovo, 'who owes?')
+    expect(r).toMatchObject({ status: 200, text: 'Riya owes ₹880.', tools: ['get_dues'] })
+    expect(asked[0]).toMatchObject({ stream: true, reasoning_effort: 'low' })
+    expect(asked[1]!.messages).toEqual(expect.arrayContaining([{ role: 'tool', tool_call_id: 'chatcmpl-tool-1', content: '[{"customer":"Riya","due":880}]' }]))
+    const neurons = s.storage.usageRows.filter((u) => u.unit === 'neurons').map((u) => u.amount)
+    expect(neurons[0]).toBeCloseTo(2.94 + 1.99, 5)
+  })
+
+  it('sends the words one by one, not all at the end', async () => {
+    const binding: WorkersAiBinding = { async run() { return textStream(['One', ' two', ' three.']) } }
+    const m = workersAi(binding, '@cf/openai/gpt-oss-20b')
+    const { stream } = await m.doStream({ prompt: [{ role: 'user', content: [{ type: 'text', text: 'x' }] }] })
+    const deltas: string[] = []
+    const reader = stream.getReader()
+    for (;;) { const { done, value } = await reader.read(); if (done) break; if (value.type === 'text-delta') deltas.push(value.delta) }
+    expect(deltas).toEqual(['One', ' two', ' three.'])
+  })
+
+  it('still falls back when Cloudflare refuses before streaming, and { stream: false } asks for one answer', async () => {
+    const asked: Record<string, unknown>[] = []
+    const used: WorkersAiBinding = { async run() { throw new Error('4006: daily free allocation of 10,000 neurons used') } }
+    const s = shop([workersAi(used, '@cf/openai/gpt-oss-20b'), scriptedModel([say('From the backup.')], { modelId: 'backup' })])
+    expect((await chat(s.teovo, 'hi')).text).toBe('From the backup.')
+    const whole: WorkersAiBinding = { async run(_m, input) { asked.push(input); return openai('In one go.', undefined, 5) } }
+    expect((await chat(shop([workersAi(whole, '@cf/openai/gpt-oss-20b', { stream: false })]).teovo, 'hi')).text).toBe('In one go.')
+    expect(asked[0]).not.toHaveProperty('stream')
+  })
+})
+
 describe('workersAi', () => {
   it('runs a whole tool loop through env.AI in the shape scoops uses, and records neurons', async () => {
     const ai = fakeAI([openai(null, [{ name: 'get_dues', args: { min: 1 } }], 31), openai('Riya owes ₹880.', undefined, 12)])
