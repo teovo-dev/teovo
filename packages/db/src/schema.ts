@@ -203,6 +203,13 @@ create table if not exists tv_misses (
 create index if not exists tv_misses_tenant on tv_misses (tenant_id, at desc);`,
 }
 
+/** A tenant's privacy notice and whether pictures are allowed; and, in the switches row, models taken out of service. */
+const privacySwitches: Migration = {
+  id: '0011_privacy_switches',
+  sql: `alter table tv_tenant_settings add column if not exists privacy jsonb;
+alter table tv_tenant_settings add column if not exists models_off jsonb;`,
+}
+
 /** Pictures kept in an object store (Supabase Storage, R2) only need their owner row here, not the bytes. */
 const fileIndex: Migration = {
   id: '0008_file_index',
@@ -290,7 +297,7 @@ export function migrations(options: SchemaOptions = {}): Migration[] {
   if (options.rls === 'server-only') list.push({ ...serverOnlyMigration(tables), id: `0101_server_only_${suffix}` })
   else if (options.rls) list.push({ ...rlsMigration(tables, options.rls), id: `0100_rls_${suffix}` })
   // Tables added later get their rules in their own migration, so apps that already ran the ones above get them too.
-  list.push(auditAndMisses)
+  list.push(auditAndMisses, privacySwitches)
   const later = ['tv_card_events', 'tv_misses']
   if (options.rls === 'server-only') list.push({ ...serverOnlyMigration(later), id: '0111_server_only_audit_misses' })
   else if (options.rls) list.push({ ...rlsMigration(later, options.rls), id: '0110_rls_audit_misses' })

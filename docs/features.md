@@ -35,7 +35,7 @@ cover it but nobody has tried it by hand. A feature counts as done only when thi
 | Row-level rules on the tv\_ tables that match the app's own tenancy | v1 | Built (#4) | Yes, by hand in Postgres as a non-owner role; how-to in docs/architecture.md (#27) | scoops, scobly, parityai (their own tables) | kit tables |
 | Placeholder that cycles through examples for the screen | v1.1 | Partly: one hint per screen, Tab accepts (#9) |  | new | kit |
 | Completion while typing: customer, product and phrase matches on the device, Tab or tap to accept, no model call | v1.1 |  |  | new | kit |
-| Remaining allowance shown in the panel | v1.1 |  |  | bricks, scobly | kit |
+| Remaining allowance shown in the panel | v1.1 | Built (#36) | Yes: counted down 3 → 1 | bricks, scobly | kit |
 | Audit trail of proposed, confirmed, skipped and undone changes | v1.1 | Built (#35) | Yes: example Admin page | new | kit tables |
 | Miss log: questions the assistant could not answer | v1.1 | Built (#35) | Yes: logged with Gemini, shown on Admin | new | kit tables |
 | Wipe a user's or a tenant's conversations and logs on request | v1.1 | Built (#35) | Yes: "Delete my conversations" | not checked | kit tables |
@@ -46,8 +46,8 @@ cover it but nobody has tried it by hand. A feature counts as done only when thi
 | One card for a change to many records, with a list to review and a single undo | v1.1 |  |  | not checked | kit |
 | Custom instructions and a word list per tenant | v1.1 | Built (#10) |  | not checked | kit tables |
 | Before and after shown on a card, such as price ₹350 → ₹380 | v1.1 | Built (#5) |  | not checked | kit |
-| Instant switch-off of one tool or model for every tenant | v1.1 | Partly: per tenant (#10) |  | not checked | kit |
-| Privacy notice and consent per tenant: what is sent to the model, images allowed or not | v1.1 |  |  | not checked | kit tables |
+| Instant switch-off of one tool or model for every tenant | v1.1 | Built (#10 per tenant, #36 for every tenant) | Yes: Flash off → flash-lite answered; paused for everyone | not checked | kit |
+| Privacy notice and consent per tenant: what is sent to the model, images allowed or not | v1.1 | Built (#36) | Yes: notice before chatting, pictures off hid attach | not checked | kit tables |
 | Fixed prompt parts (instructions, catalog, tools) placed first so the provider can cache them | v1.1 |  |  | not checked | kit |
 | Edit and resend a message, regenerate a reply, copy a reply | v1.1 | Built (#34) | Yes: edit, Try again, copy | not checked | kit, assistant-ui |
 | Tool versions, so a pending card made by an older tool still works after a deploy | v1.1 |  |  | not checked | kit tables |

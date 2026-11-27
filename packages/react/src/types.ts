@@ -53,3 +53,9 @@ export type TeovoData = { card: Card; step: Step; action: Action; suggestions: S
 export interface Formats { locale: string; currency: string; timeZone: string }
 
 export type TeovoMessage = UIMessage<{ runId?: string; threadId?: string; formats?: Formats; stopped?: boolean }, TeovoData>
+
+/** What the tenant asks of people before they chat (GET …/policy). */
+export interface Policy { notice?: string; noticeId?: string; pictures: boolean }
+
+/** One limit and how much of it is used (GET …/allowance). */
+export interface AllowanceItem { scope: 'user' | 'tenant'; unit: 'messages' | 'input_tokens' | 'output_tokens' | 'neurons'; period: 'day' | 'month'; limit: number; used: number }

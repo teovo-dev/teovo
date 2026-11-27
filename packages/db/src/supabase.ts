@@ -101,7 +101,7 @@ export function supabaseStorage(db: SupabaseLike): Storage {
       return rows[0] ? card(rows[0]) : null
     },
     async tenantSettings(tenantId) {
-      const rows = await ok(db.from('tv_tenant_settings').select('enabled, instructions, glossary, tools_off, formats').eq('tenant_id', tenantId).limit(1))
+      const rows = await ok(db.from('tv_tenant_settings').select('enabled, instructions, glossary, tools_off, formats, privacy, models_off').eq('tenant_id', tenantId).limit(1))
       const row = rows[0]
       if (!row) return null
       return {
@@ -110,11 +110,14 @@ export function supabaseStorage(db: SupabaseLike): Storage {
         ...(row.glossary ? { glossary: row.glossary } : {}),
         ...(row.tools_off ? { toolsOff: row.tools_off } : {}),
         ...(row.formats ? { formats: row.formats } : {}),
+        ...(row.privacy ? { privacy: row.privacy } : {}),
+        ...(row.models_off ? { modelsOff: row.models_off } : {}),
       }
     },
     async saveTenantSettings(tenantId, s) {
       await ok(db.from('tv_tenant_settings').upsert({
         tenant_id: tenantId, enabled: s.enabled, instructions: s.instructions ?? null, glossary: s.glossary ?? null, tools_off: s.toolsOff ?? null, formats: s.formats ?? null,
+        privacy: s.privacy ?? null, models_off: s.modelsOff ?? null,
       }, { onConflict: 'tenant_id' }))
     },
     async startRun(r) {

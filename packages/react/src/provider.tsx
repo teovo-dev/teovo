@@ -1,7 +1,7 @@
 import { useChat } from '@ai-sdk/react'
 import { DefaultChatTransport } from 'ai'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import type { Action, Card, CardDecision, Page, Suggestions, TeovoMessage, ThreadSummary } from './types.js'
+import type { Action, AllowanceItem, Card, CardDecision, Page, Policy, Suggestions, TeovoMessage, ThreadSummary } from './types.js'
 
 export interface AssistantProviderProps {
   /** Where the app mounted the server handler, e.g. '/api/assistant'. The panel posts to `${endpoint}/chat`. */
@@ -46,6 +46,13 @@ interface AssistantState {
   decideCard: (card: Card, decision: CardDecision) => Promise<Partial<Card>>
   /** Thumbs up or down on a reply (its metadata.runId), or null to take it back. */
   rate: (runId: string, value: 'up' | 'down' | null) => Promise<void>
+  /** The tenant's notice, if any, and whether pictures may be sent. */
+  policy: Policy
+  /** True once this person has accepted the current notice (or there is none). */
+  noticeAccepted: boolean
+  acceptNotice: () => void
+  /** Every limit that applies, with how much is used (refreshed after each reply). */
+  allowance: AllowanceItem[]
   onAction: AssistantProviderProps['onAction']
 }
 
@@ -59,6 +66,11 @@ export function AssistantProvider(props: AssistantProviderProps) {
   const [suggestions, setSuggestions] = useState<Suggestions>({ suggestions: [] })
   const latest = useRef(props)
   latest.current = props
+  // The tenant's notice (accepted per exact wording, remembered in this browser) and whether pictures are allowed.
+  const [policy, setPolicy] = useState<Policy>({ pictures: true })
+  const consent = useRef<string | undefined>(undefined)
+  const [accepted, setAccepted] = useState(false)
+  const [allowanceItems, setAllowance] = useState<AllowanceItem[]>([])
 
   const transport = useMemo(() => new DefaultChatTransport<TeovoMessage>({
     api: `${props.endpoint.replace(/\/$/, '')}/chat`,
@@ -67,7 +79,7 @@ export function AssistantProvider(props: AssistantProviderProps) {
       return typeof h === 'function' ? await h() : (h ?? {})
     },
     // Only the new message goes up: the server keeps the history and checks it belongs to this person.
-    prepareSendMessagesRequest: ({ messages }) => ({ body: { threadId: thread.current, message: messages.at(-1), page: page.current } }),
+    prepareSendMessagesRequest: ({ messages }) => ({ body: { threadId: thread.current, message: messages.at(-1), page: page.current, ...(consent.current ? { consent: consent.current } : {}) } }),
     fetch: async (input, init) => {
       const res = await (latest.current.fetch ?? fetch)(input, init)
       const id = res.headers.get('x-teovo-thread')
@@ -80,9 +92,12 @@ export function AssistantProvider(props: AssistantProviderProps) {
     },
   }), [props.endpoint])
 
+  const afterReply = useRef<() => void>(() => {})
   const chat = useChat<TeovoMessage>({
     transport,
     onData: (part) => { if (part.type === 'data-suggestions') setSuggestions(part.data as Suggestions) },
+    onFinish: () => afterReply.current(),
+    onError: () => afterReply.current(),   // a refused message (a limit) changes what is left too
   })
 
   // The screen's own suggestions: fetched when the panel opens, when the screen changes (also mid-conversation: the
@@ -164,6 +179,35 @@ export function AssistantProvider(props: AssistantProviderProps) {
   }, [])
   const clearSuggestions = useCallback(() => setSuggestions({ suggestions: [] }), [])
 
+  useEffect(() => {
+    let live = true
+    request('/policy').then(async (res) => {
+      if (!res.ok || !live) return
+      const p = (await res.json()) as Policy
+      setPolicy(p)
+      const key = p.noticeId ? `teovo-notice:${p.noticeId}` : ''
+      let ok = !p.notice
+      try { ok ||= Boolean(key && localStorage.getItem(key)) } catch { /* storage off: ask again */ }
+      consent.current = ok && p.noticeId ? p.noticeId : undefined
+      setAccepted(ok)
+    }).catch(() => {})
+    return () => { live = false }
+  }, [request, props.endpoint])
+
+  const acceptNotice = useCallback(() => {
+    if (!policy.noticeId) return
+    try { localStorage.setItem(`teovo-notice:${policy.noticeId}`, new Date().toISOString()) } catch { /* still accepted for now */ }
+    consent.current = policy.noticeId
+    setAccepted(true)
+  }, [policy.noticeId])
+
+  // How much is left: on open, and after each reply finishes.
+  const refreshAllowance = useCallback(() => {
+    request('/allowance').then(async (res) => { if (res.ok) setAllowance(((await res.json()) as { allowance?: AllowanceItem[] }).allowance ?? []) }).catch(() => {})
+  }, [request])
+  useEffect(() => { refreshAllowance() }, [refreshAllowance])
+  afterReply.current = refreshAllowance
+
   const rate = useCallback(async (runId: string, value: 'up' | 'down' | null) => {
     const res = await request(`/runs/${encodeURIComponent(runId)}/rating`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ value }) })
     if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error ?? 'Could not save that.')
@@ -189,8 +233,8 @@ export function AssistantProvider(props: AssistantProviderProps) {
   }, [])
 
   const currentPage = useMemo(() => (pageKey && pageKey !== 'null' ? JSON.parse(pageKey) as Page : undefined), [pageKey])
-  const value = useMemo<AssistantState>(() => ({ chat, threadId, newChat, openThread, submitForm, request, setPage, page: currentPage, suggestions, clearSuggestions, decideCard, rate, onAction: props.onAction }),
-    [chat, threadId, newChat, openThread, submitForm, request, setPage, currentPage, suggestions, clearSuggestions, decideCard, rate, props.onAction])
+  const value = useMemo<AssistantState>(() => ({ chat, threadId, newChat, openThread, submitForm, request, setPage, page: currentPage, suggestions, clearSuggestions, decideCard, rate, policy, noticeAccepted: accepted, acceptNotice, allowance: allowanceItems, onAction: props.onAction }),
+    [chat, threadId, newChat, openThread, submitForm, request, setPage, currentPage, suggestions, clearSuggestions, decideCard, rate, policy, accepted, acceptNotice, allowanceItems, props.onAction])
   return <Ctx.Provider value={value}>{props.children}</Ctx.Provider>
 }
 
