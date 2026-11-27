@@ -1,0 +1,21 @@
+{
+  "name": "teovo-monorepo",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.7",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  }
+}

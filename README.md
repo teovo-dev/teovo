@@ -14,6 +14,26 @@ Teovo is a planned open-source kit — a server handler, a React chat panel and 
 
 Packages (planned): `@teovo/server`, `@teovo/react`, `@teovo/db`.
 
+## Development
+
+One repository, three packages, managed with npm workspaces:
+
+| Package | Holds |
+|---|---|
+| `packages/server` (`@teovo/server`) | The handler, tool loop, cards, limits and logs |
+| `packages/react` (`@teovo/react`) | The chat panel and screen-context hooks |
+| `packages/db` (`@teovo/db`) | Postgres tables, migrations and storage adapters |
+
+Requires Node 20 or newer.
+
+```bash
+npm install
+```
+
+```bash
+npm run typecheck && npm test && npm run build
+```
+
 ## Licence
 
 [MIT](LICENSE)
