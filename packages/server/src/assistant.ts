@@ -115,7 +115,10 @@ export const CARDS_RULE = 'Tools that prepare a change (cards and forms) change 
   'When you know what to change, prepare the card straight away: never ask "shall I?" or "ready to confirm?" in words, the card is how they confirm.'
 
 /** Said when the misses log is on: so the team learns what people ask for that the assistant can't do. */
-export const MISS_RULE = 'When you cannot answer or do what the user asks (there is no tool for it, the data is missing, or it is not allowed), call cannot_help first, then tell them plainly.'
+export const MISS_RULE = 'Try your tools before saying you cannot do something: many questions are answered by fetching a list and ' +
+  'reading it yourself (find a name in it, add the amounts up), even when no tool filters exactly that way. Only when your ' +
+  'tools truly cannot answer or do what the user asks (no tool covers it, the data is not there, or it is not allowed), ' +
+  'call cannot_help, then tell them plainly.'
 
 /** A UUID that is always the same for the same text (from its SHA-256). */
 async function stableId(text: string): Promise<string> {
@@ -360,7 +363,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
         }
         if (config.misses !== false && !off.has('cannot_help')) {
           tools.cannot_help = tool({
-            description: 'Call this when you cannot answer or do what the user asked: no tool for it, the data is missing, or it is not allowed. It tells the team what people need. Then say so plainly to the user.',
+            description: 'Only after trying your other tools: call this when they truly cannot answer or do what the user asked (no tool covers it, the data is not there, or it is not allowed). It tells the team what people need. Then say so plainly to the user.',
             inputSchema: z.object({ question: z.string().max(500).describe('What the user wanted, in their words'), reason: z.string().max(300).describe('Why you could not, in a few words') }),
             execute: async ({ question, reason }) => {
               const miss = { tenantId: identity!.tenantId, userId: identity!.userId, threadId: thread.id, runId, question, reason }
