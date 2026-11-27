@@ -1,0 +1,15 @@
+{
+  "name": "teovo",
+  "version": "0.0.0",
+  "description": "Teovo command line: set up, migrate and prune the assistant's tables",
+  "license": "MIT",
+  "type": "module",
+  "repository": { "type": "git", "url": "git+https://github.com/teovo-dev/teovo.git", "directory": "packages/cli" },
+  "bin": { "teovo": "./dist/bin.js" },
+  "exports": { ".": { "types": "./dist/cli.d.ts", "import": "./dist/cli.js" } },
+  "files": ["dist"],
+  "scripts": { "build": "tsc -p tsconfig.json", "typecheck": "tsc -p tsconfig.json --noEmit" },
+  "publishConfig": { "access": "public" },
+  "dependencies": { "@teovo/db": "0.0.0", "pg": "^8.23.1" },
+  "devDependencies": { "@types/pg": "^8.23.1" }
+}

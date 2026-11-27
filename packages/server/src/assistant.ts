@@ -1,11 +1,11 @@
 import type { LanguageModelV4 } from '@ai-sdk/provider'
 import { convertToModelMessages, createUIMessageStream, createUIMessageStreamResponse, isStepCount, streamText, tool, toUIMessageStream, type ToolSet, type UIMessage } from 'ai'
-import { fallbackModel } from './fallback'
-import { CardError, cardForModel, decide, publicCard, type CardApplier, type CardRules, type Decision } from './cards'
-import { checkLimits, limitMessage, type LimitHit, type Limits } from './limits'
-import type { Storage, StoredCard, UsageRow } from './storage'
-import { toolsFor, type Action, type Identity, type Proposal, type TeovoTool, type ToolContext } from './tools'
-import { makeUntrusted, UNTRUSTED_RULE } from './untrusted'
+import { fallbackModel } from './fallback.js'
+import { CardError, cardForModel, decide, publicCard, type CardApplier, type CardRules, type Decision } from './cards.js'
+import { checkLimits, limitMessage, type LimitHit, type Limits } from './limits.js'
+import type { Storage, StoredCard, UsageRow } from './storage.js'
+import { toolsFor, type Action, type Identity, type Proposal, type TeovoTool, type ToolContext } from './tools.js'
+import { makeUntrusted, UNTRUSTED_RULE } from './untrusted.js'
 
 export interface Page { path?: string; title?: string }
 

@@ -1,5 +1,5 @@
-import type { Identity } from './tools'
-import type { Budget, Period, Storage, Unit } from './storage'
+import type { Identity } from './tools.js'
+import type { Budget, Period, Storage, Unit } from './storage.js'
 
 /** Limits per period. `user` applies to each person, `tenant` to everyone in a tenant together. */
 export interface Limits {

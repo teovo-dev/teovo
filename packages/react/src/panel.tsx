@@ -1,6 +1,6 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
-import { useAssistant } from './provider'
-import type { Action, Card, CardDecision, Step, TeovoMessage } from './types'
+import { useAssistant } from './provider.js'
+import type { Action, Card, CardDecision, Step, TeovoMessage } from './types.js'
 
 export interface AssistantPanelProps {
   /** Shown before the first message. */
