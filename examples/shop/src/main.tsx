@@ -26,6 +26,9 @@ function Shell({ user, setUser, open, setOpen }: { user: User; setUser: (u: User
   const shop = useShop()
   const [route, query] = useRoute()
   const [history, setHistory] = useState(false)
+  // Docked on the right, or a floating window: the user's pick, remembered in this browser.
+  const [layout, setLayout] = useState<'panel' | 'floating'>(() => { try { return localStorage.getItem('teovo-layout') === 'floating' ? 'floating' : 'panel' } catch { return 'panel' } })
+  const switchLayout = () => { const next = layout === 'panel' ? 'floating' : 'panel'; setLayout(next); try { localStorage.setItem('teovo-layout', next) } catch { /* private mode */ } }
   const { chat } = useAssistant()
   const ask = (text?: string) => {
     setHistory(false)
@@ -90,10 +93,16 @@ function Shell({ user, setUser, open, setOpen }: { user: User; setUser: (u: User
         </div>
         <nav className="tabbar">{nav('tab')}</nav>
       </div>
-      <AssistantSheet label="Ask Teovo" theme={{ accent: '#c2410c' }} open={open} onOpenChange={setOpen} header={
-        <div className="tv-tabs" role="group" aria-label="View">
-          <button type="button" aria-pressed={!history} onClick={() => setHistory(false)}>Chat</button>
-          <button type="button" aria-pressed={history} onClick={() => setHistory(true)}>History</button>
+      <AssistantSheet label="Ask Teovo" theme={{ accent: '#c2410c' }} open={open} onOpenChange={setOpen} layout={layout} header={
+        <div className="sheet-head">
+          <div className="tv-tabs" role="group" aria-label="View">
+            <button type="button" aria-pressed={!history} onClick={() => setHistory(false)}>Chat</button>
+            <button type="button" aria-pressed={history} onClick={() => setHistory(true)}>History</button>
+          </div>
+          <button type="button" className="layout-btn" onClick={switchLayout}
+            aria-label={layout === 'panel' ? 'Float the chat as a window' : 'Dock the chat on the right'} title={layout === 'panel' ? 'Float as a window' : 'Dock on the right'}>
+            <Icon name={layout === 'panel' ? 'float' : 'dock'} />
+          </button>
         </div>
       }>
         {history ? <ThreadList onOpen={() => setHistory(false)} />
