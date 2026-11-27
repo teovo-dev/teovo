@@ -250,6 +250,23 @@ describe('AssistantPanel', () => {
     expect(screen.queryByRole('button', { name: 'Follow-up' })).toBeNull()
   })
 
+  it('tells the app which conversation is open, also when one is opened from the list', async () => {
+    const s = server([say('First answer.'), say('Second answer.')])
+    const onThread = vi.fn()
+    const view = render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch} onThread={onThread}><AssistantPanel /></AssistantProvider>)
+    await ask('first question')
+    await screen.findByText('First answer.')
+    const firstId = onThread.mock.calls.at(-1)![0] as string
+    await userEvent.click(screen.getByRole('button', { name: 'New chat' }))
+    await ask('second question')
+    await screen.findByText('Second answer.')
+    expect(onThread.mock.calls.at(-1)![0]).not.toBe(firstId)
+    view.rerender(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch} onThread={onThread}><ThreadList /><AssistantPanel /></AssistantProvider>)
+    await userEvent.click(await screen.findByRole('button', { name: 'first question' }))
+    await screen.findByText('First answer.')
+    expect(onThread.mock.calls.at(-1)![0]).toBe(firstId)
+  })
+
   it('lists earlier conversations, opens one, and continues it', async () => {
     const s = server([say('First answer.'), say('Second answer.'), say('Continued.')])
     const view = mount({ fetch: s.fetch })
@@ -404,6 +421,42 @@ describe('AssistantPanel', () => {
       expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('Riya paid 200')
       expect(screen.getByRole('button', { name: 'Speak' })).toBeTruthy()
     } finally { delete w.webkitSpeechRecognition }
+  })
+
+  it("records the voice and hands it to the app's own speech-to-text when transcribe is given", async () => {
+    const w = window as unknown as Record<string, any>
+    let recorder: { ondataavailable: (e: { data: Blob }) => void; onstop: () => void; state: string; mimeType: string; start(): void; stop(): void } | undefined
+    class FakeRecorder {
+      ondataavailable = (_: { data: Blob }) => {}
+      onstop = () => {}
+      state = 'inactive'
+      mimeType = 'audio/webm'
+      constructor() { recorder = this as never }
+      start() { this.state = 'recording' }
+      stop() { this.state = 'inactive'; this.ondataavailable({ data: new Blob(['sound'], { type: 'audio/webm' }) }); this.onstop() }
+    }
+    const tracks = [{ stop: vi.fn() }]
+    w.MediaRecorder = FakeRecorder
+    Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: { getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => tracks }) } })
+    const transcribe = vi.fn(async (b: Blob) => (b.size ? 'Riya ne 200 diye' : ''))
+    try {
+      render(<AssistantProvider endpoint="/api/assistant" fetch={server([]).fetch}><AssistantPanel transcribe={transcribe} /></AssistantProvider>)
+      await userEvent.click(screen.getByRole('button', { name: 'Speak' }))
+      await waitFor(() => expect(recorder?.state).toBe('recording'))
+      await userEvent.click(screen.getByRole('button', { name: 'Stop listening' }))
+      await waitFor(() => expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('Riya ne 200 diye'))
+      expect(transcribe).toHaveBeenCalledWith(expect.any(Blob))
+      expect(tracks[0]!.stop).toHaveBeenCalled()                       // the microphone is released
+      expect(screen.getByRole('button', { name: 'Speak' })).toBeTruthy()
+    } finally { delete w.MediaRecorder; delete (navigator as unknown as Record<string, unknown>).mediaDevices }
+  })
+
+  it('lets the app draw the buttons the assistant offers', async () => {
+    const s = server([call('open_order', { no: 4 }), say('Here it is.')])
+    render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><AssistantPanel renderAction={(a) => <a href={String(a.args?.to)}>{a.label} ›</a>} /></AssistantProvider>)
+    await ask('open order 4')
+    const link = await screen.findByRole('link', { name: 'Open order #4 ›' })
+    expect(link.getAttribute('href')).toBe('/orders/4')
   })
 
   it("draws the assistant's Markdown but leaves the user's own words as typed", async () => {

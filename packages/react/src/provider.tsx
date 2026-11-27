@@ -8,7 +8,7 @@ export interface AssistantProviderProps {
   endpoint: string
   /** Continue an earlier conversation. Omitted: the first message starts a new one. */
   threadId?: string
-  /** Called when the server starts a new conversation, so the app can remember it (e.g. in the URL). */
+  /** Called when a conversation starts or an earlier one is opened, so the app can remember it (e.g. in the URL). */
   onThread?: (threadId: string) => void
   /** Extra headers on every request (e.g. the app's auth token or tenant id). */
   headers?: Record<string, string> | (() => Record<string, string> | Promise<Record<string, string>>)
@@ -122,6 +122,7 @@ export function AssistantProvider(props: AssistantProviderProps) {
     thread.current = id
     setThreadId(id)
     chat.setMessages(body.messages)
+    latest.current.onThread?.(id)   // so the app can remember it, and a reload continues this conversation
   }, [chat, request])
 
   const submitForm = useCallback(async (messageId: string, viewId: string, values: Record<string, unknown>) => {
