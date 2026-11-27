@@ -93,7 +93,7 @@ function Shell({ user, setUser, open, setOpen }: { user: User; setUser: (u: User
         </div>
         <nav className="tabbar">{nav('tab')}</nav>
       </div>
-      <AssistantSheet label="Ask Teovo" theme={{ accent: '#c2410c' }} open={open} onOpenChange={setOpen} layout={layout} header={
+      <AssistantSheet theme={{ accent: '#c2410c' }} open={open} onOpenChange={setOpen} layout={layout} header={
         <div className="sheet-head">
           <div className="tv-tabs" role="group" aria-label="View">
             <button type="button" aria-pressed={!history} onClick={() => setHistory(false)}>Chat</button>

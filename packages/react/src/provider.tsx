@@ -248,6 +248,11 @@ export function AssistantProvider(props: AssistantProviderProps) {
   return <Ctx.Provider value={value}>{props.children}</Ctx.Provider>
 }
 
+/** The assistant's name from the server's config, or undefined (also outside a provider). */
+export function useAssistantName(): string | undefined {
+  return useContext(Ctx)?.policy.name
+}
+
 /** The conversation: messages, send, stop, status, newChat. For apps that draw their own panel. */
 export function useAssistant(): AssistantState {
   const v = useContext(Ctx)

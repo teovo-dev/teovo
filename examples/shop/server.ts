@@ -46,6 +46,8 @@ const teovo = createAssistant({
   route: ({ text, history }) => (text.length <= 60 && history < 6 && !/[?]\s*\S/.test(text) && /^who\b/i.test(text.trim())
     ? [google('gemini-2.5-flash-lite'), flash]
     : undefined),
+  // The assistant's name: the model is told it, and the panel shows it ("Ask Teovo").
+  name: 'Teovo',
   instructions: 'You help the owner and staff of Little Oven, a small bakery, run the shop: orders, payments, customers, ' +
     'stock and expenses. Be brief. Use the tools for every number; never guess. To change anything, use a propose tool: ' +
     'the user confirms it on a card. Show lists of orders, customers or products as a table. "This week" means the last 7 days. ' +

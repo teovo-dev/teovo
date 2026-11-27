@@ -49,6 +49,8 @@ export interface AssistantPanelProps {
   showSteps?: boolean | 'open'
   /** Inside each step, what it asked for and what came back (the raw data under its own arrow). Default true. */
   stepDetails?: boolean
+  /** A small "Powered by Teovo" link at the bottom of the chat. Default true; false hides it. */
+  poweredBy?: boolean
   className?: string
 }
 
@@ -220,6 +222,9 @@ export function AssistantPanel(props: AssistantPanelProps) {
           </div>
         </div>
       </form>
+      {props.poweredBy === false ? null : (
+        <div className="tv-powered">Powered by <a href="https://github.com/teovo-dev/teovo" target="_blank" rel="noopener noreferrer">Teovo</a></div>
+      )}
     </section>
   )
 }

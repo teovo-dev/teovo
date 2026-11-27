@@ -78,3 +78,14 @@ describe('switches for every tenant', () => {
     expect((await chat(s.teovo, 'hi')).text).toBe('from main')
   })
 })
+
+describe('the assistant name', () => {
+  it('tells the model its name and sends it to the panel with the policy', async () => {
+    const s = app({ name: '  Teovo ' })
+    expect(await (await s.teovo.fetch(new Request('https://a.test/policy'))).json()).toMatchObject({ name: 'Teovo' })
+    await (await s.send({})).text()
+    expect(JSON.stringify(s.main.doStreamCalls[0]!.prompt[0])).toContain('Your name is Teovo; you are the assistant built into this app.')
+    const plain = app()
+    expect(await (await plain.teovo.fetch(new Request('https://a.test/policy'))).json()).not.toHaveProperty('name')
+  })
+})

@@ -47,6 +47,7 @@ export const teovo = createAssistant({
   identify: async (req) => /* from your session */ ({ tenantId, userId, role }), // null → 401
   asUser: (identity) => dbClientActingAs(identity),   // becomes ctx.db in every tool
   models: [primaryModel, fallbackModel],             // tried in order
+  name: 'Teovo',                                     // shown on the button ("Ask Teovo") and told to the model
   instructions: 'You help … Use the tools for every number; never guess. To change anything, use a propose tool.',
   storage: postgresStorage(query),
   views: builtinViews,
