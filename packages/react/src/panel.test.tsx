@@ -233,6 +233,23 @@ describe('AssistantPanel', () => {
     expect(screen.queryByRole('button', { name: 'Follow-up' })).toBeNull()
   })
 
+  it('tells the app which conversation is open, also when one is opened from the list', async () => {
+    const s = server([say('First answer.'), say('Second answer.')])
+    const onThread = vi.fn()
+    const view = render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch} onThread={onThread}><AssistantPanel /></AssistantProvider>)
+    await ask('first question')
+    await screen.findByText('First answer.')
+    const firstId = onThread.mock.calls.at(-1)![0] as string
+    await userEvent.click(screen.getByRole('button', { name: 'New chat' }))
+    await ask('second question')
+    await screen.findByText('Second answer.')
+    expect(onThread.mock.calls.at(-1)![0]).not.toBe(firstId)
+    view.rerender(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch} onThread={onThread}><ThreadList /><AssistantPanel /></AssistantProvider>)
+    await userEvent.click(await screen.findByRole('button', { name: 'first question' }))
+    await screen.findByText('First answer.')
+    expect(onThread.mock.calls.at(-1)![0]).toBe(firstId)
+  })
+
   it('lists earlier conversations, opens one, and continues it', async () => {
     const s = server([say('First answer.'), say('Second answer.'), say('Continued.')])
     const view = mount({ fetch: s.fetch })
