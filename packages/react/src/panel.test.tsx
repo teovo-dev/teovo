@@ -315,6 +315,16 @@ describe('AssistantPanel', () => {
     } finally { delete w.webkitSpeechRecognition }
   })
 
+  it("draws the assistant's Markdown but leaves the user's own words as typed", async () => {
+    const s = server([say('Riya owes **₹880**.')])
+    const { container } = mount({ fetch: s.fetch })
+    await ask('who owes **most**?')
+    await screen.findByText('₹880')
+    expect(container.querySelector('.tv-assistant strong')?.textContent).toBe('₹880')
+    expect(container.querySelector('.tv-user strong')).toBeNull()
+    expect(container.querySelector('.tv-user')?.textContent).toBe('who owes **most**?')
+  })
+
   it('lets the app draw its own views', async () => {
     const s = server([call('show_record', { title: 'Order #142', fields: [{ label: 'Total', value: 880 }] }), say('There.')], true, {}, { views: builtinViews })
     render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><AssistantPanel views={{ record: ({ part }) => <p>Custom: {part.data.title}</p> }} /></AssistantProvider>)
