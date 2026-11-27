@@ -99,7 +99,7 @@ describe('createAssistant', () => {
 
     const toolResult = JSON.stringify(m.doStreamCalls[1]!.prompt)
     expect(toolResult).toMatch(/<untrusted-[0-9a-f]{8} source=\\"customer note\\">/)
-    expect(JSON.stringify(m.doStreamCalls[0]!.prompt)).toContain('at /sales/142')
+    expect(JSON.stringify(m.doStreamCalls[0]!.prompt)).toMatch(/source=\\"screen\\">\\nScreen: Order 142\\nPath: \/sales\/142/)
 
     const cards = reply.parts.filter((p) => p.type === 'data-card') as { data: { title: string; status: string; after: unknown } }[]
     expect(cards).toHaveLength(1)

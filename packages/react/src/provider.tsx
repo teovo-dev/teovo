@@ -1,7 +1,7 @@
 import { useChat } from '@ai-sdk/react'
 import { DefaultChatTransport } from 'ai'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
-import type { Action, Card, CardDecision, Page, TeovoMessage } from './types.js'
+import type { Action, Card, CardDecision, Page, Suggestions, TeovoMessage } from './types.js'
 
 export interface AssistantProviderProps {
   /** Where the app mounted the server handler, e.g. '/api/assistant'. The panel posts to `${endpoint}/chat`. */
@@ -30,6 +30,9 @@ interface AssistantState {
   /** Start a fresh conversation: clears the messages; the next message creates a new thread. */
   newChat: () => void
   setPage: (page: Page | undefined) => void
+  /** Chips and hint for now: the screen's when the chat is idle, the follow-ups after a reply. */
+  suggestions: Suggestions
+  clearSuggestions: () => void
   /** Confirm, skip or undo a card. Resolves to the card as it is now; rejects with the sentence to show. */
   decideCard: (card: Card, decision: CardDecision) => Promise<Partial<Card>>
   onAction: AssistantProviderProps['onAction']
@@ -41,6 +44,8 @@ export function AssistantProvider(props: AssistantProviderProps) {
   const [threadId, setThreadId] = useState(props.threadId)
   const thread = useRef(props.threadId)
   const page = useRef<Page | undefined>(undefined)
+  const [pageKey, setPageKey] = useState('')
+  const [suggestions, setSuggestions] = useState<Suggestions>({ suggestions: [] })
   const latest = useRef(props)
   latest.current = props
 
@@ -64,7 +69,31 @@ export function AssistantProvider(props: AssistantProviderProps) {
     },
   }), [props.endpoint])
 
-  const chat = useChat<TeovoMessage>({ transport })
+  const chat = useChat<TeovoMessage>({
+    transport,
+    onData: (part) => { if (part.type === 'data-suggestions') setSuggestions(part.data as Suggestions) },
+  })
+
+  // The screen's own suggestions: fetched when the panel opens, when the screen changes, and on New chat.
+  const empty = chat.messages.length === 0
+  useEffect(() => {
+    if (!empty) return
+    let live = true
+    void (async () => {
+      const p = latest.current
+      const q = new URLSearchParams()
+      const pg = page.current
+      if (pg?.path) q.set('path', pg.path)
+      if (pg?.title) q.set('title', pg.title)
+      if (pg?.record) { q.set('recordType', pg.record.type); q.set('recordId', pg.record.id) }
+      try {
+        const h = typeof p.headers === 'function' ? await p.headers() : (p.headers ?? {})
+        const res = await (p.fetch ?? fetch)(`${p.endpoint.replace(/\/$/, '')}/suggestions?${q}`, { headers: h })
+        if (res.ok && live) setSuggestions((await res.json()) as Suggestions)
+      } catch { /* chips are a nicety; the panel works without them */ }
+    })()
+    return () => { live = false }
+  }, [empty, pageKey, props.endpoint])
 
   const newChat = useCallback(() => {
     chat.stop()
@@ -73,7 +102,11 @@ export function AssistantProvider(props: AssistantProviderProps) {
     chat.setMessages([])
   }, [chat])
 
-  const setPage = useCallback((p: Page | undefined) => { page.current = p }, [])
+  const setPage = useCallback((p: Page | undefined) => {
+    page.current = p
+    setPageKey(JSON.stringify(p ?? null))
+  }, [])
+  const clearSuggestions = useCallback(() => setSuggestions({ suggestions: [] }), [])
 
   const decideCard = useCallback(async (card: Card, decision: CardDecision): Promise<Partial<Card>> => {
     const p = latest.current
@@ -85,8 +118,8 @@ export function AssistantProvider(props: AssistantProviderProps) {
     return body.card ?? {}
   }, [])
 
-  const value = useMemo<AssistantState>(() => ({ chat, threadId, newChat, setPage, decideCard, onAction: props.onAction }),
-    [chat, threadId, newChat, setPage, decideCard, props.onAction])
+  const value = useMemo<AssistantState>(() => ({ chat, threadId, newChat, setPage, suggestions, clearSuggestions, decideCard, onAction: props.onAction }),
+    [chat, threadId, newChat, setPage, suggestions, clearSuggestions, decideCard, props.onAction])
   return <Ctx.Provider value={value}>{props.children}</Ctx.Provider>
 }
 
@@ -104,9 +137,9 @@ export function useAssistant(): AssistantState {
 export function useAssistantContext(page: Page): void {
   const { setPage } = useAssistant()
   const { path, title } = page
+  const type = page.record?.type, id = page.record?.id
   useEffect(() => {
-    const mine = { path, title }
-    setPage(mine)
+    setPage({ path, title, ...(type && id ? { record: { type, id } } : {}) })
     return () => setPage(undefined)
-  }, [setPage, path, title])
+  }, [setPage, path, title, type, id])
 }

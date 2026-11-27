@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 // The panel against the real server handler (createAssistant) with a scripted model: no network, no mocks of our own code.
 import type { LanguageModelV4StreamPart } from '@ai-sdk/provider'
-import { createAssistant, defineTool, memoryStorage, type CardApplier } from '@teovo/server'
+import { createAssistant, defineTool, memoryStorage, type AssistantConfig, type CardApplier } from '@teovo/server'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MockLanguageModelV4 } from 'ai/test'
@@ -23,12 +23,12 @@ const tools = [
     run: ({ no }) => ({ label: `Open order #${no}`, action: 'navigate', args: { to: `/orders/${no}` } }) }),
 ]
 
-function server(steps: ReturnType<typeof say>[], signedIn = true, cards: Record<string, CardApplier> = {}) {
+function server(steps: ReturnType<typeof say>[], signedIn = true, cards: Record<string, CardApplier> = {}, extra: Partial<AssistantConfig> = {}) {
   const bodies: any[] = []
   const teovo = createAssistant({
     identify: () => (signedIn ? { tenantId: 'shop-1', userId: 'u1', role: 'owner' } : null),
     asUser: () => null, tools, instructions: 'Help.', storage: memoryStorage(), cards,
-    models: [new MockLanguageModelV4({ doStream: steps as never })],
+    models: [new MockLanguageModelV4({ doStream: steps as never })], ...extra,
   })
   const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     if (init?.body) bodies.push(JSON.parse(String(init.body)))
@@ -37,7 +37,7 @@ function server(steps: ReturnType<typeof say>[], signedIn = true, cards: Record<
   return { fetch, bodies }
 }
 
-function Screen({ path }: { path: string }) { useAssistantContext({ path, title: 'Orders' }); return null }
+function Screen({ path, id }: { path: string; id?: string }) { useAssistantContext({ path, title: 'Orders', ...(id ? { record: { type: 'order', id } } : {}) }); return null }
 
 function mount(props: Partial<AssistantProviderProps> & { fetch: typeof fetch }, extra?: React.ReactNode) {
   return render(<AssistantProvider endpoint="/api/assistant" {...props}>{extra}<AssistantPanel welcome="Ask about your shop" /></AssistantProvider>)
@@ -150,6 +150,42 @@ describe('AssistantPanel', () => {
     await ask('two')
     await screen.findByText('second')
     expect(s.bodies[1].threadId).toBeUndefined()
+  })
+
+  it('shows chips for the screen, sends one on click, then shows follow-ups', async () => {
+    const seen: unknown[] = []
+    const s = server([say('Riya owes ₹880.')], true, {}, {
+      suggestions: ({ page, after }) => {
+        seen.push(after ? 'after' : page)
+        return after ? { suggestions: ['Send Riya a reminder'] } : { suggestions: [`Who owes for order ${page?.record?.id}?`], placeholder: 'Ask about this order' }
+      },
+    })
+    mount({ fetch: s.fetch }, <Screen path="/orders/142" id="142" />)
+    const chip = await screen.findByRole('button', { name: 'Who owes for order 142?' })
+    expect(seen[0]).toEqual({ path: '/orders/142', title: 'Orders', record: { type: 'order', id: '142' } })
+    await userEvent.click(chip)
+    expect(s.bodies[0].message.parts[0].text).toBe('Who owes for order 142?')
+    await screen.findByText('Riya owes ₹880.')
+    await screen.findByRole('button', { name: 'Send Riya a reminder' })
+    expect(screen.queryByRole('button', { name: 'Who owes for order 142?' })).toBeNull()
+  })
+
+  it('Tab fills in the hint when the input is empty', async () => {
+    const s = server([say('ok')], true, {}, { suggestions: () => ({ suggestions: [], placeholder: 'Ask about this order' }) })
+    mount({ fetch: s.fetch })
+    const box = screen.getByLabelText('Message') as HTMLTextAreaElement
+    await waitFor(() => expect(box.placeholder).toBe('Ask about this order  (Tab)'))
+    box.focus()
+    await userEvent.keyboard('{Tab}')
+    expect(box.value).toBe('Ask about this order')
+  })
+
+  it('fetches new chips when the screen changes', async () => {
+    const s = server([], true, {}, { suggestions: ({ page }) => ({ suggestions: [`On ${page?.path ?? 'home'}`] }) })
+    const view = mount({ fetch: s.fetch }, <Screen path="/orders" />)
+    await screen.findByRole('button', { name: 'On /orders' })
+    view.rerender(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><Screen path="/expenses" /><AssistantPanel /></AssistantProvider>)
+    await screen.findByRole('button', { name: 'On /expenses' })
   })
 
   it("shows the server's sentence when the user is signed out", async () => {
