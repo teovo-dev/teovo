@@ -2,6 +2,7 @@ import type { LanguageModelV4 } from '@ai-sdk/provider'
 import { convertToModelMessages, createUIMessageStream, createUIMessageStreamResponse, isStepCount, streamText, tool, toUIMessageStream, type ToolSet, type UIMessage } from 'ai'
 import { fallbackModel } from './fallback.js'
 import { CardError, cardForModel, decide, publicCard, type CardHandler, type CardRules, type Decision } from './cards.js'
+import type { CardEventKind, Miss } from './storage.js'
 import { checkLimits, limitMessage, type LimitHit, type Limits } from './limits.js'
 import type { Storage, StoredCard, UsageRow } from './storage.js'
 import { toolsFor, type Action, type Identity, type Proposal, type TeovoTool, type ToolContext } from './tools.js'
@@ -78,6 +79,8 @@ export interface AssistantConfig<DB = unknown> {
   redact?: RedactOptions
   /** Roles that may read and change their tenant's settings (GET/PUT …/settings). Default ['owner', 'admin']. */
   settingsRoles?: readonly string[]
+  /** The cannot_help tool, which logs what people asked for and couldn't get (GET …/misses). Default on; false to leave it out. */
+  misses?: boolean
   /** Saved on each run, so a change in replies can be traced to a change in instructions. */
   promptVersion?: string
   /** Tool inputs and outputs longer than this are cut in the run log (the model still sees all of it). Default 8000 characters. */
@@ -89,6 +92,8 @@ export interface AssistantConfig<DB = unknown> {
     limit?: (hit: LimitHit, identity: Identity) => void
     usage?: (rows: UsageRow[]) => void
     decision?: (card: StoredCard, decision: Decision, identity: Identity) => void
+    /** The assistant couldn't answer or do something (it called cannot_help). */
+    miss?: (miss: Miss) => void
   }
 }
 
@@ -99,7 +104,11 @@ const FAILED = 'The assistant could not finish this reply. Try again.'
  * shown a card; the user must never believe something changed before they confirmed it.
  */
 export const CARDS_RULE = 'Tools that prepare a change (cards and forms) change nothing by themselves: the user confirms or skips each card. ' +
-  'Say a change is ready to confirm, never that it is done, recorded or saved, unless a later message says the user confirmed it.'
+  'Say a change is ready to confirm, never that it is done, recorded or saved, unless a later message says the user confirmed it. ' +
+  'When you know what to change, prepare the card straight away: never ask "shall I?" or "ready to confirm?" in words, the card is how they confirm.'
+
+/** Said when the misses log is on: so the team learns what people ask for that the assistant can't do. */
+export const MISS_RULE = 'When you cannot answer or do what the user asks (there is no tool for it, the data is missing, or it is not allowed), call cannot_help first, then tell them plainly.'
 
 const DEFAULT_TIMEOUTS = { firstChunkMs: 30_000, chunkMs: 20_000, totalMs: 120_000 }
 
@@ -209,7 +218,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     const rolesText = otherRoles.length
       ? `\n\nNot available to this user (role: ${identity.role}): ${otherRoles.map((t) => `${t.description.replace(/\.$/, '')} (${t.roles!.join(' or ')} only)`).join('; ')}. If they ask for one, say who can do it; never try another way.`
       : ''
-    const system = `${instructions}${formatsText(formats, config.now?.() ?? new Date())}${settingsText(settings)}${rolesText}${screensText(config.screens ?? [])}${config.views?.length ? `\n\n${VIEWS_RULE}${formsText(config.forms ?? {})}` : ''}${config.tools.some((t) => t.kind === 'propose') || config.views?.some((v) => v.name === 'form') ? `\n\n${CARDS_RULE}` : ''}\n\n${UNTRUSTED_RULE}${screenText(page, shownSummary, fence)}`
+    const system = `${instructions}${formatsText(formats, config.now?.() ?? new Date())}${settingsText(settings)}${rolesText}${screensText(config.screens ?? [])}${config.views?.length ? `\n\n${VIEWS_RULE}${formsText(config.forms ?? {})}` : ''}${config.tools.some((t) => t.kind === 'propose') || config.views?.some((v) => v.name === 'form') ? `\n\n${CARDS_RULE}` : ''}${config.misses !== false && !(settings.toolsOff ?? []).includes('cannot_help') ? `\n\n${MISS_RULE}` : ''}\n\n${UNTRUSTED_RULE}${screenText(page, shownSummary, fence)}`
 
     const stream = createUIMessageStream<UIMessage<{ runId: string; threadId: string; formats: Formats }>>({
       originalMessages: history as UIMessage<{ runId: string; threadId: string; formats: Formats }>[],
@@ -238,6 +247,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
                   const p = out as Proposal
                   const card: StoredCard = { ...p, id: crypto.randomUUID(), threadId: thread.id, runId, status: 'shown', ...(seen.size ? { untrustedSources: [...seen] } : {}) }
                   await storage.saveCard(card)
+                  await logEvent(card, 'proposed', identity!)
                   config.on?.card?.(card)
                   writer.write({ type: 'data-card', id: card.id, data: publicCard(card) })
                   // Worded for small models too: they lean on the last tool result more than on the system prompt.
@@ -275,6 +285,18 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
               return v.name === 'choices' ? 'Shown as buttons. Stop here: their pick arrives as their next message.'
                 : v.name === 'form' ? 'Shown as a form. When they submit it, a card is prepared for them to confirm; nothing has changed yet.'
                 : `Shown to the user as a ${v.name}. Don't repeat its contents in your reply.`
+            },
+          })
+        }
+        if (config.misses !== false && !off.has('cannot_help')) {
+          tools.cannot_help = tool({
+            description: 'Call this when you cannot answer or do what the user asked: no tool for it, the data is missing, or it is not allowed. It tells the team what people need. Then say so plainly to the user.',
+            inputSchema: z.object({ question: z.string().max(500).describe('What the user wanted, in their words'), reason: z.string().max(300).describe('Why you could not, in a few words') }),
+            execute: async ({ question, reason }) => {
+              const miss = { tenantId: identity!.tenantId, userId: identity!.userId, threadId: thread.id, runId, question, reason }
+              await storage.addMiss(miss).catch((e) => config.on?.error?.(e, { identity, threadId: thread.id }))
+              config.on?.miss?.(miss)
+              return 'Noted for the team. Now tell the user plainly that you cannot do this, and what they could do instead.'
             },
           })
         }
@@ -462,6 +484,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     const fields = proposal.fields ?? part.data.data.fields.map((f) => ({ key: f.name, label: f.label, format: f.type === 'date' ? 'date' as const : f.type === 'number' ? 'number' as const : 'text' as const }))
     const card: StoredCard = { ...proposal, fields, id: crypto.randomUUID(), threadId: thread.id, runId, status: 'shown' }
     await storage.saveCard(card)
+    await logEvent(card, 'proposed', identity)
     config.on?.card?.(card)
     // The card joins the reply right under its form, so a reopened conversation shows both.
     const parts: UIMessage['parts'] = message.parts.flatMap((p): UIMessage['parts'] => (p === (part as unknown)
@@ -484,6 +507,46 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     } })
   }
 
+  async function logEvent(c: StoredCard, event: CardEventKind, who: Identity) {
+    await config.storage.addCardEvent({ cardId: c.id, threadId: c.threadId, tenantId: who.tenantId, userId: who.userId, kind: c.kind, title: c.title, event })
+      .catch((e) => config.on?.error?.(e, { identity: who, threadId: c.threadId }))
+  }
+
+  const isAdmin = (i: Identity) => (config.settingsRoles ?? ['owner', 'admin']).includes(i.role)
+
+  /** GET …/audit and GET …/misses: the tenant's trail of changes and the questions the assistant couldn't answer. Admins only. */
+  async function adminList(req: Request, what: 'audit' | 'misses'): Promise<Response> {
+    const identity = await config.identify(req)
+    if (!identity) return json(401, { error: 'Sign in to use the assistant.' })
+    if (!isAdmin(identity)) return json(403, { error: 'Only an admin can see this.' })
+    const q = new URL(req.url).searchParams
+    const limit = Math.min(200, Math.max(1, Number(q.get('limit')) || 50))
+    const before = q.get('before') && !Number.isNaN(Date.parse(q.get('before')!)) ? new Date(q.get('before')!).toISOString() : undefined
+    if (what === 'misses') return json(200, { misses: await config.storage.listMisses(identity.tenantId, { limit, ...(before ? { before } : {}) }) })
+    const userId = q.get('userId') || undefined
+    return json(200, { events: await config.storage.listCardEvents(identity.tenantId, { limit, ...(before ? { before } : {}), ...(userId ? { userId } : {}) }) })
+  }
+
+  /** Conversations, pictures and logs of one person, or a whole tenant, gone. */
+  async function wipe(tenantId: string, userId?: string): Promise<{ threads: number; files: number }> {
+    const elsewhere = await config.files?.store.removeFor?.(tenantId, userId)   // pictures kept outside the tables
+    const { threads, files } = await config.storage.wipe(tenantId, userId)
+    return { threads, files: elsewhere ?? files ?? 0 }
+  }
+
+  /** POST …/wipe { scope: 'me' } for one's own data; { scope: 'user', userId } or { scope: 'tenant' } for admins. */
+  async function wipeRoute(req: Request): Promise<Response> {
+    const identity = await config.identify(req)
+    if (!identity) return json(401, { error: 'Sign in to use the assistant.' })
+    let body: { scope?: unknown; userId?: unknown }
+    try { body = (await req.json()) as typeof body } catch { return json(400, { error: 'The request was not valid JSON.' }) }
+    if (body.scope === 'me') return json(200, await wipe(identity.tenantId, identity.userId))
+    if (!isAdmin(identity)) return json(403, { error: 'Only an admin can delete other people\'s conversations.' })
+    if (body.scope === 'user' && typeof body.userId === 'string' && body.userId) return json(200, await wipe(identity.tenantId, body.userId))
+    if (body.scope === 'tenant') return json(200, await wipe(identity.tenantId))
+    return json(400, { error: 'Send scope "me", "user" with a userId, or "tenant".' })
+  }
+
   async function card(req: Request, id: string, decision: Decision): Promise<Response> {
     const identity = await config.identify(req)
     if (!identity) return json(401, { error: 'Sign in to use the assistant.' })
@@ -494,16 +557,24 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
         storage: config.storage, appliers: config.cards ?? {}, rules, identity, id, decision, reversible: body.reversible === true,
         ctx: async () => ({ identity, db: await config.asUser(identity, req), untrusted: makeUntrusted(crypto.randomUUID().slice(0, 8)) }),
       })
+      await logEvent(done, ({ confirm: 'confirmed', skip: 'skipped', undo: 'undone' } as const)[decision], identity)
       config.on?.decision?.(done, decision, identity)
       return json(200, { card: publicCard(done) })
     } catch (e) {
-      if (e instanceof CardError) return json(e.status, { error: e.message })
+      if (e instanceof CardError) {
+        // Refused because it was too old or the record changed: the card expired, which belongs in the trail too.
+        const now = e.status === 409 || e.status === 410 ? await config.storage.getCard(identity.tenantId, identity.userId, id) : null
+        if (now?.status === 'expired') await logEvent(now, 'expired', identity)
+        return json(e.status, { error: e.message })
+      }
       config.on?.error?.(e, { identity, threadId: '' })
       return json(500, { error: 'Something went wrong. Nothing was changed.' })
     }
   }
 
   return {
+    /** Delete a person's (or with no userId, a whole tenant's) conversations, pictures and logs, e.g. on a privacy request. */
+    wipe,
     /**
      * Delete pictures older than `files.keepDays`. Call it on a schedule (a cron, a Worker scheduled event).
      * Returns how many were removed; 0 when no keepDays or the store can't list by age.
@@ -526,6 +597,9 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
       const f = /\/threads\/([0-9a-f-]{36})\/views\/([^/]{1,100})\/submit$/i.exec(path)
       if (req.method === 'POST' && f) return submitForm(req, f[1]!.toLowerCase(), decodeURIComponent(f[2]!))
       if (t && ((req.method === 'GET' && !t[2]) || (req.method === 'POST' && t[2]))) return threads(req, t[1]!.toLowerCase(), Boolean(t[2]))
+      if (req.method === 'GET' && path.endsWith('/audit')) return adminList(req, 'audit')
+      if (req.method === 'GET' && path.endsWith('/misses')) return adminList(req, 'misses')
+      if (req.method === 'POST' && path.endsWith('/wipe')) return wipeRoute(req)
       const m = /\/cards\/([0-9a-f-]{36})\/(confirm|skip|undo)$/i.exec(path)
       if (req.method === 'POST' && m) return card(req, m[1]!.toLowerCase(), m[2] as Decision)
       return json(404, { error: 'Not found.' })

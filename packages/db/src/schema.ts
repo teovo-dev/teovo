@@ -165,6 +165,36 @@ revoke all on function tv_add_usage_daily(text, text, date, text, numeric) from 
 revoke all on function tv_list_threads(text, text, int) from public;`,
 }
 
+/** Who proposed, confirmed, skipped or undid each change, and when; and the questions the assistant couldn't answer. */
+const auditAndMisses: Migration = {
+  id: '0010_audit_misses',
+  sql: `
+create table if not exists tv_card_events (
+  id         bigserial primary key,
+  card_id    uuid not null,
+  thread_id  uuid not null,
+  tenant_id  text not null,
+  user_id    text not null,
+  kind       text not null,
+  title      text not null,
+  event      text not null check (event in ('proposed', 'confirmed', 'skipped', 'undone', 'expired')),
+  at         timestamptz not null default now()
+);
+create index if not exists tv_card_events_tenant on tv_card_events (tenant_id, at desc);
+
+create table if not exists tv_misses (
+  id         bigserial primary key,
+  tenant_id  text not null,
+  user_id    text not null,
+  thread_id  uuid,
+  run_id     uuid,
+  question   text not null,
+  reason     text not null,
+  at         timestamptz not null default now()
+);
+create index if not exists tv_misses_tenant on tv_misses (tenant_id, at desc);`,
+}
+
 /** Pictures kept in an object store (Supabase Storage, R2) only need their owner row here, not the bytes. */
 const fileIndex: Migration = {
   id: '0008_file_index',
@@ -229,7 +259,7 @@ function rlsMigration(tables: string[], rls: Exclude<NonNullable<SchemaOptions['
   const rule: Record<string, string> = {
     tv_threads: own, tv_runs: own, tv_messages: viaThread, tv_proposals: viaThread,
     tv_run_steps: `exists (select 1 from tv_runs r where r.id = run_id and r.tenant_id = (${rls.tenant}) and r.user_id = (${rls.user}))`,
-    tv_files: own, tv_usage: own, tv_usage_daily: `tenant_id = (${rls.tenant})`, tv_budgets: `tenant_id = (${rls.tenant})`, tv_tenant_settings: `tenant_id = (${rls.tenant})`,
+    tv_files: own, tv_card_events: own, tv_misses: own, tv_usage: own, tv_usage_daily: `tenant_id = (${rls.tenant})`, tv_budgets: `tenant_id = (${rls.tenant})`, tv_tenant_settings: `tenant_id = (${rls.tenant})`,
   }
   const sql = tables.map((t) =>
     `alter table ${t} enable row level security;\n` +
@@ -251,12 +281,17 @@ export function migrations(options: SchemaOptions = {}): Migration[] {
   const suffix = `${options.features?.proposals ? 'with_proposals' : 'core'}${options.features?.files ? '_files' : ''}`
   if (options.rls === 'server-only') list.push({ ...serverOnlyMigration(tables), id: `0101_server_only_${suffix}` })
   else if (options.rls) list.push({ ...rlsMigration(tables, options.rls), id: `0100_rls_${suffix}` })
+  // Tables added later get their rules in their own migration, so apps that already ran the ones above get them too.
+  list.push(auditAndMisses)
+  const later = ['tv_card_events', 'tv_misses']
+  if (options.rls === 'server-only') list.push({ ...serverOnlyMigration(later), id: '0111_server_only_audit_misses' })
+  else if (options.rls) list.push({ ...rlsMigration(later, options.rls), id: '0110_rls_audit_misses' })
   return list
 }
 
 /** Tables each feature needs, for the start-up check. */
 export const FEATURE_TABLES: Record<string, string[]> = {
-  core: ['tv_threads', 'tv_messages', 'tv_runs', 'tv_run_steps', 'tv_usage', 'tv_usage_daily', 'tv_budgets', 'tv_tenant_settings', 'tv_migrations'],
+  core: ['tv_threads', 'tv_messages', 'tv_runs', 'tv_run_steps', 'tv_usage', 'tv_usage_daily', 'tv_budgets', 'tv_tenant_settings', 'tv_card_events', 'tv_misses', 'tv_migrations'],
   proposals: ['tv_proposals'],
   files: ['tv_files'],
 }

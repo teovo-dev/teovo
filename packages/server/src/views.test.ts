@@ -68,7 +68,7 @@ describe('views', () => {
   it('offers no show tools when the app has no views', async () => {
     const t = setup([say('ok')], { views: undefined })
     await t.chat('hi')
-    expect((t.model.doStreamCalls[0]!.tools ?? []).map((x) => x.name)).toEqual([])
+    expect((t.model.doStreamCalls[0]!.tools ?? []).map((x) => x.name).filter((n) => n.startsWith('show_'))).toEqual([])
   })
 })
 

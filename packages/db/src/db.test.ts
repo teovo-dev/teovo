@@ -31,7 +31,7 @@ suite('@teovo/db on Postgres', () => {
 
   it('creates core tables only, adds a feature later, and never repeats a migration', async () => {
     const { query, client } = await freshSchema()
-    expect(await migrate(query)).toEqual(['0001_core', '0003_tenant_formats', '0007_api_functions'])
+    expect(await migrate(query)).toEqual(['0001_core', '0003_tenant_formats', '0007_api_functions', '0010_audit_misses'])
     expect(await missingTables(query, { proposals: true })).toEqual(['tv_proposals'])
     expect(await migrate(query, { features: { proposals: true } })).toEqual(['0002_proposals', '0004_proposal_sources', '0006_proposal_fields'])
     expect(await migrate(query, { features: { proposals: true } })).toEqual([])
@@ -177,6 +177,35 @@ suite('@teovo/db on Postgres', () => {
     expect(await files.get('shop-1', id)).toBeNull()
     await files.put({ id: crypto.randomUUID(), tenantId: 'shop-1', userId: 'u1', threadId: t.id, mediaType: 'image/png', bytes: new Uint8Array([1]) })
     expect(await files.removeOlderThan!(new Date(Date.now() + 1000))).toBe(1)
+    client.release()
+  })
+
+  it('keeps the audit trail and misses per tenant, and wipe removes a person or a tenant', async () => {
+    const { query, client } = await freshSchema()
+    await migrate(query, { features: { proposals: true, files: true } })
+    const s = postgresStorage(query)
+    const t1 = await s.createThread('shop-1', 'u1')
+    const t2 = await s.createThread('shop-1', 'u2')
+    await s.createThread('shop-2', 'u1')
+    const card = crypto.randomUUID()
+    await s.addCardEvent({ cardId: card, threadId: t1.id, tenantId: 'shop-1', userId: 'u1', kind: 'pay', title: 'Pay', event: 'proposed' })
+    await s.addCardEvent({ cardId: card, threadId: t1.id, tenantId: 'shop-1', userId: 'u1', kind: 'pay', title: 'Pay', event: 'confirmed' })
+    await s.addCardEvent({ cardId: crypto.randomUUID(), threadId: t2.id, tenantId: 'shop-1', userId: 'u2', kind: 'pay', title: 'Pay 2', event: 'skipped' })
+    expect((await s.listCardEvents('shop-1', { limit: 10 })).map((e) => e.event)).toEqual(['skipped', 'confirmed', 'proposed'])
+    expect((await s.listCardEvents('shop-1', { limit: 10, userId: 'u1' })).map((e) => e.event)).toEqual(['confirmed', 'proposed'])
+    expect(await s.listCardEvents('shop-2', { limit: 10 })).toEqual([])
+    await s.addMiss({ tenantId: 'shop-1', userId: 'u1', threadId: t1.id, question: 'refund?', reason: 'no tool' })
+    expect(await s.listMisses('shop-1', { limit: 5 })).toEqual([expect.objectContaining({ question: 'refund?', reason: 'no tool', threadId: t1.id })])
+
+    await query(`insert into tv_files (id, tenant_id, user_id, thread_id, media_type, size, bytes) values ($1, 'shop-1', 'u1', $2, 'image/png', 3, '\\x010203')`, [crypto.randomUUID(), t1.id])
+    expect(await s.wipe('shop-1', 'u1')).toEqual({ threads: 1, files: 1 })
+    expect((await query('select count(*)::int as n from tv_files')).rows[0].n).toBe(0)
+    expect(await s.listThreads('shop-1', 'u1', 10)).toEqual([])
+    expect(await s.listThreads('shop-1', 'u2', 10)).toHaveLength(1)
+    expect(await s.listMisses('shop-1', { limit: 5 })).toEqual([])
+    expect((await s.listCardEvents('shop-1', { limit: 10 })).map((e) => e.userId)).toEqual(['u2'])
+    expect(await s.wipe('shop-1')).toEqual({ threads: 1, files: 0 })
+    expect(await s.listThreads('shop-2', 'u1', 10)).toHaveLength(1)   // another tenant untouched
     client.release()
   })
 
