@@ -40,7 +40,7 @@ cover it but nobody has tried it by hand. A feature counts as done only when thi
 | Miss log: questions the assistant could not answer | v1.1 |  |  | new | kit tables |
 | Wipe a user's or a tenant's conversations and logs on request | v1.1 |  |  | not checked | kit tables |
 | Answers link to the records they used | v1.1 |  |  | not checked | kit |
-| Thumbs up or down on a reply, saved with its run | v1.1 |  |  | not checked | kit tables |
+| Thumbs up or down on a reply, saved with its run | v1.1 | Built (#34) | Yes: saved on the run | not checked | kit tables |
 | Prompt and model version stored on each run | v1.1 | Built (#6) |  | not checked | kit tables |
 | A question with answer buttons when the request is unclear | v1.1 | Built early (#14, choices view) |  | not checked | kit |
 | One card for a change to many records, with a list to review and a single undo | v1.1 |  |  | not checked | kit |
@@ -49,12 +49,12 @@ cover it but nobody has tried it by hand. A feature counts as done only when thi
 | Instant switch-off of one tool or model for every tenant | v1.1 | Partly: per tenant (#10) |  | not checked | kit |
 | Privacy notice and consent per tenant: what is sent to the model, images allowed or not | v1.1 |  |  | not checked | kit tables |
 | Fixed prompt parts (instructions, catalog, tools) placed first so the provider can cache them | v1.1 |  |  | not checked | kit |
-| Edit and resend a message, regenerate a reply, copy a reply | v1.1 |  |  | not checked | kit, assistant-ui |
+| Edit and resend a message, regenerate a reply, copy a reply | v1.1 | Built (#34) | Yes: edit, Try again, copy | not checked | kit, assistant-ui |
 | Tool versions, so a pending card made by an older tool still works after a deploy | v1.1 |  |  | not checked | kit tables |
 | Accessibility: screen reader labels and a keyboard shortcut to open the panel | v1.1 | Partly (#18): labels and Ctrl/⌘+K |  | not checked | kit, assistant-ui |
 | Long runs: queue, resume after a restart, stop from any server | v2 |  |  | scobly | pg-boss |
 | Done-checks that can refuse a reply before it ships | v2 |  |  | parityai, scobly | kit |
-| Continue check when the model stops early | v2 |  |  | bricks, parityai | kit |
+| Continue check when the model stops early | v2 | Partly (#34): a reply that ends in silence is asked once more for words | Yes, seen with Gemini | bricks, parityai | kit |
 | Tools that run in the browser against the open document | v2 |  |  | bricks | kit |
 | Large on-screen content cut to what the question needs | v2 |  |  | bricks | kit hook |
 | Undo by restoring a version saved before the run | v2 |  |  | bricks, parityai | kit |

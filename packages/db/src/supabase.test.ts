@@ -52,6 +52,10 @@ suite('@teovo/db on Supabase (supabaseStorage)', () => {
     const list = await s.listThreads(t, 'u1', 10)
     expect(list.map((x) => x.id)).toEqual([a.id, b.id])                 // a has the newest message
     expect(list[0]!.title).toBe('Payments')
+    // An edited message: it and everything after it go.
+    await s.saveMessages(a.id, [{ id: 'm3', role: 'user', parts: [{ type: 'text', text: 'three' }] }])
+    await s.removeMessagesFrom(a.id, 'm2')
+    expect((await s.listMessages(a.id)).map((m) => m.id)).toEqual(['m1'])
     expect(await s.archiveThread(t, 'u2', a.id)).toBe(false)
     expect(await s.archiveThread(t, 'u1', a.id)).toBe(true)
     expect((await s.listThreads(t, 'u1', 10)).map((x) => x.id)).toEqual([b.id])
@@ -84,6 +88,10 @@ suite('@teovo/db on Supabase (supabaseStorage)', () => {
     const th = await s.createThread(t, 'u1')
     await s.startRun({ id: crypto.randomUUID(), threadId: th.id, tenantId: t, userId: 'u1' })
     expect(await s.runningRuns(t, 'u1', new Date(Date.now() - 60_000))).toBe(1)
+    const runId = (await pool.query('select id from tv_runs where tenant_id = $1', [t])).rows[0].id as string
+    expect(await s.rateRun(t, 'u2', runId, 1)).toBe(false)
+    expect(await s.rateRun(t, 'u1', runId, -1, 'wrong total')).toBe(true)
+    expect((await pool.query('select rating, rating_note from tv_runs where id = $1', [runId])).rows[0]).toEqual({ rating: -1, rating_note: 'wrong total' })
   })
 
   it('runs a whole chat through createAssistant: question, card, reply, and the run log', async () => {
