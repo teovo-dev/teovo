@@ -51,6 +51,13 @@ export function AssistantPanel(props: AssistantPanelProps) {
   const [files, setFiles] = useState<PendingFile[]>([])
   const [fileError, setFileError] = useState<string>()
   const picker = useRef<HTMLInputElement>(null)
+  const box = useRef<HTMLTextAreaElement>(null)
+  useLayoutEffect(() => {   // grow with the text, up to the CSS max-height
+    const el = box.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }, [text])
   const attach = props.attach ? (props.attach === true ? {} : props.attach) : null
   const voice = useVoice((said) => setText((t) => (t ? `${t} ${said}` : said)), props.voiceLang)
 
@@ -84,7 +91,7 @@ export function AssistantPanel(props: AssistantPanelProps) {
         onScroll={(e) => { const el = e.currentTarget; pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40 }}>
         {chat.messages.length === 0 && props.welcome ? <div className="tv-welcome">{props.welcome}</div> : null}
         {chat.messages.map((m) => <Message key={m.id} message={m} ask={ask} {...props} />)}
-        {chat.status === 'submitted' ? <div className="tv-thinking">Thinking…</div> : null}
+        {chat.status === 'submitted' ? <div className="tv-thinking" role="status" aria-label="Thinking"><span /><span /><span /></div> : null}
         {chat.error ? <div className="tv-error" role="alert">{errorText(chat.error)}</div> : null}
       </div>
       {props.showSuggestions !== false && !busy && suggestions.suggestions.length ? (
@@ -104,33 +111,41 @@ export function AssistantPanel(props: AssistantPanelProps) {
       ) : null}
       {fileError || voice.error ? <div className="tv-error" role="alert">{fileError ?? voice.error}</div> : null}
       <form className="tv-input" onSubmit={send}>
-        {attach ? (
-          <>
-            <input ref={picker} type="file" hidden multiple accept={attach.accept ?? 'image/jpeg,image/png,image/webp'} aria-label="Attach pictures"
-              onChange={(e) => void pick(e.target.files)} />
-            <button type="button" className="tv-attach" aria-label="Attach a picture" onClick={() => picker.current?.click()}>＋</button>
-          </>
-        ) : null}
-        <textarea
-          aria-label="Message"
-          value={text}
-          placeholder={hint ? `${hint}  (Tab)` : (props.placeholder ?? 'Ask anything')}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Tab' && !text && hint) { e.preventDefault(); setText(hint) }   // accept the hint, like autocomplete
-            else if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) send(e)
-          }}
-          rows={1}
-        />
-        {busy
-          ? <button type="button" onClick={() => void chat.stop()}>Stop</button>
-          : <button type="submit" disabled={!text.trim() && !files.length}>Send</button>}
-        {props.voice !== false && voice.supported && !busy ? (
-          <button type="button" className="tv-mic" aria-pressed={voice.listening} aria-label={voice.listening ? 'Stop listening' : 'Speak'} onClick={voice.toggle}>
-            {voice.listening ? '■' : '🎤'}
-          </button>
-        ) : null}
-        {chat.messages.length > 0 && !busy ? <button type="button" className="tv-new" onClick={newChat}>New chat</button> : null}
+        <div className="tv-composer">
+          <textarea
+            ref={box}
+            aria-label="Message"
+            value={text}
+            placeholder={hint ? `${hint}  (Tab)` : (props.placeholder ?? 'Ask anything')}
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Tab' && !text && hint) { e.preventDefault(); setText(hint) }   // accept the hint, like autocomplete
+              else if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) send(e)
+            }}
+            rows={1}
+          />
+          <div className="tv-composer-bar">
+            {attach ? (
+              <>
+                <input ref={picker} type="file" hidden multiple accept={attach.accept ?? 'image/jpeg,image/png,image/webp'} aria-label="Attach pictures"
+                  onChange={(e) => void pick(e.target.files)} />
+                <button type="button" className="tv-icon tv-attach" aria-label="Attach a picture" title="Attach a picture" onClick={() => picker.current?.click()}>{icons.attach}</button>
+              </>
+            ) : null}
+            {props.voice !== false && voice.supported && !busy ? (
+              <button type="button" className="tv-icon tv-mic" aria-pressed={voice.listening} aria-label={voice.listening ? 'Stop listening' : 'Speak'}
+                title={voice.listening ? 'Stop listening' : 'Speak'} onClick={voice.toggle}>
+                {voice.listening ? icons.stop : icons.mic}
+              </button>
+            ) : null}
+            {chat.messages.length > 0 && !busy ? (
+              <button type="button" className="tv-icon tv-new" aria-label="New chat" title="Start a new chat" onClick={newChat}>{icons.plus}<span aria-hidden="true">New chat</span></button>
+            ) : null}
+            {busy
+              ? <button type="button" className="tv-send tv-stop" aria-label="Stop" title="Stop" onClick={() => void chat.stop()}>{icons.stop}</button>
+              : <button type="submit" className="tv-send" aria-label="Send" title="Send (Enter)" disabled={!text.trim() && !files.length}>{icons.send}</button>}
+          </div>
+        </div>
       </form>
     </section>
   )
@@ -251,6 +266,17 @@ function CardView({ card, renderCard }: { card: Card } & AssistantPanelProps) {
         )}
     </div>
   )
+}
+
+const svg = (d: ReactNode) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{d}</svg>
+)
+const icons = {
+  attach: svg(<path d="M21 11.5l-8.6 8.6a5 5 0 0 1-7.1-7.1l8.6-8.6a3.3 3.3 0 0 1 4.7 4.7l-8.6 8.6a1.7 1.7 0 0 1-2.4-2.4l7.9-7.9" />),
+  mic: svg(<><rect x="9" y="3" width="6" height="11" rx="3" /><path d="M5 11a7 7 0 0 0 14 0M12 18v3" /></>),
+  send: svg(<path d="M12 19V5M5 12l7-7 7 7" />),
+  stop: <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" /></svg>,
+  plus: svg(<path d="M12 5v14M5 12h14" />),
 }
 
 const show = (v: unknown) => (v === undefined || v === null ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v))

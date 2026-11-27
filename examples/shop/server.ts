@@ -64,7 +64,7 @@ const teovo = createAssistant({
   redact: { fields: ['phone'], patterns: ['phone', 'email', 'upi'] },
   views: builtinViews,
   screens: [
-    { path: '/orders', title: 'Orders', description: 'all orders and what is due' },
+    { path: '/orders', title: 'Orders', description: 'all orders and what is due', filters: { unpaid: "'yes' to show only orders with money due" } },
     { path: '/orders/:no', title: 'Order', description: 'one order' },
     { path: '/expenses', title: 'Expenses' },
   ],

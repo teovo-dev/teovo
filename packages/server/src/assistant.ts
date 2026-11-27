@@ -273,11 +273,16 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
         if (config.screens?.length) {
           const screens = config.screens
           tools.open_screen = tool({
-            description: 'Offer the user a button that opens one of the app\'s screens. Give the screen\'s path from the list, and values for its :params.',
+            description: 'Offer the user a button that opens one of the app\'s screens. Give the screen\'s path from the list, and in params the values for its :params and any of its filters. Only the listed filters work.',
             inputSchema: z.object({ screen: z.string(), params: z.record(z.string(), z.union([z.string(), z.number()])).optional(), label: z.string().max(40).optional() }),
             execute: async ({ screen, params, label }, { toolCallId }) => {
               const to = screenPath(screens, screen, params ?? {})
-              if (!to) throw new Error(`There is no screen "${screen}" with those values. Use one of: ${screens.map((s) => s.path).join(', ')}.`)
+              if (!to) {
+                const s = screens.find((x) => x.path === screen.split('?')[0] || x.title === screen)
+                throw new Error(s
+                  ? `${s.title} (${s.path}) can't take those values. ${s.filters ? `Its filters are: ${Object.keys(s.filters).join(', ')}.` : 'It has no filters.'} Offer it without the rest, or say the app can't do that.`
+                  : `There is no screen "${screen}". Use one of: ${screens.map((x) => x.path).join(', ')}.`)
+              }
               writer.write({ type: 'data-action', id: toolCallId, data: { label: label ?? `Open ${to.title}`, action: 'navigate', args: { to: to.path } } })
               return 'A button is shown under your reply.'
             },

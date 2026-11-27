@@ -10,26 +10,45 @@ export interface Page {
   state?: Record<string, string | number | boolean | null>
 }
 
-/** A screen the assistant may send the user to. `path` may hold :params, e.g. '/orders/:id'. */
-export interface ScreenInfo { path: string; title: string; description?: string }
+/**
+ * A screen the assistant may send the user to. `path` may hold :params, e.g. '/orders/:id'. `filters` are the query
+ * values the screen understands, by name with what they do, e.g. { unpaid: "'yes' to show only orders with money due" };
+ * they go on the link as ?unpaid=yes, and the app's page reads them.
+ */
+export interface ScreenInfo { path: string; title: string; description?: string; filters?: Record<string, string> }
 
-/** Fill a screen's :params; null when the path doesn't fit any screen or a value is missing or odd. */
+const SAFE = /^[\w .,:@-]{1,64}$/
+
+/** Fill a screen's :params and filters; null when the path doesn't fit any screen or a value is missing or odd. */
 export function screenPath(screens: readonly ScreenInfo[], name: string, params: Record<string, string | number> = {}): { path: string; title: string } | null {
-  const s = screens.find((x) => x.path === name || x.title === name)
+  const bare = name.split('?')[0]!
+  const s = screens.find((x) => x.path === bare || x.title === name)
   if (!s) return null
   let ok = true
+  const used = new Set<string>()
   const path = s.path.replace(/:(\w+)/g, (_, k: string) => {
+    used.add(k)
     const v = params[k]
     if (v === undefined || !/^[\w-]{1,64}$/.test(String(v))) { ok = false; return '' }
     return encodeURIComponent(String(v))
   })
-  return ok ? { path, title: s.title } : null
+  if (!ok) return null
+  // Every other value must be one of the screen's filters: a value it can't use would give the user a button that
+  // quietly does less than the model said.
+  const query = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) {
+    if (used.has(k)) continue
+    if (!s.filters || !(k in s.filters) || !SAFE.test(String(v))) return null
+    query.set(k, String(v))
+  }
+  const q = query.toString()
+  return { path: q ? `${path}?${q}` : path, title: s.title }
 }
 
 /** The screens map for the model. */
 export function screensText(screens: readonly ScreenInfo[]): string {
   if (!screens.length) return ''
-  return `\n\nScreens in this app (offer one with open_screen when it helps the user):\n${screens.map((s) => `- ${s.title}: ${s.path}${s.description ? ` (${s.description})` : ''}`).join('\n')}`
+  return `\n\nScreens in this app (offer one with open_screen when it helps the user):\n${screens.map((s) => `- ${s.title}: ${s.path}${s.description ? ` (${s.description})` : ''}${s.filters ? `; filters: ${Object.entries(s.filters).map(([k, d]) => `${k} (${d})`).join(', ')}` : ''}`).join('\n')}`
 }
 
 /**
