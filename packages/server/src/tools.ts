@@ -1,3 +1,4 @@
+import type { Schema } from 'ai'
 import type { z } from 'zod'
 
 /** Who is asking. The app's `identify` callback returns this; the kit never decides it. */
@@ -53,7 +54,11 @@ export interface TeovoTool<K extends ToolKind = ToolKind, I = any, DB = any> {
   name: string
   description: string
   kind: K
-  input: z.ZodType<I>
+  /**
+   * What the tool takes: a zod schema (checked before run), or a JSON schema wrapped with jsonSchema() from 'ai'
+   * when the app already has its tools written that way (not checked here; check inside run).
+   */
+  input: z.ZodType<I> | Schema<I>
   /** Roles that may use this tool. Omitted: every role. A role not listed never sees the tool at all. */
   roles?: readonly string[]
   run: (input: I, ctx: ToolContext<DB>) => Promise<ToolResult<K>> | ToolResult<K>
