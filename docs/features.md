@@ -41,11 +41,11 @@ cover it but nobody has tried it by hand. A feature counts as done only when thi
 | Wipe a user's or a tenant's conversations and logs on request | v1.1 | Built (#35) | Yes: "Delete my conversations" | not checked | kit tables |
 | Answers link to the records they used | v1.1 | Built (#37) | Yes: "From: Order #141 · #142 · #143" | not checked | kit |
 | Thumbs up or down on a reply, saved with its run | v1.1 | Built (#34) | Yes: saved on the run | not checked | kit tables |
-| Prompt and model version stored on each run | v1.1 | Built (#6) |  | not checked | kit tables |
-| A question with answer buttons when the request is unclear | v1.1 | Built early (#14, choices view) |  | not checked | kit |
+| Prompt and model version stored on each run | v1.1 | Built (#6) | Tests only (stored on the run; nothing to see in the app) | not checked | kit tables |
+| A question with answer buttons when the request is unclear | v1.1 | Built early (#14, choices view) | Yes: "Which order for Riya?" buttons | not checked | kit |
 | One card for a change to many records, with a list to review and a single undo | v1.1 | Built (#38) | Yes: 2 orders settled, then undone together | not checked | kit |
-| Custom instructions and a word list per tenant | v1.1 | Built (#10) |  | not checked | kit tables |
-| Before and after shown on a card, such as price ₹350 → ₹380 | v1.1 | Built (#5) |  | not checked | kit |
+| Custom instructions and a word list per tenant | v1.1 | Built (#10) | Yes: a sign-off note and "khata" used in 10 of 10 replies | not checked | kit tables |
+| Before and after shown on a card, such as price ₹350 → ₹380 | v1.1 | Built (#5) | Yes | not checked | kit |
 | Instant switch-off of one tool or model for every tenant | v1.1 | Built (#10 per tenant, #36 for every tenant) | Yes: Flash off → flash-lite answered; paused for everyone | not checked | kit |
 | Privacy notice and consent per tenant: what is sent to the model, images allowed or not | v1.1 | Built (#36) | Yes: notice before chatting, pictures off hid attach | not checked | kit tables |
 | Fixed prompt parts (instructions, catalog, tools) placed first so the provider can cache them | v1.1 | Built (#38) | Tests only (the prompt is not visible in the app) | not checked | kit |
