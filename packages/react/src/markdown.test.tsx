@@ -64,6 +64,10 @@ describe('AssistantSheet', () => {
 
     await userEvent.keyboard('{Control>}k{/Control}')
     expect(screen.getByRole('dialog')).toBeTruthy()
+    // The keyboard stays inside the open sheet: Tab from outside comes back in.
+    ;(document.body as HTMLElement).focus()
+    await userEvent.tab()
+    expect(screen.getByRole('dialog').contains(document.activeElement)).toBe(true)
     await userEvent.click(screen.getByRole('button', { name: 'Close assistant' }))
     expect(screen.queryByRole('dialog')).toBeNull()
   })

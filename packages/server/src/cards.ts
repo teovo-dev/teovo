@@ -14,6 +14,10 @@ export interface CardApplier<P = any, DB = any> {
   apply: (payload: P, ctx: ToolContext<DB>) => Promise<ApplyResult | void> | ApplyResult | void
   /** Take the change back, given what apply returned as `undo`. Without it the card can't be undone. */
   undo?: (undo: unknown, payload: P, ctx: ToolContext<DB>) => Promise<void> | void
+  /** The payload version this applier expects (the tool's version). Default 1. */
+  version?: number
+  /** Bring an older card's payload up to `version`. Without it, a card from another version is refused, not guessed at. */
+  migrate?: (payload: unknown, fromVersion: number) => P
 }
 
 /**
@@ -25,7 +29,11 @@ export interface AppCard {
   inApp: true
   /** Roles that may confirm it. Omitted: anyone who could see it. */
   roles?: readonly string[]
+  /** The payload version the app applies now (the tool's version). A card from another version is refused. Default 1. */
+  version?: number
 }
+
+const OLD_CARD = 'This card was prepared by an earlier version of the app. Ask again and the assistant will prepare a fresh one.'
 
 export type CardHandler<DB = any> = CardApplier<any, DB> | AppCard
 const isApp = (h: CardHandler | undefined): h is AppCard => !!h && 'inApp' in h && h.inApp === true
@@ -84,6 +92,14 @@ export async function decide<DB>(opts: {
       await storage.updateCard(id, ['shown'], { status: 'expired' })
       throw new CardError(410, 'This card is too old to apply. Ask again and the assistant will prepare a fresh one.')
     }
+    // A card made by another version of the tool: migrate its payload, or refuse rather than guess.
+    if ((card.version ?? 1) !== (applier.version ?? 1)) {
+      if (!applier.migrate) {
+        await storage.updateCard(id, ['shown'], { status: 'expired' })
+        throw new CardError(409, OLD_CARD)
+      }
+      card.payload = applier.migrate(card.payload, card.version ?? 1)
+    }
     const ctx = await opts.ctx()
     if (applier.current && card.before) {
       const cur = await applier.current(card.payload, ctx)
@@ -131,6 +147,10 @@ async function recordAppDecision(storage: Storage, card: StoredCard, h: AppCard,
   if (decision === 'skip') return claim(['shown'], { status: 'skipped', decidedBy: identity.userId, decidedAt: now.toISOString() })
   if (decision === 'confirm') {
     if (h.roles && !h.roles.includes(identity.role)) throw new CardError(403, 'Your role can’t make this change. Ask an owner.')
+    if ((card.version ?? 1) !== (h.version ?? 1)) {
+      await storage.updateCard(card.id, ['shown'], { status: 'expired' })
+      throw new CardError(409, OLD_CARD)
+    }
     return claim(['shown'], { status: 'confirmed', decidedBy: identity.userId, decidedAt: now.toISOString(), reversible: reversible === true })
   }
   if (card.decidedBy !== identity.userId) throw new CardError(403, 'Only the person who confirmed this can undo it.')

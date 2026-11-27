@@ -29,7 +29,13 @@ export interface Proposal {
    * dates as 26 Nov 2026). Omitted: every key of before/after, named from the key. Cards from a form get the form's.
    */
   fields?: CardField[]
+  /** A change to many records in one card: each row's own before and after, shown as a list; confirmed and undone together. */
+  items?: CardItem[]
+  /** Which version of the tool made it (set by Teovo from defineTool's version). */
+  version?: number
 }
+
+export interface CardItem { label: string; before?: Record<string, unknown>; after?: Record<string, unknown> }
 
 export interface CardField { key: string; label?: string; format?: 'text' | 'number' | 'money' | 'date' }
 
@@ -64,6 +70,11 @@ export interface TeovoTool<K extends ToolKind = ToolKind, I = any, DB = any> {
   input: z.ZodType<I> | Schema<I>
   /** Roles that may use this tool. Omitted: every role. A role not listed never sees the tool at all. */
   roles?: readonly string[]
+  /**
+   * For propose tools: bump it when the payload's shape changes. Each card remembers the version that made it, so
+   * a card prepared before a deploy is migrated (or refused) by the applier instead of being applied wrongly.
+   */
+  version?: number
   /**
    * For read tools: the app's own pages for the records this result came from, shown under the answer as links
    * ("From: Order #142"). Up to 5 per reply. Paths are the app's own (they go to onAction as navigate).

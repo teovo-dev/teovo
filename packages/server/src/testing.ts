@@ -97,7 +97,7 @@ export interface ChatResult {
   error?: string
   threadId: string | null
   text: string
-  cards: { id: string; kind: string; title: string; before?: unknown; after?: unknown; payload: unknown; untrustedSources?: string[] }[]
+  cards: { id: string; kind: string; title: string; before?: unknown; after?: unknown; payload: unknown; untrustedSources?: string[]; fields?: unknown[]; items?: { label: string; before?: Record<string, unknown>; after?: Record<string, unknown> }[]; version?: number }[]
   actions: { label: string; action: string; args?: Record<string, unknown> }[]
   views: { id: string; view: string; data: unknown }[]
   /** Tools the assistant ran, in order. */

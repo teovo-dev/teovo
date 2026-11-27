@@ -43,15 +43,15 @@ cover it but nobody has tried it by hand. A feature counts as done only when thi
 | Thumbs up or down on a reply, saved with its run | v1.1 | Built (#34) | Yes: saved on the run | not checked | kit tables |
 | Prompt and model version stored on each run | v1.1 | Built (#6) |  | not checked | kit tables |
 | A question with answer buttons when the request is unclear | v1.1 | Built early (#14, choices view) |  | not checked | kit |
-| One card for a change to many records, with a list to review and a single undo | v1.1 |  |  | not checked | kit |
+| One card for a change to many records, with a list to review and a single undo | v1.1 | Built (#38) | Yes: 2 orders settled, then undone together | not checked | kit |
 | Custom instructions and a word list per tenant | v1.1 | Built (#10) |  | not checked | kit tables |
 | Before and after shown on a card, such as price ₹350 → ₹380 | v1.1 | Built (#5) |  | not checked | kit |
 | Instant switch-off of one tool or model for every tenant | v1.1 | Built (#10 per tenant, #36 for every tenant) | Yes: Flash off → flash-lite answered; paused for everyone | not checked | kit |
 | Privacy notice and consent per tenant: what is sent to the model, images allowed or not | v1.1 | Built (#36) | Yes: notice before chatting, pictures off hid attach | not checked | kit tables |
-| Fixed prompt parts (instructions, catalog, tools) placed first so the provider can cache them | v1.1 |  |  | not checked | kit |
+| Fixed prompt parts (instructions, catalog, tools) placed first so the provider can cache them | v1.1 | Built (#38) | Tests only (the prompt is not visible in the app) | not checked | kit |
 | Edit and resend a message, regenerate a reply, copy a reply | v1.1 | Built (#34) | Yes: edit, Try again, copy | not checked | kit, assistant-ui |
-| Tool versions, so a pending card made by an older tool still works after a deploy | v1.1 |  |  | not checked | kit tables |
-| Accessibility: screen reader labels and a keyboard shortcut to open the panel | v1.1 | Partly (#18): labels and Ctrl/⌘+K |  | not checked | kit, assistant-ui |
+| Tool versions, so a pending card made by an older tool still works after a deploy | v1.1 | Built (#38) | Tests only (needs two deploys to see by hand) | not checked | kit tables |
+| Accessibility: screen reader labels and a keyboard shortcut to open the panel | v1.1 | Built (#18, #38: keyboard kept inside the open sheet) | Yes: Ctrl/⌘+K, Tab stays in the sheet | not checked | kit, assistant-ui |
 | Long runs: queue, resume after a restart, stop from any server | v2 |  |  | scobly | pg-boss |
 | Done-checks that can refuse a reply before it ships | v2 |  |  | parityai, scobly | kit |
 | Continue check when the model stops early | v2 | Partly (#34): a reply that ends in silence is asked once more for words | Yes, seen with Gemini | bricks, parityai | kit |

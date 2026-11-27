@@ -49,6 +49,23 @@ async function ask(text: string) {
 
 afterEach(() => { cleanup(); gate = undefined })
 
+describe('one card for many records', () => {
+  it('lists each record\'s change with the old value struck out, and a count', async () => {
+    const s = server([call('raise', {}), say('Ready.')], true, {}, {
+      formats: { locale: 'en-IN', currency: 'INR', timeZone: 'Asia/Kolkata' },
+      tools: [defineTool({ name: 'raise', kind: 'propose', description: 'Raise prices', input: z.object({}), run: () => ({
+        kind: 'raise', title: 'Raise 2 prices', payload: {}, fields: [{ key: 'price', label: 'Price', format: 'money' as const }],
+        items: [{ label: 'Mango 500 ml', before: { price: 350 }, after: { price: 380 } }, { label: 'Kulfi', before: { price: 300 }, after: { price: 330 } }] }) })],
+    })
+    mount({ fetch: s.fetch })
+    await ask('raise prices')
+    const card = await screen.findByRole('group', { name: 'Raise 2 prices' })
+    expect(card.querySelector('.tv-card-count')?.textContent).toBe('2 changes')
+    const rows = Array.from(card.querySelectorAll('.tv-card-items tr')).map((r) => r.textContent)
+    expect(rows).toEqual(['Mango 500 ml₹350.00 → ₹380.00', 'Kulfi₹300.00 → ₹330.00'])
+  })
+})
+
 describe('typing help and record links', () => {
   it('completes the last words from the app\'s list or an earlier message', () => {
     const words = ['Riya K', 'Riya Sharma', 'Chand Bakers', 'Belgian chocolate 500 ml']
