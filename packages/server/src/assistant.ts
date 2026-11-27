@@ -9,6 +9,7 @@ import { makeUntrusted, UNTRUSTED_RULE } from './untrusted.js'
 
 import { makeRedactor, type RedactOptions } from './redact.js'
 import { checkForm, type FormData, type FormHandler, type TeovoView } from './views.js'
+import { checkFormats, DEFAULT_FORMATS, formatsText, type Formats } from './formats.js'
 import { DEFAULT_SETTINGS, SettingsError, settingsText, validateSettings } from './settings.js'
 import { readPage, screenText, tidy, type Page, type ScreenFn, type SuggestionsFn } from './screens.js'
 export type { Page } from './screens.js'
@@ -45,6 +46,10 @@ export interface AssistantConfig<DB = unknown> {
   cards?: Record<string, CardApplier<any, DB>>
   /** How long a card can be confirmed, and how long after confirming it can be undone. */
   cardRules?: Partial<CardRules>
+  /** How dates and money are written, and which day it is: the app's default. Tenants can override it in settings. */
+  formats?: Partial<Formats>
+  /** The clock, for tests. */
+  now?: () => Date
   /** Views the model can show inside a reply (tables, forms, choices, records). Start from builtinViews. */
   views?: readonly TeovoView[]
   /** Turn a submitted form into a card, keyed by the form's submit.kind. A form whose kind isn't here can't be shown. */
@@ -89,6 +94,8 @@ interface ChatBody { threadId?: string; message?: UIMessage; page?: unknown }
 
 export function createAssistant<DB>(config: AssistantConfig<DB>) {
   if (!config.models.length) throw new Error('createAssistant: at least one model is required')
+  const formatProblem = checkFormats(config.formats ?? {})
+  if (formatProblem) throw new Error(`createAssistant: ${formatProblem}`)
   for (const v of config.views ?? []) {
     if (config.tools.some((t) => t.name === `show_${v.name}`)) throw new Error(`createAssistant: tool show_${v.name} clashes with the view ${v.name}`)
   }
@@ -143,12 +150,14 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     const instructions = typeof config.instructions === 'function' ? await config.instructions({ identity, page }) : config.instructions
     const summary = page && config.screen ? await Promise.resolve().then(() => config.screen!(page, ctx)).catch((e) => { config.on?.error?.(e, { identity, threadId: thread.id }); return null }) : null
     const shownSummary = summary === null ? null : String(redact(summary))
-    const system = `${instructions}${settingsText(settings)}\n\n${UNTRUSTED_RULE}${screenText(page, shownSummary, ctx.untrusted)}`
+    const formats: Formats = { ...DEFAULT_FORMATS, ...config.formats, ...settings.formats }
+    const system = `${instructions}${formatsText(formats, config.now?.() ?? new Date())}${settingsText(settings)}\n\n${UNTRUSTED_RULE}${screenText(page, shownSummary, ctx.untrusted)}`
 
-    const stream = createUIMessageStream<UIMessage<{ runId: string; threadId: string }>>({
-      originalMessages: history as UIMessage<{ runId: string; threadId: string }>[],
+    const stream = createUIMessageStream<UIMessage<{ runId: string; threadId: string; formats: Formats }>>({
+      originalMessages: history as UIMessage<{ runId: string; threadId: string; formats: Formats }>[],
       execute: async ({ writer }) => {
-        writer.write({ type: 'start', messageMetadata: { runId, threadId: thread.id } })
+        // The panel draws numbers and dates in views the same way.
+        writer.write({ type: 'start', messageMetadata: { runId, threadId: thread.id, formats } })
         const tools: ToolSet = {}
         const off = new Set(settings.toolsOff ?? [])
         for (const t of toolsFor(config.tools, identity).filter((x) => !off.has(x.name))) {

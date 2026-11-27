@@ -88,7 +88,7 @@ function Message({ message, ask, ...props }: { message: TeovoMessage; ask: (t: s
           const Draw = props.views?.[v.view] ?? defaultViews[v.view]
           if (!Draw) return null
           const id = p.id ?? String(i)
-          return <Draw key={id} part={{ ...v, id }} current={isCurrent(chat.messages, message.id)} ask={ask}
+          return <Draw key={id} part={{ ...v, id }} current={isCurrent(chat.messages, message.id)} ask={ask} formats={message.metadata?.formats}
             submit={(values) => submitForm(message.id, id, values)} />
         }
         if (p.type === 'data-action') {

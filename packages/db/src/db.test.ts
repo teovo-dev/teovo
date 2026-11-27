@@ -31,7 +31,7 @@ suite('@teovo/db on Postgres', () => {
 
   it('creates core tables only, adds a feature later, and never repeats a migration', async () => {
     const { query, client } = await freshSchema()
-    expect(await migrate(query)).toEqual(['0001_core'])
+    expect(await migrate(query)).toEqual(['0001_core', '0003_tenant_formats'])
     expect(await missingTables(query, { proposals: true })).toEqual(['tv_proposals'])
     expect(await migrate(query, { features: { proposals: true } })).toEqual(['0002_proposals'])
     expect(await migrate(query, { features: { proposals: true } })).toEqual([])
@@ -163,8 +163,8 @@ suite('@teovo/db on Postgres', () => {
     await migrate(query)
     const s = postgresStorage(query)
     expect(await s.tenantSettings('shop-1')).toBeNull()
-    await s.saveTenantSettings('shop-1', { enabled: true, instructions: 'Closed Sundays', glossary: { khata: 'credit' }, toolsOff: ['get_expenses'] })
-    expect(await s.tenantSettings('shop-1')).toEqual({ enabled: true, instructions: 'Closed Sundays', glossary: { khata: 'credit' }, toolsOff: ['get_expenses'] })
+    await s.saveTenantSettings('shop-1', { enabled: true, instructions: 'Closed Sundays', glossary: { khata: 'credit' }, toolsOff: ['get_expenses'], formats: { currency: 'INR' } })
+    expect(await s.tenantSettings('shop-1')).toEqual({ enabled: true, instructions: 'Closed Sundays', glossary: { khata: 'credit' }, toolsOff: ['get_expenses'], formats: { currency: 'INR' } })
     await s.saveTenantSettings('shop-1', { enabled: false })
     expect(await s.tenantSettings('shop-1')).toEqual({ enabled: false })
     expect(await s.tenantSettings('shop-2')).toBeNull()

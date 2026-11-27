@@ -43,4 +43,7 @@ export interface View { view: string; data: any; submitted?: string; values?: Re
 
 export type TeovoData = { card: Card; step: Step; action: Action; suggestions: Suggestions; view: View }
 
-export type TeovoMessage = UIMessage<{ runId?: string; threadId?: string }, TeovoData>
+/** How the tenant writes dates and money, sent by the server with each reply. */
+export interface Formats { locale: string; currency: string; timeZone: string }
+
+export type TeovoMessage = UIMessage<{ runId?: string; threadId?: string; formats?: Formats }, TeovoData>

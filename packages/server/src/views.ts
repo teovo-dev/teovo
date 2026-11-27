@@ -28,10 +28,10 @@ export const choicesView = defineView({
 
 export const tableView = defineView({
   name: 'table',
-  description: 'Show rows the user may want to scan or sort, e.g. unpaid orders. Use the keys of each row as column keys.',
+  description: 'Show rows the user may want to scan or sort, e.g. unpaid orders. Use the keys of each row as column keys. Give money columns format "money" with plain numbers, and dates as YYYY-MM-DD with format "date".',
   data: z.object({
     title: z.string().max(120).optional(),
-    columns: z.array(z.object({ key: z.string(), label: z.string().max(40) })).min(1).max(8),
+    columns: z.array(z.object({ key: z.string(), label: z.string().max(40), format: z.enum(['text', 'number', 'money', 'date']).optional() })).min(1).max(8),
     rows: z.array(z.record(z.string(), cell)).max(50),
   }),
 })
@@ -39,7 +39,7 @@ export const tableView = defineView({
 export const recordView = defineView({
   name: 'record',
   description: 'Show one record, e.g. an order with its items, total and status.',
-  data: z.object({ title: z.string().max(120), fields: z.array(z.object({ label: z.string().max(40), value: cell })).min(1).max(20) }),
+  data: z.object({ title: z.string().max(120), fields: z.array(z.object({ label: z.string().max(40), value: cell, format: z.enum(['text', 'number', 'money', 'date']).optional() })).min(1).max(20) }),
 })
 
 export const formView = defineView({

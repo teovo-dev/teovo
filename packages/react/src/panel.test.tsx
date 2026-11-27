@@ -271,6 +271,15 @@ describe('AssistantPanel', () => {
     expect(applied).toEqual({ amount: 480, vendor: 'Milk depot' })
   })
 
+  it("draws money and dates in a table the tenant's way", async () => {
+    const s = server([call('show_table', { columns: [{ key: 'who', label: 'Customer' }, { key: 'due', label: 'Due', format: 'money' }, { key: 'on', label: 'Since', format: 'date' }],
+      rows: [{ who: 'Riya', due: 125000.5, on: '2026-11-01' }] }), say('Here.')], true, {}, { views: builtinViews, formats: { locale: 'en-IN', currency: 'INR', timeZone: 'Asia/Kolkata' } })
+    mount({ fetch: s.fetch })
+    await ask('dues?')
+    await screen.findByText('₹1,25,000.50')
+    expect(screen.getByText('1 Nov 2026')).toBeTruthy()
+  })
+
   it('lets the app draw its own views', async () => {
     const s = server([call('show_record', { title: 'Order #142', fields: [{ label: 'Total', value: 880 }] }), say('There.')], true, {}, { views: builtinViews })
     render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><AssistantPanel views={{ record: ({ part }) => <p>Custom: {part.data.title}</p> }} /></AssistantProvider>)
