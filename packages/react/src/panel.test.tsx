@@ -7,7 +7,7 @@ import userEvent from '@testing-library/user-event'
 import { MockLanguageModelV4 } from 'ai/test'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
-import { AssistantPanel, AssistantProvider, ThreadList, useAssistantContext, type AssistantProviderProps } from './index'
+import { AssistantPanel, AssistantProvider, complete, ThreadList, useAssistantContext, type AssistantProviderProps } from './index'
 
 const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } }
 const streamOf = (parts: unknown[]) => ({ stream: new ReadableStream({ start(c) { for (const p of parts) c.enqueue(p as LanguageModelV4StreamPart); c.close() } }) })
@@ -48,6 +48,51 @@ async function ask(text: string) {
 }
 
 afterEach(() => { cleanup(); gate = undefined })
+
+describe('typing help and record links', () => {
+  it('completes the last words from the app\'s list or an earlier message', () => {
+    const words = ['Riya K', 'Riya Sharma', 'Chand Bakers', 'Belgian chocolate 500 ml']
+    expect(complete('Chand B', words)).toEqual({ word: 'Chand Bakers', full: 'Chand Bakers ' })
+    expect(complete('two belgian ch', words)).toEqual({ word: 'Belgian chocolate 500 ml', full: 'two Belgian chocolate 500 ml ' })
+    expect(complete('r', words)).toBeNull()                    // too short
+    expect(complete('Riya K ', words)).toBeNull()              // a finished word
+    expect(complete('who ow', [], ['who owes the most?'])).toEqual({ word: 'who owes the most?', full: 'who owes the most?' })
+  })
+
+  it('offers a completion while typing, and Tab takes it', async () => {
+    const s = server([], true, {}, { completions: () => ['Chand Bakers'] })
+    mount({ fetch: s.fetch })
+    const box = screen.getByLabelText('Message') as HTMLTextAreaElement
+    await waitFor(() => expect(s.bodies).toBeDefined())
+    await userEvent.type(box, 'how much does chand b')
+    await screen.findByRole('button', { name: 'Complete: Chand Bakers' })
+    await userEvent.keyboard('{Tab}')
+    expect(box.value).toBe('how much does Chand Bakers ')
+  })
+
+  it('cycles the empty box through the screen\'s example questions', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      const s = server([], true, {}, { suggestions: () => ({ suggestions: [], examples: ['Who owes money?', 'Sales this week?'] }) })
+      mount({ fetch: s.fetch })
+      const box = screen.getByLabelText('Message') as HTMLTextAreaElement
+      await waitFor(() => expect(box.placeholder).toBe('Who owes money?  (Tab)'))
+      await act(async () => { vi.advanceTimersByTime(3600) })
+      expect(box.placeholder).toBe('Sales this week?  (Tab)')
+    } finally { vi.useRealTimers() }
+  })
+
+  it('shows "From:" links under an answer and opens one through onAction', async () => {
+    const onAction = vi.fn()
+    const s = server([call('get_sales', {}), say('₹950 today.')], true, {}, {
+      tools: [defineTool({ name: 'get_sales', kind: 'read', description: 'Sales', input: z.object({}), run: () => ({ total: 950 }), links: () => [{ label: 'Sales today', to: '/sales?day=today' }] })],
+    })
+    mount({ fetch: s.fetch, onAction })
+    await ask('sales today?')
+    await userEvent.click(await screen.findByRole('button', { name: 'Sales today' }))
+    expect(onAction).toHaveBeenCalledWith({ label: 'Sales today', action: 'navigate', args: { to: '/sales?day=today' } })
+  })
+})
 
 describe('notice, pictures and allowance', () => {
   it('shows the notice and blocks typing until it is accepted, then sends the acceptance with each message', async () => {

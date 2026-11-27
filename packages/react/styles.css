@@ -169,6 +169,13 @@
 .tv-chip { flex: none; border: 1px solid var(--tv-border); border-radius: 999px; padding: 6px 12px; background: var(--tv-bg); font-size: 0.875em; white-space: nowrap; transition: background 0.15s, border-color 0.15s; }
 .tv-chip:hover { background: var(--tv-subtle); border-color: color-mix(in srgb, var(--tv-accent) 40%, var(--tv-border)); }
 
+/* ---------- Completion and sources ---------- */
+.tv-complete { display: inline-flex; align-items: center; gap: 8px; margin: 0 4px 6px; padding: 4px 10px; border: 1px dashed var(--tv-border); border-radius: 999px; background: var(--tv-bg); color: inherit; font: inherit; font-size: 0.8125em; cursor: pointer; }
+.tv-complete kbd { font-family: inherit; font-size: 0.85em; color: var(--tv-muted); border: 1px solid var(--tv-border); border-radius: 4px; padding: 0 4px; }
+.tv-sources { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 0.8125em; color: var(--tv-muted); }
+.tv-source { border: 0; background: var(--tv-subtle); color: var(--tv-accent); border-radius: 6px; padding: 2px 8px; font: inherit; cursor: pointer; }
+.tv-source:hover { text-decoration: underline; }
+
 /* ---------- Notice and allowance ---------- */
 .tv-notice { margin: 0 12px 10px; padding: 12px 14px; border: 1px solid var(--tv-border); border-radius: var(--tv-radius); background: var(--tv-subtle); font-size: 0.875em; display: flex; flex-direction: column; gap: 10px; }
 .tv-notice p { margin: 0; white-space: pre-wrap; }

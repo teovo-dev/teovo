@@ -53,9 +53,10 @@ const teovo = createAssistant({
   },
   asUser: (identity) => ({ role: identity.role }),
   models: [google('gemini-2.5-flash'), google('gemini-2.5-flash-lite')],
-  // Short look-ups ("who owes money?") go to the cheaper flash-lite first; anything longer, with a picture, or deep
+  // Short list look-ups ("who owes money?", "show unpaid orders") go to the cheaper flash-lite first (it misread
+  // "how much does X owe?" in a by-hand check, so amounts stay on Flash); anything longer, with a picture, or deep
   // in a conversation keeps Flash. Each list still falls back to the other model.
-  route: ({ text, history }) => (text.length <= 60 && history < 6 && !/[?]\s*\S/.test(text) && /^(who|what|how much|how many|show|list|which)\b/i.test(text.trim())
+  route: ({ text, history }) => (text.length <= 60 && history < 6 && !/[?]\s*\S/.test(text) && /^(who|show|list)\b/i.test(text.trim())
     ? [google('gemini-2.5-flash-lite'), google('gemini-2.5-flash')]
     : undefined),
   instructions: 'You help the owner and staff of a small bakery run their shop. Be brief. Use the tools for every number; never guess. ' +
@@ -81,11 +82,14 @@ const teovo = createAssistant({
       input: z.object({ unpaidOnly: z.boolean().optional() }),
       run: ({ unpaidOnly }, ctx) => shop.orders.filter((o) => !unpaidOnly || due(o) > 0)
         .map((o) => ({ ...o, due: due(o), note: o.note ? ctx.untrusted(o.note, 'customer note') : undefined })),
+      // Under the answer: a link to each order it used (a long list links to the Orders screen instead).
+      links: (rows: { no: number }[], { unpaidOnly }) => (rows.length <= 4 ? rows.map((o) => ({ label: `Order #${o.no}`, to: `/orders/${o.no}` })) : [{ label: unpaidOnly ? 'Unpaid orders' : 'Orders', to: unpaidOnly ? '/orders?unpaid=yes' : '/orders' }]),
     }),
     defineTool({
       name: 'get_order', kind: 'read', description: 'One order: customer, total, paid, due, date and the customer note if any.',
       input: z.object({ no: z.number() }),
       run: ({ no }, ctx) => { const o = order(no); return { ...o, due: due(o), note: o.note ? ctx.untrusted(o.note, 'customer note') : undefined } },
+      links: (o: { no: number }) => [{ label: `Order #${o.no}`, to: `/orders/${o.no}` }],
     }),
     defineTool({
       name: 'record_payment', kind: 'propose', description: 'Prepare recording a payment against an order.',
@@ -141,11 +145,13 @@ const teovo = createAssistant({
     const o = shop.orders.find((x) => x.no === Number(page.record!.id))
     return o ? `Order #${o.no} for ${o.customer}: total ₹${o.total}, paid ₹${o.paid}, due ₹${due(o)}, placed ${o.date}.` : null
   },
+  // The message box completes customer names and the shop's own words as people type (no model call).
+  completions: () => [...new Set(shop.orders.map((o) => o.customer))].concat(['Milk depot', 'UPI', 'Cash', 'unpaid orders', 'expenses this week']),
   suggestions: ({ page, after }) => {
     if (after) return { suggestions: ['Who still owes money?', 'Add an expense'] }
     if (page?.record?.type === 'order') return { suggestions: [`What is due on order #${page.record.id}?`, 'Record a payment'], placeholder: `Ask about order #${page.record.id}` }
     if (page?.path === '/expenses') return { suggestions: ['Spent ₹450 on milk today', 'Expenses this week'], placeholder: 'Add or ask about expenses' }
-    return { suggestions: ['Who owes money?', 'Riya paid 200'], placeholder: 'Ask about orders, payments, expenses' }
+    return { suggestions: ['Who owes money?', 'Riya paid 200'], examples: ['Who owes the most?', 'Riya K paid 100 by UPI', 'Show unpaid orders', 'What did we spend this week?'] }
   },
   on: {
     error: (e) => console.error('[teovo error]', e instanceof Error ? e.message : e),

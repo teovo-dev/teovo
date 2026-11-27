@@ -33,6 +33,9 @@ export interface Proposal {
 
 export interface CardField { key: string; label?: string; format?: 'text' | 'number' | 'money' | 'date' }
 
+/** A link to a record an answer came from. */
+export interface RecordLink { label: string; to: string }
+
 /** A button under the reply. */
 export interface Action {
   label: string
@@ -61,6 +64,11 @@ export interface TeovoTool<K extends ToolKind = ToolKind, I = any, DB = any> {
   input: z.ZodType<I> | Schema<I>
   /** Roles that may use this tool. Omitted: every role. A role not listed never sees the tool at all. */
   roles?: readonly string[]
+  /**
+   * For read tools: the app's own pages for the records this result came from, shown under the answer as links
+   * ("From: Order #142"). Up to 5 per reply. Paths are the app's own (they go to onAction as navigate).
+   */
+  links?: (output: any, input: I) => RecordLink[]
   run: (input: I, ctx: ToolContext<DB>) => Promise<ToolResult<K>> | ToolResult<K>
 }
 

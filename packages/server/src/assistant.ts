@@ -5,7 +5,7 @@ import { CardError, cardForModel, decide, publicCard, type CardHandler, type Car
 import type { CardEventKind, Miss } from './storage.js'
 import { allowance, checkLimits, limitMessage, type LimitHit, type Limits } from './limits.js'
 import type { Storage, StoredCard, UsageRow } from './storage.js'
-import { toolsFor, type Action, type Identity, type Proposal, type TeovoTool, type ToolContext } from './tools.js'
+import { toolsFor, type Action, type Identity, type RecordLink, type Proposal, type TeovoTool, type ToolContext } from './tools.js'
 import { makeUntrusted, UNTRUSTED_RULE } from './untrusted.js'
 
 import { makeRedactor, type RedactOptions } from './redact.js'
@@ -79,6 +79,11 @@ export interface AssistantConfig<DB = unknown> {
   redact?: RedactOptions
   /** Roles that may read and change their tenant's settings (GET/PUT …/settings). Default ['owner', 'admin']. */
   settingsRoles?: readonly string[]
+  /**
+   * Words and names the message box completes as people type, without asking the model: customers, products,
+   * phrases. Called when the panel opens (GET …/completions); up to 500 are used.
+   */
+  completions?: (ctx: { identity: Identity; db: DB }) => Promise<string[]> | string[]
   /** The cannot_help tool, which logs what people asked for and couldn't get (GET …/misses). Default on; false to leave it out. */
   misses?: boolean
   /** Saved on each run, so a change in replies can be traced to a change in instructions. */
@@ -290,6 +295,14 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
                 const raw = await t.run(input, ctx)
                 // What a read tool found is what the model sees, so it is what gets hidden. Cards keep their payload.
                 const out = t.kind === 'read' ? redact(raw) : raw
+                if (t.kind === 'read' && t.links) {
+                  // Links to the records the answer used; computed from the result before anything was hidden from it.
+                  const found = await Promise.resolve().then(() => t.links!(raw, input)).catch(() => [] as RecordLink[])
+                  for (const l of found ?? []) {
+                    if (links.size >= 5 || !l?.label || typeof l.to !== 'string' || !l.to.startsWith('/') || l.to.startsWith('//')) continue
+                    if (![...links.values()].some((x) => x.to === l.to)) links.set(l.to, { label: String(l.label).slice(0, 60), to: l.to.slice(0, 300) })
+                  }
+                }
                 const result = clip(out, max)
                 await storage.saveStep({ ...step, input: logged.value, output: result.value, truncated: logged.truncated || result.truncated, durationMs: Date.now() - started })
                 if (t.kind === 'propose') {
@@ -384,6 +397,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
         }, timeouts.firstChunkMs)
         let streamError: unknown
         let shown = false   // a card, view or button reached the user in this reply
+        const links = new Map<string, RecordLink>()   // records the answer came from (read tools' links)
         const modelMessages = await convertToModelMessages(history, {
             // Earlier cards reach the model with their status now, so it knows what the user confirmed or skipped.
             convertDataPart: (p) => {
@@ -428,6 +442,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
             writer.merge(toUIMessageStream({ stream: again.stream, sendStart: false, sendFinish: false, onError: () => NO_ANSWER, redactToolErrors: false }))
             text = await Promise.resolve(again.text).catch(() => NO_ANSWER)
           }
+          if (links.size) writer.write({ type: 'data-sources', id: `sources-${runId}`, data: { links: [...links.values()] } })
           if (config.suggestions) {
             // Follow-ups ride along as a transient part: shown under this reply, never saved in the history. Before
             // 'finish': a client that stops reading at the end of the reply would never see them after it.
@@ -624,6 +639,21 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     return json(200, { pictures: p.pictures !== false && Boolean(config.attachments), ...(p.notice ? { notice: p.notice, noticeId: await noticeId(p.notice) } : {}) })
   }
 
+  /** GET …/completions: the app's words for completing as people type. */
+  async function completionsRoute(req: Request): Promise<Response> {
+    const identity = await config.identify(req)
+    if (!identity) return json(401, { error: 'Sign in to use the assistant.' })
+    if (!config.completions) return json(200, { words: [] })
+    try {
+      const raw = await config.completions({ identity, db: await config.asUser(identity, req) })
+      const words = [...new Set((raw ?? []).map((w) => String(w).replace(/\s+/g, ' ').trim()).filter((w) => w.length >= 2 && w.length <= 60))].slice(0, 500)
+      return json(200, { words })
+    } catch (e) {
+      config.on?.error?.(e, { identity, threadId: '' })
+      return json(200, { words: [] })
+    }
+  }
+
   /** GET …/allowance: every limit that applies to this person, with how much is used. */
   async function allowanceRoute(req: Request): Promise<Response> {
     const identity = await config.identify(req)
@@ -713,6 +743,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
       if (req.method === 'POST' && rt) return rate(req, rt[1]!.toLowerCase())
       if (req.method === 'GET' && path.endsWith('/policy')) return policy(req)
       if (req.method === 'GET' && path.endsWith('/allowance')) return allowanceRoute(req)
+      if (req.method === 'GET' && path.endsWith('/completions')) return completionsRoute(req)
       if (req.method === 'GET' && path.endsWith('/audit')) return adminList(req, 'audit')
       if (req.method === 'GET' && path.endsWith('/misses')) return adminList(req, 'misses')
       if (req.method === 'POST' && path.endsWith('/wipe')) return wipeRoute(req)
