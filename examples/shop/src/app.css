@@ -179,3 +179,12 @@ a.list-row:hover { background: #fbf8f5; }
   .page-head { align-items: flex-start; }
 }
 .made { margin-top: 22px; }
+
+/* The assistant docks on the right on wide screens (no backdrop): make room so the page stays visible and usable
+   beside it. Narrower screens let it sit over the page's right edge. */
+.app { transition: padding-right 0.22s cubic-bezier(0.2, 0.8, 0.2, 1); }
+@media (min-width: 1100px) {
+  html[data-tv-sheet='docked'] .app { padding-right: var(--tv-sheet-width); }
+  html[data-tv-sheet='docked'] .tv-sheet-open { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { .app { transition: none; } }

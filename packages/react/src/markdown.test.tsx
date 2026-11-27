@@ -48,7 +48,7 @@ describe('Markdown', () => {
 
 describe('AssistantSheet', () => {
   it('opens from its button or Ctrl+K, closes with Escape, and hands focus back', async () => {
-    render(<AssistantSheet label="Ask Scoops" theme={{ accent: '#0f766e', radius: '6px', mode: 'dark' }}><textarea aria-label="Message" /></AssistantSheet>)
+    render(<AssistantSheet modal label="Ask Scoops" theme={{ accent: '#0f766e', radius: '6px', mode: 'dark' }}><textarea aria-label="Message" /></AssistantSheet>)
     const open = screen.getByRole('button', { name: 'Ask Scoops' })
     const root = open.parentElement!
     expect(root.style.getPropertyValue('--tv-accent')).toBe('#0f766e')
@@ -70,5 +70,21 @@ describe('AssistantSheet', () => {
     expect(screen.getByRole('dialog').contains(document.activeElement)).toBe(true)
     await userEvent.click(screen.getByRole('button', { name: 'Close assistant' }))
     expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('docks beside the page on wide screens: no backdrop, the page stays usable, and the page is told', async () => {
+    render(<><button type="button">On the page</button><AssistantSheet label="Ask"><textarea aria-label="Message" /></AssistantSheet></>)
+    await userEvent.click(screen.getByRole('button', { name: 'Ask' }))
+    const panel = screen.getByRole('dialog')
+    expect(panel.getAttribute('aria-modal')).toBe('false')
+    expect(document.querySelector('.tv-sheet-backdrop')).toBeNull()
+    expect(document.documentElement.dataset.tvSheet).toBe('docked')
+    expect(document.documentElement.style.getPropertyValue('--tv-sheet-width')).toBe('440px')
+    // The keyboard can leave the panel for the page.
+    await userEvent.click(screen.getByRole('button', { name: 'On the page' }))
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'On the page' }))
+    expect(screen.getByRole('dialog')).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: 'Close assistant' }))
+    expect(document.documentElement.dataset.tvSheet).toBeUndefined()
   })
 })
