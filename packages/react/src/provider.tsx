@@ -14,7 +14,8 @@ export interface AssistantProviderProps {
   headers?: Record<string, string> | (() => Record<string, string> | Promise<Record<string, string>>)
   /**
    * Replace how Confirm, Skip and Undo reach the app. Default: POST `${endpoint}/cards/:id/:decision`, which
-   * runs the appliers given to createAssistant({ cards }). Throw to show the error on the card.
+   * runs the appliers given to createAssistant({ cards }). Throw to show the error on the card. Return { reversible: true }
+   * when the app can undo it. After it succeeds the decision is recorded on the server (mark the kind { inApp: true }).
    */
   onCard?: (card: Card, decision: CardDecision) => Promise<Partial<Card> | void> | Partial<Card> | void
   /** The user pressed a button the assistant offered (open a screen, run an app action). */
@@ -162,7 +163,16 @@ export function AssistantProvider(props: AssistantProviderProps) {
 
   const decideCard = useCallback(async (card: Card, decision: CardDecision): Promise<Partial<Card>> => {
     const p = latest.current
-    if (p.onCard) return (await p.onCard(card, decision)) ?? {}
+    if (p.onCard) {
+      const done = (await p.onCard(card, decision)) ?? {}
+      // The app applied it; tell the server what happened, so the card keeps its state after a reload and the
+      // assistant knows the outcome. Servers that apply cards themselves (no { inApp: true }) refuse this harmlessly.
+      const h = typeof p.headers === 'function' ? await p.headers() : (p.headers ?? {})
+      await (p.fetch ?? fetch)(`${p.endpoint.replace(/\/$/, '')}/cards/${card.id}/${decision}`, {
+        method: 'POST', headers: { ...h, 'content-type': 'application/json' }, body: JSON.stringify({ reversible: done.reversible === true }),
+      }).catch(() => undefined)
+      return done
+    }
     const h = typeof p.headers === 'function' ? await p.headers() : (p.headers ?? {})
     const res = await (p.fetch ?? fetch)(`${p.endpoint.replace(/\/$/, '')}/cards/${card.id}/${decision}`, { method: 'POST', headers: h })
     const body = (await res.json().catch(() => ({}))) as { card?: Card; error?: string }

@@ -1,7 +1,7 @@
 import type { LanguageModelV4 } from '@ai-sdk/provider'
 import { convertToModelMessages, createUIMessageStream, createUIMessageStreamResponse, isStepCount, streamText, tool, toUIMessageStream, type ToolSet, type UIMessage } from 'ai'
 import { fallbackModel } from './fallback.js'
-import { CardError, cardForModel, decide, publicCard, type CardApplier, type CardRules, type Decision } from './cards.js'
+import { CardError, cardForModel, decide, publicCard, type CardHandler, type CardRules, type Decision } from './cards.js'
 import { checkLimits, limitMessage, type LimitHit, type Limits } from './limits.js'
 import type { Storage, StoredCard, UsageRow } from './storage.js'
 import { toolsFor, type Action, type Identity, type Proposal, type TeovoTool, type ToolContext } from './tools.js'
@@ -52,8 +52,11 @@ export interface AssistantConfig<DB = unknown> {
   screen?: ScreenFn<DB>
   /** Chips above the input and the hint inside it; also called after each reply for follow-ups. */
   suggestions?: SuggestionsFn<DB>
-  /** How to apply each kind of card when the user confirms it, keyed by the card's `kind`. */
-  cards?: Record<string, CardApplier<any, DB>>
+  /**
+   * How to apply each kind of card when the user confirms it, keyed by the card's `kind`: an applier that runs here,
+   * or { inApp: true } when the app applies it in the browser (AssistantProvider onCard) and the server only records it.
+   */
+  cards?: Record<string, CardHandler<DB>>
   /** How long a card can be confirmed, and how long after confirming it can be undone. */
   cardRules?: Partial<CardRules>
   /** How dates and money are written, and which day it is: the app's default. Tenants can override it in settings. */
@@ -485,8 +488,10 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     const identity = await config.identify(req)
     if (!identity) return json(401, { error: 'Sign in to use the assistant.' })
     try {
+      // An app-applied card reports whether its change can be taken back; nothing else is read from the body.
+      const body = (await req.json().catch(() => ({}))) as { reversible?: unknown }
       const done = await decide({
-        storage: config.storage, appliers: config.cards ?? {}, rules, identity, id, decision,
+        storage: config.storage, appliers: config.cards ?? {}, rules, identity, id, decision, reversible: body.reversible === true,
         ctx: async () => ({ identity, db: await config.asUser(identity, req), untrusted: makeUntrusted(crypto.randomUUID().slice(0, 8)) }),
       })
       config.on?.decision?.(done, decision, identity)

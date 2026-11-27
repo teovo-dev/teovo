@@ -114,6 +114,23 @@ describe('AssistantPanel', () => {
     expect(screen.queryByRole('button', { name: 'Confirm' })).toBeNull()
   })
 
+  it('records what the app applied on the server, so a reopened conversation shows the card decided with Undo', async () => {
+    const s = server([call('record_payment', { amount: 200 }), say('Ready to confirm.')], true, {}, { cards: { record_payment: { inApp: true } } })
+    const onCard = vi.fn().mockResolvedValue({ reversible: true })
+    let id: string | undefined
+    const view = render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch} onCard={onCard} onThread={(t) => { id = t }}><AssistantPanel /></AssistantProvider>)
+    await ask('paid 200')
+    await userEvent.click(await screen.findByRole('button', { name: 'Confirm' }))
+    await screen.findByText('Done')
+    await waitFor(() => expect(s.bodies.at(-1)).toEqual({ reversible: true }))
+    view.unmount()
+
+    render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch} threadId={id} onCard={onCard}><AssistantPanel /></AssistantProvider>)
+    await screen.findByText('Done')
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Confirm' })).toBeNull()
+  })
+
   it('keeps the card open and shows the reason when applying it fails', async () => {
     const onCard = vi.fn().mockRejectedValue(new Error('Order #2 was already paid.'))
     mount({ fetch: server([call('record_payment', { amount: 200 }), say('Ready.')]).fetch, onCard })
