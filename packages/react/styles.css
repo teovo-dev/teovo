@@ -137,6 +137,9 @@
 
 /* ---------- Composer ---------- */
 .tv-input { padding: 0 12px 12px; }
+.tv-page { display: flex; align-items: center; gap: 6px; padding: 0 4px 6px; color: var(--tv-muted); font-size: 0.8125em; min-width: 0; }
+.tv-page svg { flex: none; width: 13px; height: 13px; }
+.tv-page span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tv-composer {
   display: flex; flex-direction: column; border: 1px solid var(--tv-border); border-radius: 16px; background: var(--tv-bg);
   box-shadow: 0 1px 3px rgb(0 0 0 / 0.06); transition: border-color 0.15s, box-shadow 0.15s;

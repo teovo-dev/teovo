@@ -3,7 +3,7 @@ import { readFile, useVoice, type PendingFile } from './input.js'
 import { Markdown } from './markdown.js'
 import { themeStyle, type Theme } from './sheet.js'
 import { useAssistant } from './provider.js'
-import type { Action, Card, CardDecision, Step, TeovoMessage, View } from './types.js'
+import type { Action, Card, CardDecision, Page, Step, TeovoMessage, View } from './types.js'
 import { defaultViews, isCurrent, type ViewComponent } from './views.js'
 
 export interface AssistantPanelProps {
@@ -28,6 +28,11 @@ export interface AssistantPanelProps {
   voiceLang?: string
   /** Show suggestion chips above the input. Default true (they only appear when the server has some). */
   showSuggestions?: boolean
+  /**
+   * The line above the message box that says which page the assistant sees, e.g. "On Orders · filter: unpaid".
+   * Default on, whenever the app reports a page with useAssistantContext. Pass false to hide it, or a function to word it.
+   */
+  pageLabel?: false | ((page: Page) => ReactNode)
   className?: string
 }
 
@@ -35,7 +40,7 @@ export type CardState = { status: 'open' | 'busy' | 'confirmed' | 'skipped' | 'u
 
 /** A ready-made chat panel. Unstyled apart from `tv-` class names; import '@teovo/react/styles.css' for defaults. */
 export function AssistantPanel(props: AssistantPanelProps) {
-  const { chat, newChat, suggestions, clearSuggestions } = useAssistant()
+  const { chat, newChat, suggestions, clearSuggestions, page } = useAssistant()
   const [text, setText] = useState('')
   const busy = chat.status === 'submitted' || chat.status === 'streaming'
   const log = useRef<HTMLDivElement>(null)
@@ -111,6 +116,14 @@ export function AssistantPanel(props: AssistantPanelProps) {
       ) : null}
       {fileError || voice.error ? <div className="tv-error" role="alert">{fileError ?? voice.error}</div> : null}
       <form className="tv-input" onSubmit={send}>
+        {page && props.pageLabel !== false && (page.title || page.path) ? (
+          <div className="tv-page" title="The assistant sees this page and answers about it">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9h18" />
+            </svg>
+            <span>{props.pageLabel ? props.pageLabel(page) : pageText(page)}</span>
+          </div>
+        ) : null}
         <div className="tv-composer">
           <textarea
             ref={box}
@@ -277,6 +290,16 @@ const icons = {
   send: svg(<path d="M12 19V5M5 12l7-7 7 7" />),
   stop: <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" /></svg>,
   plus: svg(<path d="M12 5v14M5 12h14" />),
+}
+
+/** "On Orders · filter: unpaid", from what the app reported. */
+export function pageText(page: Page): string {
+  const where = page.title || page.path || ''
+  const extra = Object.entries(page.state ?? {})
+    .filter(([, v]) => v !== null && v !== '' && v !== false)
+    .slice(0, 3)
+    .map(([k, v]) => (v === true ? k : `${k}: ${String(v)}`))
+  return [`On ${where}`, ...extra].join(' · ')
 }
 
 const show = (v: unknown) => (v === undefined || v === null ? '—' : typeof v === 'object' ? JSON.stringify(v) : String(v))

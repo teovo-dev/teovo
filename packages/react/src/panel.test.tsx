@@ -49,6 +49,24 @@ async function ask(text: string) {
 
 afterEach(() => { cleanup(); gate = undefined })
 
+describe('page label', () => {
+  function Filtered({ unpaid }: { unpaid: boolean }) { useAssistantContext({ path: '/orders', title: 'Orders', state: { filter: unpaid ? 'unpaid' : null, selected: 0 } }); return null }
+
+  it('shows which page the assistant sees, follows the page, and can be hidden or reworded', async () => {
+    const s = server([])
+    const view = render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><Filtered unpaid /><AssistantPanel /></AssistantProvider>)
+    await waitFor(() => expect(document.querySelector('.tv-page')?.textContent).toBe('On Orders · filter: unpaid · selected: 0'))
+    view.rerender(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><Filtered unpaid={false} /><AssistantPanel /></AssistantProvider>)
+    await waitFor(() => expect(document.querySelector('.tv-page')?.textContent).toBe('On Orders · selected: 0'))
+    view.rerender(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><AssistantPanel /></AssistantProvider>)
+    await waitFor(() => expect(document.querySelector('.tv-page')).toBeNull())   // no page reported: no label
+    view.rerender(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><Screen path="/orders/142" id="142" /><AssistantPanel pageLabel={(p) => `Order #${p.record?.id}`} /></AssistantProvider>)
+    await waitFor(() => expect(document.querySelector('.tv-page')?.textContent).toBe('Order #142'))
+    view.rerender(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><Screen path="/orders/142" id="142" /><AssistantPanel pageLabel={false} /></AssistantProvider>)
+    expect(document.querySelector('.tv-page')).toBeNull()
+  })
+})
+
 describe('AssistantPanel', () => {
   it('sends only the new message, then continues the same thread', async () => {
     const s = server([say('Sales are ₹950.'), say('Yes, today.')])
@@ -186,6 +204,16 @@ describe('AssistantPanel', () => {
     await screen.findByRole('button', { name: 'On /orders' })
     view.rerender(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><Screen path="/expenses" /><AssistantPanel /></AssistantProvider>)
     await screen.findByRole('button', { name: 'On /expenses' })
+  })
+
+  it('fetches the new screen\'s chips mid-conversation too, replacing the last reply\'s follow-ups', async () => {
+    const s = server([say('ok')], true, {}, { suggestions: ({ page, after }) => ({ suggestions: [after ? 'Follow-up' : `On ${page?.path ?? 'home'}`] }) })
+    const view = mount({ fetch: s.fetch }, <Screen path="/orders" />)
+    await ask('hello')
+    await screen.findByRole('button', { name: 'Follow-up' })
+    view.rerender(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><Screen path="/orders/142" id="142" /><AssistantPanel /></AssistantProvider>)
+    await screen.findByRole('button', { name: 'On /orders/142' })
+    expect(screen.queryByRole('button', { name: 'Follow-up' })).toBeNull()
   })
 
   it('lists earlier conversations, opens one, and continues it', async () => {
