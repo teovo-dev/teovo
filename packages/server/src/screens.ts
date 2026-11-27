@@ -19,11 +19,51 @@ export interface ScreenInfo { path: string; title: string; description?: string;
 
 const SAFE = /^[\w .,:@-]{1,64}$/
 
-/** Fill a screen's :params and filters; null when the path doesn't fit any screen or a value is missing or odd. */
+/** The values a filled-in path gives a screen's :params ('/orders/142' on '/orders/:id' → { id: '142' }), or null. */
+function matchPath(pattern: string, path: string): Record<string, string> | null {
+  const want = pattern.split('/'), got = path.split('/')
+  if (want.length !== got.length) return null
+  const out: Record<string, string> = {}
+  for (let i = 0; i < want.length; i++) {
+    if (want[i]!.startsWith(':')) {
+      let v: string
+      try { v = decodeURIComponent(got[i]!) } catch { return null }
+      if (!v) return null
+      out[want[i]!.slice(1)] = v
+    } else if (want[i] !== got[i]) return null
+  }
+  return out
+}
+
+/**
+ * The screen a name points at (its path, its title, or a path with values filled in such as '/orders/142?unpaid=yes'),
+ * with the values the name carries; null when it fits none.
+ */
+export function findScreen(screens: readonly ScreenInfo[], name: string): { screen: ScreenInfo; values: Record<string, string> } | null {
+  const [bare = '', qs] = name.trim().split('?') as [string, string?]
+  const values: Record<string, string> = {}
+  let screen = screens.find((x) => x.path === bare || x.title === name.trim())
+  if (!screen) {
+    // A filled-in path: the literal screens first, so '/orders/new' isn't read as '/orders/:id'.
+    for (const x of [...screens].sort((a, b) => Number(a.path.includes(':')) - Number(b.path.includes(':')))) {
+      const m = matchPath(x.path, bare)
+      if (m) { screen = x; Object.assign(values, m); break }
+    }
+  }
+  if (!screen) return null
+  if (qs) for (const [k, v] of new URLSearchParams(qs)) if (!(k in values)) values[k] = v
+  return { screen, values }
+}
+
+/**
+ * Fill a screen's :params and filters; null when the path doesn't fit any screen or a value is missing or odd.
+ * `name` is a screen's path or title, or a path with its values filled in, e.g. '/orders/142?unpaid=yes'.
+ */
 export function screenPath(screens: readonly ScreenInfo[], name: string, params: Record<string, string | number> = {}): { path: string; title: string } | null {
-  const bare = name.split('?')[0]!
-  const s = screens.find((x) => x.path === bare || x.title === name)
-  if (!s) return null
+  const found = findScreen(screens, name)
+  if (!found) return null
+  const s = found.screen
+  params = { ...found.values, ...params }
   let ok = true
   const used = new Set<string>()
   const path = s.path.replace(/:(\w+)/g, (_, k: string) => {
@@ -48,7 +88,7 @@ export function screenPath(screens: readonly ScreenInfo[], name: string, params:
 /** The screens map for the model. */
 export function screensText(screens: readonly ScreenInfo[]): string {
   if (!screens.length) return ''
-  return `\n\nScreens in this app. A button to one is an extra, never the answer: when the user asks about something, look it up with your tools and answer (or show it); then offer a screen with open_screen if it helps.\n${screens.map((s) => `- ${s.title}: ${s.path}${s.description ? ` (${s.description})` : ''}${s.filters ? `; filters: ${Object.entries(s.filters).map(([k, d]) => `${k} (${d})`).join(', ')}` : ''}`).join('\n')}`
+  return `\n\nScreens in this app. Only open_screen puts a button under your reply: never write a button, link or tool call in your text. When the user asks to go to or open a screen, call open_screen. Otherwise a button is an extra, never the answer: when the user asks about something, look it up with your tools and answer (or show it); then offer a screen with open_screen if it helps.\n${screens.map((s) => `- ${s.title}: ${s.path}${s.description ? ` (${s.description})` : ''}${s.filters ? `; filters: ${Object.entries(s.filters).map(([k, d]) => `${k} (${d})`).join(', ')}` : ''}`).join('\n')}`
 }
 
 /**
