@@ -14,7 +14,11 @@ export interface Card {
   after?: Record<string, unknown>
   payload: unknown
   status: 'shown' | 'confirmed' | 'skipped' | 'undone' | 'expired' | 'waiting_for_approval'
+  /** After confirming: whether the app can take the change back. */
+  reversible?: boolean
 }
+
+export type CardDecision = 'confirm' | 'skip' | 'undo'
 
 /** A button under the reply (an `action` tool's result). */
 export interface Action { label: string; action: string; args?: Record<string, unknown> }

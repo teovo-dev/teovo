@@ -1,6 +1,20 @@
-import { periodKey, type Storage, type StoredCard, type Thread, type Totals, type Unit } from '@teovo/server'
+import { periodKey, type CardPatch, type Storage, type StoredCard, type Thread, type Totals, type Unit } from '@teovo/server'
 import type { UIMessage } from 'ai'
 import type { Query } from './migrate'
+
+const iso = (v: unknown) => (v ? new Date(v as string).toISOString() : undefined)
+const card = (r: any): StoredCard => {
+  const c: StoredCard = { id: r.id, threadId: r.thread_id, runId: r.run_id, kind: r.kind, title: r.title, payload: r.payload, status: r.status, createdAt: iso(r.created_at) }
+  if (r.before) c.before = r.before
+  if (r.after) c.after = r.after
+  if (r.decided_by) c.decidedBy = r.decided_by
+  if (r.decided_at) c.decidedAt = iso(r.decided_at)
+  if (r.reversible !== null && r.reversible !== undefined) c.reversible = r.reversible
+  if (r.undo !== null && r.undo !== undefined) c.undo = r.undo
+  if (r.undone_at) c.undoneAt = iso(r.undone_at)
+  return c
+}
+const COLUMN: Record<keyof CardPatch, string> = { status: 'status', decidedBy: 'decided_by', decidedAt: 'decided_at', reversible: 'reversible', undo: 'undo', undoneAt: 'undone_at' }
 
 const thread = (r: any): Thread => ({ id: r.id, tenantId: r.tenant_id, userId: r.user_id, title: r.title, createdAt: new Date(r.created_at).toISOString() })
 
@@ -36,6 +50,23 @@ export function postgresStorage(query: Query): Storage {
         `insert into tv_proposals (id, thread_id, run_id, kind, title, before, after, payload, status) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          on conflict (id) do update set status = excluded.status`,
         [c.id, c.threadId, c.runId, c.kind, c.title, json(c.before), json(c.after), json(c.payload), c.status])
+    },
+    async getCard(tenantId, userId, id) {
+      if (!/^[0-9a-f-]{36}$/i.test(id)) return null
+      const r = await query(
+        `select p.* from tv_proposals p join tv_threads t on t.id = p.thread_id where p.id = $1 and t.tenant_id = $2 and t.user_id = $3`, [id, tenantId, userId])
+      return r.rows[0] ? card(r.rows[0]) : null
+    },
+    async listCards(threadId) {
+      return (await query('select * from tv_proposals where thread_id = $1 order by created_at', [threadId])).rows.map(card)
+    },
+    async updateCard(id, from, patch) {
+      // One statement: the status check and the change happen together, so two taps can't both win.
+      const keys = Object.keys(patch) as (keyof CardPatch)[]
+      const sets = keys.map((k, i) => `${COLUMN[k]} = $${i + 3}`)
+      const values = keys.map((k) => (k === 'undo' ? json(patch.undo) : patch[k] ?? null))
+      const r = await query(`update tv_proposals set ${sets.join(', ') || 'status = status'} where id = $1 and status = any($2) returning *`, [id, from, ...values])
+      return r.rows[0] ? card(r.rows[0]) : null
     },
     async startRun(r) {
       await query('insert into tv_runs (id, thread_id, tenant_id, user_id, model, prompt_version) values ($1, $2, $3, $4, $5, $6)',
