@@ -1,0 +1,12 @@
+{
+  "name": "@teovo/react",
+  "version": "0.0.0",
+  "description": "Teovo React panel and screen-context hooks",
+  "license": "MIT",
+  "type": "module",
+  "repository": { "type": "git", "url": "git+https://github.com/teovo-dev/teovo.git", "directory": "packages/react" },
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "files": ["dist"],
+  "scripts": { "build": "tsc -p tsconfig.json", "typecheck": "tsc -p tsconfig.json --noEmit" },
+  "publishConfig": { "access": "public" }
+}

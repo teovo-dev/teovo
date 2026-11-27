@@ -1,0 +1,12 @@
+{
+  "name": "@teovo/server",
+  "version": "0.0.0",
+  "description": "Teovo server handler: the assistant's tool loop, cards, limits and logs",
+  "license": "MIT",
+  "type": "module",
+  "repository": { "type": "git", "url": "git+https://github.com/teovo-dev/teovo.git", "directory": "packages/server" },
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "files": ["dist"],
+  "scripts": { "build": "tsc -p tsconfig.json", "typecheck": "tsc -p tsconfig.json --noEmit" },
+  "publishConfig": { "access": "public" }
+}
