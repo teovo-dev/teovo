@@ -31,8 +31,13 @@ npm install
 ```
 
 ```bash
-npm run typecheck && npm test && npm run build
+npm run typecheck && npm test
 ```
+
+`npm run typecheck` builds the packages in order (server, react, db), then type-checks the tests. The database
+tests run when `TEOVO_TEST_DATABASE_URL` points at a Postgres you can create schemas and roles in; each test
+uses its own schema and drops it afterwards. Use a plain Postgres, not Supabase's local database, whose
+Postgres build has crashed on the role test.
 
 ## Licence
 

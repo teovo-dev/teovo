@@ -1,5 +1,25 @@
 {
   "extends": "./tsconfig.base.json",
-  "compilerOptions": { "noEmit": true, "jsx": "react-jsx", "types": ["node"] },
-  "include": ["packages/*/src/**/*.test.ts", "packages/*/src/**/*.test.tsx"]
+  "compilerOptions": {
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "types": [
+      "node"
+    ],
+    "paths": {
+      "@teovo/server": [
+        "./packages/server/src/index.ts"
+      ],
+      "@teovo/react": [
+        "./packages/react/src/index.ts"
+      ],
+      "@teovo/db": [
+        "./packages/db/src/index.ts"
+      ]
+    }
+  },
+  "include": [
+    "packages/*/src/**/*.test.ts",
+    "packages/*/src/**/*.test.tsx"
+  ]
 }
