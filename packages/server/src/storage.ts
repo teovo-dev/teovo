@@ -1,4 +1,5 @@
 import type { UIMessage } from 'ai'
+import type { TenantSettings } from './settings.js'
 import type { Proposal } from './tools.js'
 
 export interface Thread { id: string; tenantId: string; userId: string; title: string | null; createdAt: string }
@@ -43,6 +44,10 @@ export interface Storage {
    */
   updateCard(id: string, from: CardStatus[], patch: CardPatch): Promise<StoredCard | null>
 
+  /** A tenant's own settings, or null when it never saved any. */
+  tenantSettings(tenantId: string): Promise<TenantSettings | null>
+  saveTenantSettings(tenantId: string, settings: TenantSettings): Promise<void>
+
   // Run log and usage ledger.
   startRun(run: RunRecord): Promise<void>
   finishRun(id: string, end: { status: 'done' | 'failed' | 'stopped'; model?: string; error?: string }): Promise<void>
@@ -80,13 +85,16 @@ export function memoryStorage() {
   const steps: StepRecord[] = []
   const usageRows: (UsageRow & { at: Date })[] = []
   const budgetRows: (Budget & { tenantId: string })[] = []
+  const settings = new Map<string, TenantSettings>()
   const sum = (rows: typeof usageRows) => {
     const t: Totals = {}
     for (const r of rows) t[r.unit] = (t[r.unit] ?? 0) + r.amount
     return t
   }
-  const storage: Storage & { threads: typeof threads; messages: typeof messages; cards: typeof cards; runs: typeof runs; steps: typeof steps; usageRows: typeof usageRows; budgetRows: typeof budgetRows } = {
-    threads, messages, cards, runs, steps, usageRows, budgetRows,
+  const storage: Storage & { threads: typeof threads; messages: typeof messages; cards: typeof cards; runs: typeof runs; steps: typeof steps; usageRows: typeof usageRows; budgetRows: typeof budgetRows; settings: typeof settings } = {
+    threads, messages, cards, runs, steps, usageRows, budgetRows, settings,
+    async tenantSettings(tenantId) { const s = settings.get(tenantId); return s ? structuredClone(s) : null },
+    async saveTenantSettings(tenantId, s) { settings.set(tenantId, structuredClone(s)) },
     async getThread(tenantId, userId, id) {
       const t = threads.get(id)
       return t && t.tenantId === tenantId && t.userId === userId ? t : null
