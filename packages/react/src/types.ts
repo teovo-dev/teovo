@@ -6,6 +6,8 @@ export interface Page {
   title?: string
   /** The record open on screen; the server's `screen` callback looks it up as the user. */
   record?: { type: string; id: string }
+  /** What the screen shows right now: filters, selected rows, a draft. Small, flat values only. */
+  state?: Record<string, string | number | boolean | null>
 }
 
 /** Chips above the input, and the hint inside it. */

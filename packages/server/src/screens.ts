@@ -6,6 +6,30 @@ export interface Page {
   title?: string
   /** The record open on screen, e.g. { type: 'order', id: '142' }. */
   record?: { type: string; id: string }
+  /** What components on the screen published: filters, selected rows, a draft. Small, flat values only. */
+  state?: Record<string, string | number | boolean | null>
+}
+
+/** A screen the assistant may send the user to. `path` may hold :params, e.g. '/orders/:id'. */
+export interface ScreenInfo { path: string; title: string; description?: string }
+
+/** Fill a screen's :params; null when the path doesn't fit any screen or a value is missing or odd. */
+export function screenPath(screens: readonly ScreenInfo[], name: string, params: Record<string, string | number> = {}): { path: string; title: string } | null {
+  const s = screens.find((x) => x.path === name || x.title === name)
+  if (!s) return null
+  let ok = true
+  const path = s.path.replace(/:(\w+)/g, (_, k: string) => {
+    const v = params[k]
+    if (v === undefined || !/^[\w-]{1,64}$/.test(String(v))) { ok = false; return '' }
+    return encodeURIComponent(String(v))
+  })
+  return ok ? { path, title: s.title } : null
+}
+
+/** The screens map for the model. */
+export function screensText(screens: readonly ScreenInfo[]): string {
+  if (!screens.length) return ''
+  return `\n\nScreens in this app (offer one with open_screen when it helps the user):\n${screens.map((s) => `- ${s.title}: ${s.path}${s.description ? ` (${s.description})` : ''}`).join('\n')}`
 }
 
 /**
@@ -43,6 +67,14 @@ export function readPage(raw: unknown): Page | undefined {
   const path = str(r.path, 300), title = str(r.title, 200)
   if (path) page.path = path
   if (title) page.title = title
+  const st = r.state
+  if (st && typeof st === 'object' && !Array.isArray(st)) {
+    const entries = Object.entries(st as Record<string, unknown>)
+      .filter(([k, v]) => /^[\w.-]{1,40}$/.test(k) && (v === null || ['string', 'number', 'boolean'].includes(typeof v)))
+      .slice(0, 20)
+      .map(([k, v]) => [k, typeof v === 'string' ? v.slice(0, 200) : v] as const)
+    if (entries.length) page.state = Object.fromEntries(entries) as Page['state']
+  }
   const rec = r.record as Record<string, unknown> | undefined
   const type = str(rec?.type, 50), id = str(rec?.id, 100)
   if (type && id) page.record = { type, id }
@@ -56,6 +88,7 @@ export function screenText(page: Page | undefined, summary: string | null, untru
     page?.title ? `Screen: ${page.title}` : '',
     page?.path ? `Path: ${page.path}` : '',
     page?.record ? `Open record: ${page.record.type} ${page.record.id}` : '',
+    page?.state ? `On screen: ${Object.entries(page.state).map(([k, v]) => `${k} = ${JSON.stringify(v)}`).join(', ')}` : '',
     summary ? `What it shows:\n${summary}` : '',
   ].filter(Boolean)
   return lines.length ? `\n\nWhat the user is looking at now:\n${untrusted(lines.join('\n'), 'screen')}` : ''

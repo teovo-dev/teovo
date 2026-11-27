@@ -207,8 +207,9 @@ export function useAssistantContext(page: Page): void {
   const { setPage } = useAssistant()
   const { path, title } = page
   const type = page.record?.type, id = page.record?.id
+  const state = page.state ? JSON.stringify(page.state) : ''
   useEffect(() => {
-    setPage({ path, title, ...(type && id ? { record: { type, id } } : {}) })
+    setPage({ path, title, ...(type && id ? { record: { type, id } } : {}), ...(state ? { state: JSON.parse(state) as Page['state'] } : {}) })
     return () => setPage(undefined)
-  }, [setPage, path, title, type, id])
+  }, [setPage, path, title, type, id, state])
 }

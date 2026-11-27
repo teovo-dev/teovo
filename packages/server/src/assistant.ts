@@ -12,7 +12,8 @@ import { checkForm, type FormData, type FormHandler, type TeovoView } from './vi
 import { checkMessage, type AttachmentRules } from './attachments.js'
 import { checkFormats, DEFAULT_FORMATS, formatsText, type Formats } from './formats.js'
 import { DEFAULT_SETTINGS, SettingsError, settingsText, validateSettings } from './settings.js'
-import { readPage, screenText, tidy, type Page, type ScreenFn, type SuggestionsFn } from './screens.js'
+import { readPage, screenPath, screensText, screenText, tidy, type Page, type ScreenFn, type ScreenInfo, type SuggestionsFn } from './screens.js'
+import { z } from 'zod'
 export type { Page } from './screens.js'
 
 export interface AssistantConfig<DB = unknown> {
@@ -35,6 +36,13 @@ export interface AssistantConfig<DB = unknown> {
   maxSteps?: number
   /** Earlier messages the model sees. Default 30. */
   historyMessages?: number
+  /**
+   * Tool results from earlier replies are cut to this many characters (the latest reply's stay whole), so a long
+   * conversation doesn't resend every table it ever read. Default 1500.
+   */
+  historyToolChars?: number
+  /** The app's screens. The model is told about them and gets an open_screen tool that only opens these. */
+  screens?: readonly ScreenInfo[]
   /** Give up on a model that sends nothing at first, goes quiet, or runs too long. Milliseconds. */
   timeouts?: { firstChunkMs?: number; chunkMs?: number; totalMs?: number }
   /** Messages and tokens per person and per tenant, checked before every reply. Tenants can set their own in tv_budgets. */
@@ -85,6 +93,22 @@ function clip(v: unknown, max: number): { value: unknown; truncated: boolean } {
   return text.length <= max ? { value: v, truncated: false } : { value: text.slice(0, max), truncated: true }
 }
 
+/**
+ * The one rule for what the model sees of earlier tool results: whole for the latest assistant reply, cut to `max`
+ * characters before that, marked so the model knows to look again if it needs more.
+ */
+function trimToolResults(messages: UIMessage[], max: number): UIMessage[] {
+  const lastAssistant = messages.map((m) => m.role).lastIndexOf('assistant')
+  return messages.map((m, i) => {
+    if (m.role !== 'assistant' || i === lastAssistant) return m
+    return { ...m, parts: m.parts.map((p) => {
+      if (!p.type.startsWith('tool-') || !('output' in p) || p.output === undefined) return p
+      const text = JSON.stringify(p.output) ?? ''
+      return text.length <= max ? p : { ...p, output: `${text.slice(0, max)}… [cut: an earlier result; call the tool again for all of it]` }
+    }) as UIMessage['parts'] }
+  })
+}
+
 /** A conversation's title until something better exists: the start of its first question. */
 function titleFrom(m: UIMessage): string {
   const text = m.parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join(' ').replace(/\s+/g, ' ').trim()
@@ -100,6 +124,7 @@ interface ChatBody { threadId?: string; message?: UIMessage; page?: unknown }
 
 export function createAssistant<DB>(config: AssistantConfig<DB>) {
   if (!config.models.length) throw new Error('createAssistant: at least one model is required')
+  if (config.screens?.length && config.tools.some((t) => t.name === 'open_screen')) throw new Error('createAssistant: a tool named open_screen clashes with the screens map; drop one')
   const formatProblem = checkFormats(config.formats ?? {})
   if (formatProblem) throw new Error(`createAssistant: ${formatProblem}`)
   for (const v of config.views ?? []) {
@@ -137,7 +162,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
 
     const earlier = await storage.listMessages(thread.id)
     if (!earlier.length && !thread.title) await storage.setThreadTitle(thread.id, titleFrom(message))
-    const history = [...earlier, message].slice(-(config.historyMessages ?? 30))
+    const history = trimToolResults([...earlier, message].slice(-(config.historyMessages ?? 30)), config.historyToolChars ?? 1500)
     await storage.saveMessages(thread.id, [message])
 
     const db = await config.asUser(identity, req)
@@ -160,7 +185,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     const summary = page && config.screen ? await Promise.resolve().then(() => config.screen!(page, ctx)).catch((e) => { config.on?.error?.(e, { identity, threadId: thread.id }); return null }) : null
     const shownSummary = summary === null ? null : String(redact(summary))
     const formats: Formats = { ...DEFAULT_FORMATS, ...config.formats, ...settings.formats }
-    const system = `${instructions}${formatsText(formats, config.now?.() ?? new Date())}${settingsText(settings)}\n\n${UNTRUSTED_RULE}${screenText(page, shownSummary, fence)}`
+    const system = `${instructions}${formatsText(formats, config.now?.() ?? new Date())}${settingsText(settings)}${screensText(config.screens ?? [])}\n\n${UNTRUSTED_RULE}${screenText(page, shownSummary, fence)}`
 
     const stream = createUIMessageStream<UIMessage<{ runId: string; threadId: string; formats: Formats }>>({
       originalMessages: history as UIMessage<{ runId: string; threadId: string; formats: Formats }>[],
@@ -221,6 +246,19 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
               return v.name === 'choices' ? 'Shown as buttons. Stop here: their pick arrives as their next message.'
                 : v.name === 'form' ? 'Shown as a form. When they submit it, a card is prepared for them to confirm; nothing has changed yet.'
                 : `Shown to the user as a ${v.name}. Don't repeat its contents in your reply.`
+            },
+          })
+        }
+        if (config.screens?.length) {
+          const screens = config.screens
+          tools.open_screen = tool({
+            description: 'Offer the user a button that opens one of the app\'s screens. Give the screen\'s path from the list, and values for its :params.',
+            inputSchema: z.object({ screen: z.string(), params: z.record(z.string(), z.union([z.string(), z.number()])).optional(), label: z.string().max(40).optional() }),
+            execute: async ({ screen, params, label }, { toolCallId }) => {
+              const to = screenPath(screens, screen, params ?? {})
+              if (!to) throw new Error(`There is no screen "${screen}" with those values. Use one of: ${screens.map((s) => s.path).join(', ')}.`)
+              writer.write({ type: 'data-action', id: toolCallId, data: { label: label ?? `Open ${to.title}`, action: 'navigate', args: { to: to.path } } })
+              return 'A button is shown under your reply.'
             },
           })
         }
