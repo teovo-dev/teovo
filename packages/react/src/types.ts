@@ -76,7 +76,7 @@ export interface Formats { locale: string; currency: string; timeZone: string }
 export type TeovoMessage = UIMessage<{ runId?: string; threadId?: string; formats?: Formats; stopped?: boolean }, TeovoData>
 
 /** What the tenant asks of people before they chat (GET …/policy). */
-export interface Policy { /** The assistant's name from the server's config. */ name?: string; /** The server's formats locale, e.g. 'en-IN'. */ locale?: string; notice?: string; noticeId?: string; pictures: boolean }
+export interface Policy { /** The assistant's name from the server's config. */ name?: string; /** The server's formats locale, e.g. 'en-IN'. */ locale?: string; notice?: string; noticeId?: string; pictures: boolean; /** Voice to text is set up on the server. */ voice?: boolean; /** Readers this person may use. */ readers?: string[] }
 
 /** One limit and how much of it is used (GET …/allowance). */
 export interface AllowanceItem { scope: 'user' | 'tenant'; unit: 'messages' | 'input_tokens' | 'output_tokens' | 'neurons'; period: 'day' | 'month'; limit: number; used: number }

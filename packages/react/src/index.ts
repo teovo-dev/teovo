@@ -1,5 +1,6 @@
 /** @teovo/react: the assistant panel, its provider, and the hook screens use to say where the user is. */
-export { AssistantProvider, useAssistant, useAssistantContext, useAssistantName, useThreads, type AssistantProviderProps } from './provider.js'
+export { AssistantProvider, useAssistant, useAssistantContext, useAssistantName, useReader, useThreads, type AssistantProviderProps, type ReadInput } from './provider.js'
+export { VoiceButton, type VoiceButtonProps } from './voice.js'
 export { AssistantHeader, type AssistantHeaderProps } from './header.js'
 export { SPARKLE } from './icons.js'
 export { ThreadList, type ThreadListProps } from './threads.js'

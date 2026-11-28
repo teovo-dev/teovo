@@ -13,3 +13,4 @@ export { cardForModel, CardError, publicCard, type AppCard, type ApplyResult, ty
 export { checkLimits, limitMessage, type LimitHit, type Limits } from './limits.js'
 export { fallbackModel } from './fallback.js'
 export { UNTRUSTED_RULE } from './untrusted.js'
+export { bytesOf, COULD_NOT_HEAR, COULD_NOT_READ, defineReader, fillMissing, jsonIn, ReaderError, type ReaderDef, type ReaderInput, type ReaderInputKind, type Transcriber } from './readers.js'

@@ -321,3 +321,22 @@ export function workersAi(binding: WorkersAiBinding, model: string, options: Wor
     },
   }
 }
+
+/**
+ * Workers AI Whisper as a Teovo transcriber (voice.models), e.g. the backup after Gemini. With english (the default
+ * in voice) it translates Hindi, Hinglish and so on into English text. Reports the neurons it used.
+ */
+export function workersAiWhisper(binding: WorkersAiBinding, model = '@cf/openai/whisper-large-v3-turbo'): import('./readers.js').Transcriber {
+  return {
+    modelId: model,
+    provider: 'workers-ai',
+    async transcribe(audio, opts) {
+      let s = ''
+      for (let i = 0; i < audio.length; i += 0x8000) s += String.fromCharCode(...audio.subarray(i, i + 0x8000))
+      const out = (await binding.run(model, {
+        audio: btoa(s), vad_filter: true, task: opts.english ? 'translate' : 'transcribe', ...(opts.hint ? { initial_prompt: opts.hint } : {}),
+      })) as { text?: string; usage?: { neurons?: number } }
+      return { text: out.text?.trim() ?? '', ...(out.usage?.neurons ? { neurons: out.usage.neurons } : {}) }
+    },
+  }
+}

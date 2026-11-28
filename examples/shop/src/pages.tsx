@@ -1,4 +1,4 @@
-import { useAssistant, useAssistantContext } from '@teovo/react'
+import { useAssistant, useAssistantContext, useReader, VoiceButton } from '@teovo/react'
 import { useEffect, useState } from 'react'
 import { addDays, ago, longDate, money, shortDate, type Expense, type Order, type Product, type Shop, type Status } from './data.js'
 import { Avatar, Empty, Icon, Meter, PageHead, Pill, Stat, Tabs, payState } from './ui.js'
@@ -315,6 +315,7 @@ export function Expenses({ shop }: { shop: Shop }) {
   return (
     <>
       <PageHead title="Expenses" sub={`${money(total)} in the last 30 days`}><AskButton text="I spent 450 on milk today, paid by UPI">Add an expense</AskButton></PageHead>
+      <QuickAdd />
       <div className="grid-side">
         <section className="card flush"><div className="table-wrap"><table className="table">
           <thead><tr><th>Date</th><th>Vendor</th><th className="hide-sm">Category</th><th className="hide-sm">Paid by</th><th className="num">Amount</th></tr></thead>
@@ -380,3 +381,51 @@ export function Admin({ user }: { user: string }) {
   )
 }
 
+
+// ---------- Quick add: a form filled by Teovo's 'expense' reader ------------------------------------------------------
+interface Draft { amount: number | null; vendor: string | null; category: string | null; date: string | null; method: string | null; question: string | null }
+
+/** Type a note, say it, or scan a bill: the reader fills the form; nothing is saved until Save. */
+function QuickAdd() {
+  const r = useReader<Draft>('expense')
+  const [note, setNote] = useState('')
+  const [form, setForm] = useState<Draft | null>(null)
+  const [saved, setSaved] = useState('')
+  const fill = async (input: string | File) => { setSaved(''); const d = await r.read(input); if (d) setForm(d) }
+  const set = (k: keyof Draft, v: string) => setForm((f) => (f ? { ...f, [k]: k === 'amount' ? (v ? Number(v) : null) : v || null } : f))
+  const save = async () => {
+    const res = await fetch('/api/shop/expenses', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(form) })
+    if (res.ok) { setSaved(`Saved ${money(form!.amount ?? 0)} to ${form!.vendor}.`); setForm(null); setNote(''); r.reset() }
+    else setSaved(((await res.json()) as { error: string }).error)
+  }
+  return (
+    <section className="card quick">
+      <div className="card-head"><h2>Quick add</h2><span className="muted small">Type it, say it, or scan a bill — then check and save</span></div>
+      <div className="quick-row">
+        <input className="quick-input" placeholder="e.g. 2 kg butter from the dairy, 1100, UPI" value={note} onChange={(e) => setNote(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && note.trim()) void fill(note) }} />
+        <button type="button" className="btn btn-soft" disabled={!note.trim() || r.busy} onClick={() => void fill(note)}>Fill</button>
+        <VoiceButton label="Say it" className="btn btn-soft" onText={(t) => { setNote(t); void fill(t) }} />
+        <label className="btn btn-soft">Scan bill<input type="file" accept="image/*" hidden onChange={(e) => { const f = e.target.files?.[0]; if (f) void fill(f); e.target.value = '' }} /></label>
+      </div>
+      {r.busy ? <p className="muted small">Reading…</p> : null}
+      {r.error ? <p className="due small" role="alert">{r.error}</p> : null}
+      {saved ? <p className="small" role="status">{saved}</p> : null}
+      {form ? (
+        <div className="quick-form">
+          {form.question ? <p className="due small">{form.question}</p> : null}
+          <label>Amount<input type="number" value={form.amount ?? ''} onChange={(e) => set('amount', e.target.value)} /></label>
+          <label>Vendor<input value={form.vendor ?? ''} onChange={(e) => set('vendor', e.target.value)} /></label>
+          <label>Category<select value={form.category ?? 'Other'} onChange={(e) => set('category', e.target.value)}>
+            {['Ingredients', 'Packaging', 'Rent', 'Utilities', 'Wages', 'Equipment', 'Other'].map((c) => <option key={c}>{c}</option>)}
+          </select></label>
+          <label>Date<input type="date" value={form.date ?? ''} onChange={(e) => set('date', e.target.value)} /></label>
+          <label>Paid by<select value={form.method ?? 'Cash'} onChange={(e) => set('method', e.target.value)}>
+            {['Cash', 'UPI', 'Card', 'Bank'].map((c) => <option key={c}>{c}</option>)}
+          </select></label>
+          <div className="row"><button type="button" className="btn btn-brand-sm" onClick={() => void save()}>Save</button><button type="button" className="btn btn-soft" onClick={() => setForm(null)}>Cancel</button></div>
+        </div>
+      ) : null}
+    </section>
+  )
+}

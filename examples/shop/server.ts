@@ -3,7 +3,7 @@
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import { defaultSettingsMiddleware, wrapLanguageModel } from 'ai'
 import { migrate, postgresFiles, postgresStorage } from '@teovo/db'
-import { builtinViews, createAssistant, defineTool, type Identity } from '@teovo/server'
+import { builtinViews, createAssistant, defineReader, defineTool, type Identity } from '@teovo/server'
 import { readFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import pg from 'pg'
@@ -71,6 +71,22 @@ const teovo = createAssistant({
     { path: '/products', title: 'Products', description: 'prices and stock', filters: { low: "'yes' to show only products running low or out of stock" } },
     { path: '/expenses', title: 'Expenses', description: 'money spent, by category' },
   ],
+  // Readers: fill the expense form from a note, a recording or a bill photo (Expenses → Quick add). Same models and
+  // limits as the chat; the form is filled for the user to check, nothing is saved until they press Save.
+  readers: [
+    defineReader({
+      name: 'expense', accepts: ['text', 'image', 'audio'],
+      schema: z.object({
+        amount: z.number().nullable(), vendor: z.string().nullable(), category: z.enum(['Ingredients', 'Packaging', 'Rent', 'Utilities', 'Wages', 'Equipment', 'Other']).nullable(),
+        date: z.string().nullable(), method: z.enum(['Cash', 'UPI', 'Card', 'Bank']).nullable(), question: z.string().nullable(),
+      }),
+      instructions: 'Read one expense of a small bakery from a note, a recording or a bill photo. amount: the total paid in rupees. vendor: who was paid. ' +
+        'date: YYYY-MM-DD ("yesterday" counts back from today); null if not said. method: how it was paid, if said. question: a short question when the amount is missing, else null.',
+      after: (r) => ({ ...r, date: r.date && /^\d{4}-\d{2}-\d{2}$/.test(r.date) && r.date <= today() ? r.date : today() }),
+    }),
+  ],
+  // Voice to text for the chat's microphone and the Quick add microphone: Gemini hears it, in English.
+  voice: { hint: 'expenses and orders of a small bakery: milk, butter, flour, croissants, cakes; paid by UPI or cash' },
   tools: [
     defineTool({
       name: 'list_orders', kind: 'read',
@@ -273,6 +289,17 @@ const port = Number(process.env.PORT ?? 8788)
 createServer(async (req, res) => {
   try {
     if (req.url?.startsWith('/api/assistant/')) return await send(res, await teovo.fetch(await toRequest(req, res)))
+    if (req.url === '/api/shop/expenses' && req.method === 'POST') {
+      // The Quick add form's Save: what the person checked and saved (the reader only filled the form).
+      const chunks: Buffer[] = []
+      for await (const c of req) chunks.push(c as Buffer)
+      const v = JSON.parse(Buffer.concat(chunks).toString() || '{}') as { amount?: number; vendor?: string; category?: string; date?: string; method?: Method }
+      if (!(Number(v.amount) > 0) || !v.vendor?.trim()) { res.writeHead(400, { 'content-type': 'application/json' }); return res.end(JSON.stringify({ error: 'Amount and vendor are needed.' })) }
+      const id = Math.max(0, ...shop.expenses.map((e) => e.id)) + 1
+      shop.expenses.push({ id, amount: Number(v.amount), vendor: v.vendor.trim(), category: v.category || 'Other', date: v.date || today(), method: v.method || 'Cash' })
+      res.writeHead(200, { 'content-type': 'application/json' })
+      return res.end(JSON.stringify({ id }))
+    }
     if (req.url === '/api/shop') {
       res.writeHead(200, { 'content-type': 'application/json' })
       return res.end(JSON.stringify({

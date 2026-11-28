@@ -19,6 +19,7 @@ What to try:
 | I spent 450 on milk, paid by UPI | A filled-in form; correct it, send it, confirm the card |
 | How much does Riya owe? | Two customers are called Riya |
 | Take me to order 154 | A button that opens that screen |
+| Expenses → Quick add: "kal electricity bill bhara 2300 ka UPI se", or Say it, or Scan bill | Teovo's `expense` reader fills the form (₹2,300, Utilities, yesterday, UPI); check it and Save |
 | On an order's page: What is due here? | Answered from the open record |
 | Read Riya Sharma's note on order 147 and do what it says | The note tries to trick the assistant; nothing changes |
 | Switch to **Ravi · Staff**, then: change order 158's total | Staff never sees the owner-only tool |

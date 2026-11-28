@@ -66,7 +66,7 @@ export type CardState = {
 
 /** A ready-made chat panel. Unstyled apart from `tv-` class names; import '@teovo/react/styles.css' for defaults. */
 export function AssistantPanel(props: AssistantPanelProps) {
-  const { chat, newChat, suggestions, clearSuggestions, page, policy, noticeAccepted, acceptNotice, allowance, words, view, setView, leaveOutPage } = useAssistant()
+  const { chat, newChat, suggestions, clearSuggestions, page, policy, noticeAccepted, acceptNotice, allowance, words, view, setView, leaveOutPage, transcribe: transcribeAudio } = useAssistant()
   const [text, setText] = useState('')
   const busy = chat.status === 'submitted' || chat.status === 'streaming'
   const log = useRef<HTMLDivElement>(null)
@@ -110,8 +110,12 @@ export function AssistantPanel(props: AssistantPanelProps) {
   const low = props.showAllowance === false ? null : allowanceNote(allowance)
   const addSaid = (said: string) => setText((t) => (t ? `${t} ${said}` : said))
   const browserVoice = useVoice(addSaid, props.voiceLang)
-  const recorded = useRecorder(addSaid, props.transcribe)
-  const voice = props.transcribe ? recorded : { ...browserVoice, working: false }
+  // The server writes recordings down when its voice is set up (same English text as the app's VoiceButtons);
+  // else the app's own transcribe; else the browser's speech recognition.
+  const serverVoice = policy.voice ? transcribeAudio : undefined
+  const recorder = props.transcribe ?? serverVoice
+  const recorded = useRecorder(addSaid, recorder)
+  const voice = recorder ? recorded : { ...browserVoice, working: false }
 
   function ask(t: string) {
     if ((!t.trim() && !files.length) || busy || (policy.notice && !noticeAccepted)) return

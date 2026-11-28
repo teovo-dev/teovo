@@ -88,6 +88,20 @@ interface AssistantState {
   pageLeftOut: boolean
   /** Set by AssistantSheet: whether the open chat covers the page (a phone's bottom sheet). */
   setCovering: (covering: boolean) => void
+  /** Write a recording down (POST …/transcribe). Rejects with the sentence to show. Needs voice on the server. */
+  transcribe: (audio: Blob) => Promise<string>
+  /** Run a reader (POST …/read/:name): text, a picture or a recording in, its result out. Rejects with the sentence to show. */
+  read: <T = unknown>(name: string, input: ReadInput) => Promise<T>
+}
+
+/** What a reader is given: text, a picture or recording (File/Blob), or both. */
+export type ReadInput = string | File | Blob | { text?: string; file?: File | Blob }
+
+async function dataUrl(blob: Blob): Promise<string> {
+  const buf = new Uint8Array(await blob.arrayBuffer())
+  let s = ''
+  for (let i = 0; i < buf.length; i += 0x8000) s += String.fromCharCode(...buf.subarray(i, i + 0x8000))
+  return `data:${blob.type || 'application/octet-stream'};base64,${btoa(s)}`
 }
 
 const Ctx = createContext<AssistantState | null>(null)
@@ -317,16 +331,62 @@ export function AssistantProvider(props: AssistantProviderProps) {
     await chat.sendMessage({ text: words || 'What is this?', ...(files.length ? { files: files.map((f) => ({ type: 'file' as const, mediaType: f.mediaType, filename: f.name, url: f.url })) } : {}) })
   }, [chat, accepted, setOpen])
 
+  const sentence = async (res: Response, fallback: string) => ((await res.json().catch(() => ({}))) as { error?: string }).error ?? fallback
+
+  const transcribe = useCallback(async (audio: Blob) => {
+    const res = await request('/transcribe', { method: 'POST', headers: { 'content-type': audio.type || 'audio/webm' }, body: audio })
+    if (!res.ok) throw new Error(await sentence(res, 'Voice isn’t working right now. Type it instead.'))
+    return ((await res.json()) as { text: string }).text
+  }, [request])
+
+  const read = useCallback(async <T,>(name: string, input: ReadInput): Promise<T> => {
+    const given = typeof input === 'string' ? { text: input } : input instanceof Blob ? { file: input } : input
+    const body: Record<string, unknown> = {}
+    if (given.text?.trim()) body.text = given.text
+    if (given.file) {
+      const f = given.file
+      if (f.type.startsWith('image/')) {
+        // Pictures are made smaller first, like in the chat: phones take very large photos.
+        const small = await readFile(f instanceof File ? f : new File([f], 'picture.jpg', { type: f.type }))
+        body.image = { data: small.url, mediaType: small.mediaType }
+      } else if (f.type.startsWith('audio/') || f.type.startsWith('video/')) {
+        body.audio = { data: await dataUrl(f), mediaType: f.type.split(';')[0] }
+      } else throw new Error('Use a picture or a recording.')
+    }
+    const res = await request(`/read/${encodeURIComponent(name)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
+    if (!res.ok) throw new Error(await sentence(res, 'Could not read that. Try again, or fill it in by hand.'))
+    return ((await res.json()) as { result: T }).result
+  }, [request])
+
   const value = useMemo<AssistantState>(() => ({ chat, threadId, newChat, openThread, submitForm, request, setPage, page: currentPage, suggestions, clearSuggestions, decideCard, rate, policy, noticeAccepted: accepted, acceptNotice, allowance: allowanceItems, words, onAction: props.onAction,
-    runAction, open, setOpen, view, setView, ask, leaveOutPage, pageLeftOut, setCovering }),
+    runAction, open, setOpen, view, setView, ask, leaveOutPage, pageLeftOut, setCovering, transcribe, read }),
     [chat, threadId, newChat, openThread, submitForm, request, setPage, currentPage, suggestions, clearSuggestions, decideCard, rate, policy, accepted, acceptNotice, allowanceItems, words, props.onAction,
-      runAction, open, setOpen, view, ask, leaveOutPage, pageLeftOut, setCovering])
+      runAction, open, setOpen, view, ask, leaveOutPage, pageLeftOut, setCovering, transcribe, read])
   return <Ctx.Provider value={value}>{props.children}</Ctx.Provider>
 }
 
 /** The assistant's name from the server's config, or undefined (also outside a provider). */
 export function useAssistantName(): string | undefined {
   return useContext(Ctx)?.policy.name
+}
+
+/**
+ * A reader from a screen: read(input) runs it; result, busy and error follow. E.g. "describe a product" fills the
+ * form: const r = useReader<Draft>('product'); … await r.read(text).
+ */
+export function useReader<T = unknown>(name: string) {
+  const { read: run } = useAssistant()
+  const [result, setResult] = useState<T | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const read = useCallback(async (input: ReadInput): Promise<T | null> => {
+    setBusy(true); setError(null)
+    try { const r = await run<T>(name, input); setResult(r); return r }
+    catch (e) { setError(e instanceof Error ? e.message : String(e)); return null }
+    finally { setBusy(false) }
+  }, [run, name])
+  const reset = useCallback(() => { setResult(null); setError(null) }, [])
+  return { read, result, busy, error, reset }
 }
 
 /** The provider's state, or null outside one (for parts that also work on their own, like AssistantSheet). */
