@@ -1,6 +1,6 @@
 {
   "name": "@teovo/db",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Teovo Postgres tables, migrations and storage adapters",
   "license": "MIT",
   "type": "module",
@@ -31,7 +31,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@teovo/server": "^0.1.2",
+    "@teovo/server": "^0.1.3",
     "ai": "^7.0.183"
   },
   "devDependencies": {
