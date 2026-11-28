@@ -39,4 +39,31 @@ describe('supabaseFiles', () => {
     expect((await store.get('shop-1', file.id))?.bytes).toEqual(new Uint8Array([1, 2, 3]))
     expect(await store.get('shop-2', file.id)).toBeNull()
   })
+
+  it('removes pictures older than a date: the files in the bucket, then their rows', async () => {
+    const removed: string[][] = []
+    const client: SupabaseStorageLike = { storage: { from: () => ({
+      async upload() { return { error: null } },
+      async download() { return { data: null, error: null } },
+      async remove(paths) { removed.push(paths); return { error: null } },
+    }) } }
+    const rows = Array.from({ length: 130 }, (_, i) => ({ id: `f${i}`, tenantId: 'shop-1', userId: 'u1', threadId: 't1', mediaType: 'image/png', old: i < 120 }))
+    const forgotten: string[] = []
+    const store = supabaseFiles(client, 'assistant-files', {
+      put: async () => {}, get: async () => null,
+      olderThan: async (_before, limit) => rows.filter((r) => r.old && !forgotten.includes(r.id)).slice(0, limit),
+      forget: async (ids) => { forgotten.push(...ids) },
+    })
+    expect(await store.removeOlderThan!(new Date())).toBe(120)
+    expect(removed.map((r) => r.length)).toEqual([100, 20])
+    expect(removed[0]![0]).toBe('shop-1/u1/t1/f0')
+    expect(forgotten).toHaveLength(120)
+  })
+
+  it('removes nothing when the index cannot list by age', async () => {
+    const client: SupabaseStorageLike = { storage: { from: () => ({
+      async upload() { return { error: null } }, async download() { return { data: null, error: null } }, async remove() { return { error: null } },
+    }) } }
+    expect(await supabaseFiles(client, 'b', { put: async () => {}, get: async () => null }).removeOlderThan!(new Date())).toBe(0)
+  })
 })

@@ -1,3 +1,4 @@
+import type { StoredFile } from './files.js'
 import type { Schema } from 'ai'
 import type { z } from 'zod'
 
@@ -65,6 +66,13 @@ export interface ToolContext<DB = unknown> {
    * it can't be: then don't do the costly part, and say so. Undefined when the app has no spend rules.
    */
   reserve?: (amount: number, reason?: string) => Promise<boolean>
+  /**
+   * The pictures on the message this reply answers (only while chatting, and only when the assistant keeps files).
+   * A propose tool can put an id in its card's payload, e.g. the bill a "save this expense" card came from.
+   */
+  files?: { id: string; mediaType: string; filename?: string }[]
+  /** Read a picture this person shared, by id (from `files`). Null when it is missing, removed or someone else's. */
+  file?: (id: string) => Promise<StoredFile | null>
 }
 
 type ToolResult<K extends ToolKind> = K extends 'propose' ? Proposal : K extends 'action' ? Action : unknown
@@ -85,6 +93,8 @@ export interface TeovoTool<K extends ToolKind = ToolKind, I = any, DB = any> {
    * a card prepared before a deploy is migrated (or refused) by the applier instead of being applied wrongly.
    */
   version?: number
+  /** What the chat shows while this tool runs, as a past-tense step, e.g. "Looked at the order". Default: "Using <name>". */
+  label?: string
   /**
    * For read tools: the app's own pages for the records this result came from, shown under the answer as links
    * ("From: Order #142"). Up to 5 per reply. Paths are the app's own (they go to onAction as navigate).

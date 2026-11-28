@@ -43,6 +43,10 @@ export function supabaseFiles(client: SupabaseStorageLike, bucket: string, index
   get(tenantId: string, id: string): Promise<Omit<StoredFile, 'bytes'> | null>
   /** The owner rows to delete with wipe(); without it, wipe leaves the bucket alone. */
   list?(tenantId: string, userId?: string): Promise<Omit<StoredFile, 'bytes'>[]>
+  /** Up to `limit` owner rows older than this, oldest first; with forget, lets removeOldFiles clear the bucket. */
+  olderThan?(before: Date, limit: number): Promise<Omit<StoredFile, 'bytes'>[]>
+  /** Delete these owner rows, once their files are gone from the bucket. */
+  forget?(ids: string[]): Promise<void>
 }): FileStore {
   const path = (f: Pick<StoredFile, 'tenantId' | 'userId' | 'threadId' | 'id'>) => `${f.tenantId}/${f.userId}/${f.threadId}/${f.id}`
   return {
@@ -58,6 +62,20 @@ export function supabaseFiles(client: SupabaseStorageLike, bucket: string, index
       const { data, error } = await client.storage.from(bucket).download(path(meta))
       if (error || !data) return null
       return { ...meta, bytes: new Uint8Array(await data.arrayBuffer()) }
+    },
+    async removeOlderThan(before) {
+      if (!index.olderThan || !index.forget || !client.storage.from(bucket).remove) return 0
+      let n = 0
+      for (;;) {
+        const old = await index.olderThan(before, 100)
+        if (!old.length) return n
+        // The files first, then their rows: a failure leaves rows that the next run tries again.
+        const { error } = await client.storage.from(bucket).remove!(old.map(path))
+        if (error) throw new Error(`Could not delete the pictures: ${error.message}`)
+        await index.forget(old.map((f) => f.id))
+        n += old.length
+        if (old.length < 100) return n
+      }
     },
     async removeFor(tenantId, userId) {
       const remove = client.storage.from(bucket).remove
