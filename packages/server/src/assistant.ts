@@ -680,6 +680,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     return json(200, {
       pictures: p.pictures !== false && Boolean(config.attachments),
       ...(config.name?.trim() ? { name: config.name.trim() } : {}),
+      ...(config.formats?.locale ? { locale: config.formats.locale } : {}),
       ...(p.notice ? { notice: p.notice, noticeId: await noticeId(p.notice) } : {}),
     })
   }

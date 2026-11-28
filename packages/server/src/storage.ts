@@ -22,6 +22,10 @@ export interface StoredCard extends Proposal {
    * The panel labels the card so the user checks it before confirming.
    */
   untrustedSources?: string[]
+  /** Only in the answer to a confirm, never stored: what applying it said, e.g. "Sale #12 saved". */
+  note?: string
+  /** Only in the answer to a confirm, never stored: where to see the result, e.g. { label: 'Open', to: '/sales/12' }. */
+  link?: { label: string; to: string }
 }
 
 export type CardStatus = 'shown' | 'confirmed' | 'skipped' | 'undone' | 'expired' | 'waiting_for_approval'

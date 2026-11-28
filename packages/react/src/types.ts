@@ -36,6 +36,12 @@ export interface Card {
   /** A change to many records: each row's own before and after. */
   items?: { label: string; before?: Record<string, unknown>; after?: Record<string, unknown> }[]
   version?: number
+  /** The change in plain sentences, written by the app's code. */
+  lines?: string[]
+  /** After confirming (only in the answer to it): what applying it said, e.g. "Sale #12 saved". */
+  note?: string
+  /** After confirming: where to see the result, e.g. { label: 'Open', to: '/sales/12' }. */
+  link?: { label: string; to: string }
 }
 
 /** One conversation in the history list. */
@@ -70,7 +76,7 @@ export interface Formats { locale: string; currency: string; timeZone: string }
 export type TeovoMessage = UIMessage<{ runId?: string; threadId?: string; formats?: Formats; stopped?: boolean }, TeovoData>
 
 /** What the tenant asks of people before they chat (GET …/policy). */
-export interface Policy { /** The assistant's name from the server's config. */ name?: string; notice?: string; noticeId?: string; pictures: boolean }
+export interface Policy { /** The assistant's name from the server's config. */ name?: string; /** The server's formats locale, e.g. 'en-IN'. */ locale?: string; notice?: string; noticeId?: string; pictures: boolean }
 
 /** One limit and how much of it is used (GET …/allowance). */
 export interface AllowanceItem { scope: 'user' | 'tenant'; unit: 'messages' | 'input_tokens' | 'output_tokens' | 'neurons'; period: 'day' | 'month'; limit: number; used: number }

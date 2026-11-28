@@ -13,8 +13,6 @@ const PATHS: Record<string, ReactNode> = {
   spark: <path d="M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6" />,
   note: <><path d="M5 4h14v12l-4 4H5z" /><path d="M15 20v-4h4" /></>,
   alert: <><path d="M12 3 2 20h20z" /><path d="M12 10v4M12 17v.5" /></>,
-  dock: <><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M14 4v16" /><path d="M14 4h5a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-5z" fill="currentColor" fillOpacity="0.18" stroke="none" /></>,
-  float: <><rect x="3" y="4" width="18" height="16" rx="2" /><rect x="11.5" y="6.75" width="7" height="10.5" rx="1.5" fill="currentColor" fillOpacity="0.18" /></>,
 }
 
 export function Icon({ name, size = 18 }: { name: keyof typeof PATHS; size?: number }) {

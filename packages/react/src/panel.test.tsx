@@ -7,7 +7,7 @@ import userEvent from '@testing-library/user-event'
 import { MockLanguageModelV4 } from 'ai/test'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
-import { AssistantPanel, AssistantProvider, AssistantSheet, complete, ThreadList, useAssistantContext, type AssistantProviderProps } from './index'
+import { AssistantHeader, AssistantPanel, AssistantProvider, AssistantSheet, complete, ThreadList, useAssistant, useAssistantContext, type AssistantProviderProps } from './index'
 
 const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } }
 const streamOf = (parts: unknown[]) => ({ stream: new ReadableStream({ start(c) { for (const p of parts) c.enqueue(p as LanguageModelV4StreamPart); c.close() } }) })
@@ -47,7 +47,7 @@ async function ask(text: string) {
   await userEvent.click(screen.getByRole('button', { name: 'Send' }))
 }
 
-afterEach(() => { cleanup(); gate = undefined })
+afterEach(() => { cleanup(); gate = undefined; localStorage.clear(); sessionStorage.clear() })
 
 describe('one card for many records', () => {
   it('lists each record\'s change with the old value struck out, and a count', async () => {
@@ -208,13 +208,13 @@ describe('page label', () => {
   it('shows which page the assistant sees, follows the page, and can be hidden or reworded', async () => {
     const s = server([])
     const view = render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><Filtered unpaid /><AssistantPanel /></AssistantProvider>)
-    await waitFor(() => expect(document.querySelector('.tv-page')?.textContent).toBe('On Orders · filter: unpaid · selected: 0'))
+    await waitFor(() => expect(document.querySelector('.tv-page span')?.textContent).toBe('On Orders · filter: unpaid · selected: 0'))
     view.rerender(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><Filtered unpaid={false} /><AssistantPanel /></AssistantProvider>)
-    await waitFor(() => expect(document.querySelector('.tv-page')?.textContent).toBe('On Orders · selected: 0'))
+    await waitFor(() => expect(document.querySelector('.tv-page span')?.textContent).toBe('On Orders · selected: 0'))
     view.rerender(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><AssistantPanel /></AssistantProvider>)
     await waitFor(() => expect(document.querySelector('.tv-page')).toBeNull())   // no page reported: no label
     view.rerender(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><Screen path="/orders/142" id="142" /><AssistantPanel pageLabel={(p) => `Order #${p.record?.id}`} /></AssistantProvider>)
-    await waitFor(() => expect(document.querySelector('.tv-page')?.textContent).toBe('Order #142'))
+    await waitFor(() => expect(document.querySelector('.tv-page span')?.textContent).toBe('Order #142'))
     view.rerender(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><Screen path="/orders/142" id="142" /><AssistantPanel pageLabel={false} /></AssistantProvider>)
     expect(document.querySelector('.tv-page')).toBeNull()
   })
@@ -680,5 +680,87 @@ describe('the name and the credit line', () => {
     const open = screen.getByRole('button', { name: 'Help' })
     expect(open.querySelector('svg')).toBeNull()
     expect(document.querySelector('.tv-powered')).toBeNull()
+  })
+})
+
+
+describe('chat UI the SDK owns', () => {
+  it('switches to the earlier chats from the header, opens one, and comes back to the chat', async () => {
+    const s = server([say('Sales are ₹950.')])
+    render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><AssistantHeader /><AssistantPanel /></AssistantProvider>)
+    await ask('sales?')
+    await screen.findByText('Sales are ₹950.')
+    await userEvent.click(screen.getByRole('button', { name: 'Earlier chats' }))
+    expect(screen.getByText('Earlier chats', { selector: '.tv-header-title' })).toBeTruthy()
+    const row = await screen.findByText('sales?', { selector: '.tv-thread-title' })
+    await userEvent.click(screen.getByRole('button', { name: 'Back to chat' }))
+    expect(screen.getByText('Sales are ₹950.')).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: 'Earlier chats' }))
+    await userEvent.click((await screen.findByText('sales?', { selector: '.tv-thread-title' })).closest('button')!)
+    expect(await screen.findByText('Sales are ₹950.')).toBeTruthy()
+    expect(row).toBeTruthy()
+  })
+
+  it('remembers the conversation in this browser, so a new provider (a reload) continues it', async () => {
+    const s = server([say('First.'), say('Second.')])
+    const view = render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch} rememberThread="shop.chat"><AssistantPanel /></AssistantProvider>)
+    await ask('one')
+    await screen.findByText('First.')
+    const id = localStorage.getItem('shop.chat')
+    expect(id).toBeTruthy()
+    view.unmount()
+    render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch} rememberThread="shop.chat"><AssistantPanel /></AssistantProvider>)
+    expect(await screen.findByText('First.')).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: 'New chat' }))
+    expect(localStorage.getItem('shop.chat')).toBeNull()
+  })
+
+  it('leaves the screen out when the user presses × on the page chip', async () => {
+    const s = server([say('ok')])
+    render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><Screen path="/orders/142" id="142" /><AssistantPanel /></AssistantProvider>)
+    await waitFor(() => expect(document.querySelector('.tv-page')).toBeTruthy())
+    await userEvent.click(screen.getByRole('button', { name: 'Don’t use this screen' }))
+    expect(document.querySelector('.tv-page')).toBeNull()
+    await ask('hi')
+    await screen.findByText('ok')
+    expect(s.bodies.at(-1).page).toBeUndefined()
+  })
+
+  it('ask() opens the chat and sends, from a button anywhere in the app', async () => {
+    const s = server([say('Sales are ₹950.')])
+    function Chip() { const { ask: send } = useAssistant(); return <button type="button" onClick={() => void send('How are sales?')}>Sales chip</button> }
+    render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><Chip /><AssistantSheet><AssistantPanel /></AssistantSheet></AssistantProvider>)
+    expect(screen.queryByRole('dialog')).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'Sales chip' }))
+    expect(screen.getByRole('dialog')).toBeTruthy()
+    expect(await screen.findByText('Sales are ₹950.')).toBeTruthy()
+    expect(s.bodies.at(-1).message.parts[0].text).toBe('How are sales?')
+  })
+
+  it('closes a chat that covers the screen when one of its buttons opens a screen', async () => {
+    const s = server([call('open_order', { no: 7 }), say('Here.')])
+    const onAction = vi.fn()
+    render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch} onAction={onAction}><AssistantSheet modal><AssistantPanel /></AssistantSheet></AssistantProvider>)
+    await userEvent.click(screen.getByRole('button', { name: 'Ask' }))
+    await ask('open 7')
+    await userEvent.click(await screen.findByRole('button', { name: 'Open order #7' }))
+    expect(onAction).toHaveBeenCalledWith(expect.objectContaining({ action: 'navigate', args: { to: '/orders/7' } }))
+    expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it("shows a card's lines, and after Confirm the app's note and a link to the result", async () => {
+    const s = server([call('sale', {}), say('Ready.')], true, {}, {
+      tools: [defineTool({ name: 'sale', kind: 'propose', description: 'Sale', input: z.object({}), run: () => ({ kind: 'sale', title: 'New sale for Riya', payload: {}, lines: ['2 × Belgian 500 ml — ₹760', 'Paid by GPay'] }) })],
+      cards: { sale: { apply: () => ({ note: 'Sale #12 saved', link: { label: 'Open', to: '/sales/12' } }) } },
+    })
+    const onAction = vi.fn()
+    mount({ fetch: s.fetch, onAction })
+    await ask('sale')
+    const card = await screen.findByRole('group', { name: 'New sale for Riya' })
+    expect(Array.from(card.querySelectorAll('.tv-card-lines li')).map((l) => l.textContent)).toEqual(['2 × Belgian 500 ml — ₹760', 'Paid by GPay'])
+    await userEvent.click(screen.getByRole('button', { name: 'Confirm' }))
+    expect(await screen.findByText('Sale #12 saved')).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: 'Open' }))
+    expect(onAction).toHaveBeenCalledWith({ label: 'Open', action: 'navigate', args: { to: '/sales/12' } })
   })
 })

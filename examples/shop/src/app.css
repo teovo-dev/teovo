@@ -188,9 +188,3 @@ a.list-row:hover { background: #fbf8f5; }
   html[data-tv-sheet='docked'] .tv-sheet-open { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { .app { transition: none; } }
-
-/* The chat header: Chat / History tabs, and the switch between docked and floating. */
-.sheet-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.layout-btn { display: inline-grid; place-items: center; width: 34px; height: 34px; border: 0; border-radius: 9px; background: none; color: var(--muted); cursor: pointer; }
-.layout-btn:hover { background: var(--gray-bg); color: var(--ink); }
-@media (max-width: 640px) { .layout-btn { display: none; } }

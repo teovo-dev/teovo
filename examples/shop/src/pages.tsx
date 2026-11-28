@@ -1,11 +1,10 @@
-import { useAssistantContext } from '@teovo/react'
-import { createContext, useContext, useEffect, useState } from 'react'
+import { useAssistant, useAssistantContext } from '@teovo/react'
+import { useEffect, useState } from 'react'
 import { addDays, ago, longDate, money, shortDate, type Expense, type Order, type Product, type Shop, type Status } from './data.js'
 import { Avatar, Empty, Icon, Meter, PageHead, Pill, Stat, Tabs, payState } from './ui.js'
 
-/** Opens the assistant, and sends the text if there is one. */
-export const AskContext = createContext<(text?: string) => void>(() => {})
-const useAsk = () => useContext(AskContext)
+/** Opens the assistant, and sends the text if there is one (Teovo's ask). */
+const useAsk = () => { const { ask } = useAssistant(); return (text?: string) => void ask(text) }
 const go = (to: string) => { location.hash = to }
 
 function AskButton({ text, children }: { text?: string; children: string }) {

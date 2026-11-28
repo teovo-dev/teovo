@@ -1,5 +1,9 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
-import { useAssistantName } from './provider.js'
+import { AssistantHeader } from './header.js'
+import { SPARKLE } from './icons.js'
+import { useOptionalAssistant } from './provider.js'
+
+export { SPARKLE } from './icons.js'
 
 /** The app's look, as CSS variables on the panel. Anything left out keeps the default in styles.css. */
 export interface Theme {
@@ -34,7 +38,7 @@ export interface AssistantSheetProps {
   label?: string
   /** The open button's icon. Default an AI sparkle; null for none. */
   icon?: ReactNode
-  /** What the header shows: a title, or the app's own controls (e.g. Chat / History tabs). Default: the label. */
+  /** The header's title. Default: the assistant's name from the server's config, else "Assistant". */
   header?: ReactNode
   /** Keyboard shortcut to open and close, with Ctrl (Windows, Linux) or ⌘ (Mac). Default 'k'; null for none. */
   shortcut?: string | null
@@ -57,16 +61,16 @@ export interface AssistantSheetProps {
    * gets data-tv-sheet="floating".
    */
   layout?: 'panel' | 'floating'
+  /** A switch in the header between the docked panel and the floating window; the person's pick is remembered. Default true. */
+  layoutSwitch?: boolean
+  /** A History button in the header for earlier conversations (needs AssistantProvider). Default true. */
+  history?: boolean
 }
 
-/** The AI sparkle (one large star, two small): the open button's default icon, and the mark on the steps line. */
-export const SPARKLE = (
-  <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-    <path d="M10 3.5c.4 3.6 2.4 5.6 6 6-3.6.4-5.6 2.4-6 6-.4-3.6-2.4-5.6-6-6 3.6-.4 5.6-2.4 6-6z" />
-    <path d="M18 13c.2 1.8 1.2 2.8 3 3-1.8.2-2.8 1.2-3 3-.2-1.8-1.2-2.8-3-3 1.8-.2 2.8-1.2 3-3z" />
-    <path d="M18.5 2.5c.15 1.2.8 1.85 2 2-1.2.15-1.85.8-2 2-.15-1.2-.8-1.85-2-2 1.2-.15 1.85-.8 2-2z" />
-  </svg>
-)
+const LAYOUT_KEY = 'teovo:layout'
+const savedLayout = (): 'panel' | 'floating' | null => {
+  try { const v = localStorage.getItem(LAYOUT_KEY); return v === 'panel' || v === 'floating' ? v : null } catch { return null }
+}
 
 const PHONE = '(max-width: 640px)'
 /** Docked panel width on wide screens. */
@@ -89,15 +93,17 @@ function usePhone() {
  * sheet on phones. Escape closes it, and focus goes back to the button.
  */
 export function AssistantSheet(props: AssistantSheetProps) {
+  const ctx = useOptionalAssistant()
   const [own, setOwn] = useState(false)
-  const open = props.open ?? own
-  const name = useAssistantName()
+  // The app's own control first, then the provider's (so a button anywhere can open it), then its own.
+  const open = props.open ?? ctx?.open ?? own
+  const name = ctx?.policy.name
   const label = props.label ?? (name ? `Ask ${name}` : 'Ask')
   const phone = usePhone()
   const modal = props.modal === undefined || props.modal === 'phone' ? phone : props.modal
   const button = useRef<HTMLButtonElement>(null)
   const sheet = useRef<HTMLDivElement>(null)
-  const set = (v: boolean) => { setOwn(v); props.onOpenChange?.(v) }
+  const set = (v: boolean) => { setOwn(v); ctx?.setOpen(v); props.onOpenChange?.(v) }
   const latest = useRef(set)
   latest.current = set
 
@@ -121,8 +127,18 @@ export function AssistantSheet(props: AssistantSheetProps) {
     return () => window.removeEventListener('keydown', onKey)
   }, [open, modal, props.shortcut])
 
+  // The person's pick of docked or floating, when the switch is on; else the app's.
+  const [picked, setPicked] = useState(savedLayout)
+  const switchable = props.layoutSwitch !== false
+  const layout = (switchable ? picked : null) ?? props.layout ?? 'panel'
+  const pick = (l: 'panel' | 'floating') => { setPicked(l); try { localStorage.setItem(LAYOUT_KEY, l) } catch { /* not remembered */ } }
+
+  // Tell the provider when the chat covers the page, so opening a screen from it closes it.
+  const setCovering = ctx?.setCovering
+  useEffect(() => { setCovering?.(open && modal) }, [setCovering, open, modal])
+
   // Docked: tell the page, so it can make room for the panel instead of sitting under it.
-  const floating = props.layout === 'floating'
+  const floating = layout === 'floating'
   const beside = open && !modal ? (floating ? 'floating' : 'docked') : null
   useEffect(() => {
     if (!beside || typeof document === 'undefined') return
@@ -151,12 +167,17 @@ export function AssistantSheet(props: AssistantSheetProps) {
           {modal ? <div className="tv-sheet-backdrop" onClick={() => set(false)} /> : null}
           <div ref={sheet} id="tv-sheet" className={modal ? 'tv-sheet' : floating ? 'tv-sheet tv-sheet-floating' : 'tv-sheet tv-sheet-docked'} role="dialog" aria-modal={modal} aria-label={name ?? 'Assistant'}
             style={modal || floating ? undefined : { width: `min(${SHEET_WIDTH}, 100vw)` }}>
-            <div className="tv-sheet-header">
-              <div className="tv-sheet-title">{props.header ?? name ?? props.label ?? 'Assistant'}</div>
-              <button type="button" className="tv-sheet-close" aria-label={`Close ${name ?? 'assistant'}`} onClick={() => set(false)}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
-              </button>
-            </div>
+            {ctx ? (
+              <AssistantHeader className="tv-sheet-header" title={props.header} history={props.history} onClose={() => set(false)}
+                {...(switchable && !modal ? { layout, onLayout: pick } : {})} />
+            ) : (
+              <div className="tv-sheet-header tv-header">
+                <div className="tv-header-title">{props.header ?? props.label ?? 'Assistant'}</div>
+                <button type="button" className="tv-header-btn tv-sheet-close" aria-label="Close assistant" onClick={() => set(false)}>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+                </button>
+              </div>
+            )}
             <div className="tv-sheet-body">{props.children}</div>
           </div>
         </>

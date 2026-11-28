@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, describe, expect, it } from 'vitest'
 import { AssistantSheet, Markdown } from './index'
 
-afterEach(cleanup)
+afterEach(() => { cleanup(); localStorage.clear(); sessionStorage.clear() })
 
 describe('Markdown', () => {
   it('draws the common shapes of a reply', () => {

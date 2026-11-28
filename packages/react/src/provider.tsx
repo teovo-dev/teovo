@@ -1,6 +1,7 @@
 import { useChat } from '@ai-sdk/react'
 import { DefaultChatTransport } from 'ai'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { readFile } from './input.js'
 import type { Action, AllowanceItem, Card, CardDecision, Page, Policy, Suggestions, TeovoMessage, ThreadSummary } from './types.js'
 
 export interface AssistantProviderProps {
@@ -22,7 +23,22 @@ export interface AssistantProviderProps {
   onAction?: (action: Action) => void
   /** Replace fetch, e.g. in tests or to call the handler in-process. */
   fetch?: typeof fetch
+  /**
+   * Remember the open conversation in this browser, so a reload continues it: the localStorage key, e.g. one per
+   * business ('shop.chat.' + businessId). Default 'teovo:thread'. false: don't. A threadId passed in wins.
+   */
+  rememberThread?: string | false
+  /** Whether the chat starts open, until the person opens or closes it (remembered for the browser tab). Default false. */
+  defaultOpen?: boolean
   children: ReactNode
+}
+
+/** Read and write browser storage; private mode or blocked storage just means nothing is remembered. */
+const store = {
+  get: (s: 'local' | 'session', key: string): string | null => { try { return (s === 'local' ? localStorage : sessionStorage).getItem(key) } catch { return null } },
+  set: (s: 'local' | 'session', key: string, value: string | null) => {
+    try { const st = s === 'local' ? localStorage : sessionStorage; if (value === null) st.removeItem(key); else st.setItem(key, value) } catch { /* not remembered */ }
+  },
 }
 
 interface AssistantState {
@@ -56,13 +72,42 @@ interface AssistantState {
   /** The app's words the message box completes (GET …/completions). */
   words: string[]
   onAction: AssistantProviderProps['onAction']
+  /** Run a button the assistant offered: the app's onAction, then (a screen opened on a phone) the chat closes. */
+  runAction: (action: Action) => void
+  /** Whether the chat is open (AssistantSheet follows this unless the app controls it). */
+  open: boolean
+  setOpen: (open: boolean) => void
+  /** What the panel shows: the conversation, or the list of earlier ones. */
+  view: 'chat' | 'history'
+  setView: (view: 'chat' | 'history') => void
+  /** Open the chat and send this, with pictures if given, e.g. from a button on a screen or a shared screenshot. */
+  ask: (text?: string, opts?: { files?: (File | Blob)[] }) => Promise<void>
+  /** Stop telling the assistant about the screen the user is on, until they move to another one. */
+  leaveOutPage: () => void
+  /** True while the user has left the current screen out. */
+  pageLeftOut: boolean
+  /** Set by AssistantSheet: whether the open chat covers the page (a phone's bottom sheet). */
+  setCovering: (covering: boolean) => void
 }
 
 const Ctx = createContext<AssistantState | null>(null)
 
 export function AssistantProvider(props: AssistantProviderProps) {
-  const [threadId, setThreadId] = useState(props.threadId)
-  const thread = useRef(props.threadId)
+  const threadKey = props.rememberThread === false ? null : (props.rememberThread ?? 'teovo:thread')
+  const keyRef = useRef(threadKey)
+  keyRef.current = threadKey
+  const remember = useCallback((id: string | null) => { if (keyRef.current) store.set('local', keyRef.current, id) }, [])
+  const [startThread] = useState(() => props.threadId ?? (threadKey ? store.get('local', threadKey) ?? undefined : undefined))
+  const [threadId, setThreadId] = useState(startThread)
+  const thread = useRef(startThread)
+  const [open, setOpenState] = useState(() => { const v = store.get('session', 'teovo:open'); return v === null ? props.defaultOpen === true : v === '1' })
+  const setOpen = useCallback((v: boolean) => { setOpenState(v); store.set('session', 'teovo:open', v ? '1' : '0') }, [])
+  const [view, setView] = useState<'chat' | 'history'>('chat')
+  const covering = useRef(false)
+  const setCovering = useCallback((v: boolean) => { covering.current = v }, [])
+  const [leftOut, setLeftOut] = useState<string | null>(null)
+  const leftOutRef = useRef<string | null>(null)
+  leftOutRef.current = leftOut
   const page = useRef<Page | undefined>(undefined)
   const [pageKey, setPageKey] = useState('')
   const [suggestions, setSuggestions] = useState<Suggestions>({ suggestions: [] })
@@ -82,13 +127,17 @@ export function AssistantProvider(props: AssistantProviderProps) {
       return typeof h === 'function' ? await h() : (h ?? {})
     },
     // Only the new message goes up: the server keeps the history and checks it belongs to this person.
-    prepareSendMessagesRequest: ({ messages }) => ({ body: { threadId: thread.current, message: messages.at(-1), page: page.current, ...(consent.current ? { consent: consent.current } : {}) } }),
+    prepareSendMessagesRequest: ({ messages }) => {
+      const pg = page.current && page.current.path === leftOutRef.current ? undefined : page.current
+      return { body: { threadId: thread.current, message: messages.at(-1), page: pg, ...(consent.current ? { consent: consent.current } : {}) } }
+    },
     fetch: async (input, init) => {
       const res = await (latest.current.fetch ?? fetch)(input, init)
       const id = res.headers.get('x-teovo-thread')
       if (id && id !== thread.current) {
         thread.current = id
         setThreadId(id)
+        remember(id)
         latest.current.onThread?.(id)
       }
       return res
@@ -142,8 +191,9 @@ export function AssistantProvider(props: AssistantProviderProps) {
     thread.current = id
     setThreadId(id)
     chat.setMessages(body.messages)
+    remember(id)
     latest.current.onThread?.(id)   // so the app can remember it, and a reload continues this conversation
-  }, [chat, request])
+  }, [chat, request, remember])
 
   const submitForm = useCallback(async (messageId: string, viewId: string, values: Record<string, unknown>) => {
     if (!thread.current) throw new Error('Send a message first.')
@@ -162,19 +212,22 @@ export function AssistantProvider(props: AssistantProviderProps) {
   }, [chat, request])
 
   // Continue the conversation the app passed in, e.g. from the URL.
-  const initial = useRef(props.threadId)
+  const initial = useRef(startThread)
   useEffect(() => {
     const id = initial.current
     initial.current = undefined
-    if (id) openThread(id).catch(() => { thread.current = undefined; setThreadId(undefined) })
-  }, [openThread])
+    // A remembered conversation that is gone (removed, or another person's on a shared browser): start fresh.
+    if (id) openThread(id).catch(() => { if (thread.current === id) { thread.current = undefined; setThreadId(undefined) } remember(null) })
+  }, [openThread, remember])
 
   const newChat = useCallback(() => {
     chat.stop()
     thread.current = undefined
     setThreadId(undefined)
+    remember(null)
     chat.setMessages([])
-  }, [chat])
+    setView('chat')
+  }, [chat, remember])
 
   const setPage = useCallback((p: Page | undefined) => {
     page.current = p
@@ -242,15 +295,43 @@ export function AssistantProvider(props: AssistantProviderProps) {
     return body.card ?? {}
   }, [])
 
-  const currentPage = useMemo(() => (pageKey && pageKey !== 'null' ? JSON.parse(pageKey) as Page : undefined), [pageKey])
-  const value = useMemo<AssistantState>(() => ({ chat, threadId, newChat, openThread, submitForm, request, setPage, page: currentPage, suggestions, clearSuggestions, decideCard, rate, policy, noticeAccepted: accepted, acceptNotice, allowance: allowanceItems, words, onAction: props.onAction }),
-    [chat, threadId, newChat, openThread, submitForm, request, setPage, currentPage, suggestions, clearSuggestions, decideCard, rate, policy, accepted, acceptNotice, allowanceItems, words, props.onAction])
+  const parsedPage = useMemo(() => (pageKey && pageKey !== 'null' ? JSON.parse(pageKey) as Page : undefined), [pageKey])
+  const pageLeftOut = Boolean(parsedPage?.path && parsedPage.path === leftOut)
+  const currentPage = pageLeftOut ? undefined : parsedPage
+  const leaveOutPage = useCallback(() => setLeftOut(page.current?.path ?? null), [])
+
+  const runAction = useCallback((a: Action) => {
+    latest.current.onAction?.(a)
+    // On a phone the chat covers the screen it just opened: close it so the user sees that screen.
+    if (a.action === 'navigate' && covering.current) setOpen(false)
+  }, [setOpen])
+
+  const ask = useCallback(async (text?: string, opts: { files?: (File | Blob)[] } = {}) => {
+    setView('chat')
+    setOpen(true)
+    const files = await Promise.all((opts.files ?? []).map((f) => readFile(f instanceof File ? f : new File([f], 'picture.jpg', { type: f.type || 'image/jpeg' }))))
+    const words = text?.trim() ?? ''
+    if (!words && !files.length) return
+    // Not over a reply that is still coming, and not before the person has accepted the notice: the chat is open for them.
+    if (chat.status === 'streaming' || chat.status === 'submitted' || !accepted) return
+    await chat.sendMessage({ text: words || 'What is this?', ...(files.length ? { files: files.map((f) => ({ type: 'file' as const, mediaType: f.mediaType, filename: f.name, url: f.url })) } : {}) })
+  }, [chat, accepted, setOpen])
+
+  const value = useMemo<AssistantState>(() => ({ chat, threadId, newChat, openThread, submitForm, request, setPage, page: currentPage, suggestions, clearSuggestions, decideCard, rate, policy, noticeAccepted: accepted, acceptNotice, allowance: allowanceItems, words, onAction: props.onAction,
+    runAction, open, setOpen, view, setView, ask, leaveOutPage, pageLeftOut, setCovering }),
+    [chat, threadId, newChat, openThread, submitForm, request, setPage, currentPage, suggestions, clearSuggestions, decideCard, rate, policy, accepted, acceptNotice, allowanceItems, words, props.onAction,
+      runAction, open, setOpen, view, ask, leaveOutPage, pageLeftOut, setCovering])
   return <Ctx.Provider value={value}>{props.children}</Ctx.Provider>
 }
 
 /** The assistant's name from the server's config, or undefined (also outside a provider). */
 export function useAssistantName(): string | undefined {
   return useContext(Ctx)?.policy.name
+}
+
+/** The provider's state, or null outside one (for parts that also work on their own, like AssistantSheet). */
+export function useOptionalAssistant(): AssistantState | null {
+  return useContext(Ctx)
 }
 
 /** The conversation: messages, send, stop, status, newChat. For apps that draw their own panel. */

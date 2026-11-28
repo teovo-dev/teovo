@@ -31,6 +31,11 @@ export interface Proposal {
   fields?: CardField[]
   /** A change to many records in one card: each row's own before and after, shown as a list; confirmed and undone together. */
   items?: CardItem[]
+  /**
+   * The change in plain sentences, written by code, e.g. ['2 × Belgian 500 ml — ₹760', 'Paid by GPay']. Shown on the
+   * card above any before/after values; use it when the change is easier to read as lines than as fields.
+   */
+  lines?: string[]
   /** Which version of the tool made it (set by Teovo from defineTool's version). */
   version?: number
 }

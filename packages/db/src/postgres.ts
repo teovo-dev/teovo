@@ -15,6 +15,7 @@ const card = (r: any): StoredCard => {
   if (r.untrusted_sources) c.untrustedSources = r.untrusted_sources
   if (r.fields) c.fields = r.fields
   if (r.items) c.items = r.items
+  if (r.lines) c.lines = r.lines
   if (r.version !== null && r.version !== undefined) c.version = r.version
   return c
 }
@@ -69,9 +70,9 @@ export function postgresStorage(query: Query): Storage {
     },
     async saveCard(c: StoredCard) {
       await query(
-        `insert into tv_proposals (id, thread_id, run_id, kind, title, before, after, payload, status, untrusted_sources, fields, items, version) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        `insert into tv_proposals (id, thread_id, run_id, kind, title, before, after, payload, status, untrusted_sources, fields, items, version, lines) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
          on conflict (id) do nothing`,
-        [c.id, c.threadId, c.runId, c.kind, c.title, json(c.before), json(c.after), json(c.payload), c.status, json(c.untrustedSources), json(c.fields), json(c.items), c.version ?? null])
+        [c.id, c.threadId, c.runId, c.kind, c.title, json(c.before), json(c.after), json(c.payload), c.status, json(c.untrustedSources), json(c.fields), json(c.items), c.version ?? null, json(c.lines)])
     },
     async getCard(tenantId, userId, id) {
       if (!/^[0-9a-f-]{36}$/i.test(id)) return null
