@@ -11,6 +11,7 @@ import { toolsFor, type Action, type Identity, type RecordLink, type Proposal, t
 import { makeUntrusted, UNTRUSTED_RULE } from './untrusted.js'
 
 import { makeRedactor, type RedactOptions } from './redact.js'
+import { alertWatch, type AlertRules } from './alerts.js'
 import { checkForm, formHandler, formsText, missingFields, VIEWS_RULE, type FormData, type FormHandler, type FormSpec, type TeovoView } from './views.js'
 import { checkMessage, type AttachmentRules } from './attachments.js'
 import { FILE_SCHEME, loadFiles, picturesOnce, storeFiles, type FileRules } from './files.js'
@@ -152,6 +153,12 @@ export interface AssistantConfig<DB = unknown> {
   promptVersion?: string
   /** Tool inputs and outputs longer than this are cut in the run log (the model still sees all of it). Default 8000 characters. */
   logLimit?: number
+  /**
+   * Tell someone when too many replies fall back to the backup model or fail: one alert when it starts, one when it
+   * is over. `send` gets a ready sentence (postAlert(url) posts it to a Slack or Google Chat webhook). Counted per
+   * server over the last 15 minutes. Default: off.
+   */
+  alerts?: AlertRules
   on?: {
     error?: (error: unknown, ctx: { identity: Identity; threadId: string }) => void
     modelSwitch?: (from: string, error: unknown) => void
@@ -484,6 +491,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
   }
 
   const redact = makeRedactor(config.redact)
+  const watch = config.alerts ? alertWatch(config.alerts, config.name ?? 'Teovo', Date.now, (e) => config.on?.error?.(e, { identity: { tenantId: '', userId: '', role: '' }, threadId: '' })) : undefined
 
   async function chat(req: Request, ctx?: WaitUntil): Promise<Response> {
     const identity = await config.identify(req)
@@ -834,9 +842,11 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
         }
         // Tools only read, propose or offer buttons; none writes during a run, so switching model is always safe.
         let usedModel = first
+        let fellFrom: { model: string; error: unknown } | undefined   // for alerts: the first model that failed
         const model = fallbackModel(models, () => true, (from, e) => {
           const i = models.findIndex((m) => m.modelId === from)
           usedModel = models[i + 1] ?? usedModel
+          fellFrom ??= { model: from, error: e }
           config.on?.modelSwitch?.(from, e)
         }, timeouts.firstChunkMs)
         // Roles: which one the reply is now (none: its own models), the one it hands over to next, and each role's
@@ -853,6 +863,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
             const entry = { model: list[0]!, used: list[0]! }
             entry.model = fallbackModel(list, () => true, (from, e) => {
               entry.used = list[list.findIndex((m) => m.modelId === from) + 1] ?? entry.used
+              fellFrom ??= { model: from, error: e }
               config.on?.modelSwitch?.(from, e)
             }, timeouts.firstChunkMs)
             roleModels.set(name, (r = entry))
@@ -1054,6 +1065,14 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
 
         async function finish(status: 'done' | 'failed' | 'stopped', error?: unknown) {
           if (await (rc.owns?.() ?? true)) await rc.end({ status, model: answering().modelId, ...(error ? { error: error instanceof Error ? error.message : String(error) } : {}) })
+          if (watch && status !== 'stopped') {
+            const why = status === 'failed' ? error : fellFrom?.error
+            watch.record({
+              failed: status === 'failed', fellBack: !!fellFrom,
+              model: fellFrom?.model ?? (status === 'failed' ? answering().modelId : undefined),
+              ...(why ? { error: why instanceof Error ? why.message : String(why) } : {}),
+            })
+          }
           // Per model that answered (counted step by step); providers with their own cost unit report it per step
           // (Workers AI: neurons).
           const rows: UsageRow[] = []
