@@ -1,0 +1,38 @@
+name: Publish to npm
+# Push a version tag (e.g. v0.1.0) whose number matches every package's version, and the packages go to npm.
+# Needs the repository secret NPM_TOKEN: an npm "automation" token of an account that can publish to the @teovo
+# organization. See RELEASING.md.
+on:
+  push: { tags: ['v*'] }
+permissions:
+  contents: read
+  id-token: write   # npm provenance: the npm page shows which commit and workflow built each package
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env: { POSTGRES_PASSWORD: teovo, POSTGRES_DB: teovo_test }
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres" --health-interval 2s --health-timeout 5s --health-retries 20
+    env:
+      TEOVO_TEST_DATABASE_URL: postgres://postgres:teovo@127.0.0.1:5432/teovo_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, registry-url: 'https://registry.npmjs.org' }
+      - run: npm ci
+      - name: The tag matches every package's version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          for p in server react db cli; do
+            v=$(node -p "require('./packages/$p/package.json').version")
+            [ "$v" = "$tag" ] || { echo "packages/$p is $v, the tag is $tag"; exit 1; }
+          done
+      - run: npm run typecheck
+      - run: npm test
+      # In order: db needs server, the CLI needs db.
+      - run: npm publish --provenance -w packages/server -w packages/db -w packages/react -w packages/cli
+        env: { NODE_AUTH_TOKEN: '${{ secrets.NPM_TOKEN }}' }

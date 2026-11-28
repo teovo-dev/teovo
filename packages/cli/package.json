@@ -1,15 +1,57 @@
 {
   "name": "teovo",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Teovo command line: set up, migrate and prune the assistant's tables",
   "license": "MIT",
   "type": "module",
-  "repository": { "type": "git", "url": "git+https://github.com/teovo-dev/teovo.git", "directory": "packages/cli" },
-  "bin": { "teovo": "./dist/bin.js" },
-  "exports": { ".": { "types": "./dist/cli.d.ts", "import": "./dist/cli.js" } },
-  "files": ["dist"],
-  "scripts": { "build": "tsc -p tsconfig.json", "typecheck": "tsc -p tsconfig.json --noEmit" },
-  "publishConfig": { "access": "public" },
-  "dependencies": { "@teovo/db": "0.0.0", "pg": "^8.23.1" },
-  "devDependencies": { "@types/pg": "^8.23.1" }
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/teovo-dev/teovo.git",
+    "directory": "packages/cli"
+  },
+  "bin": {
+    "teovo": "./dist/bin.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/cli.d.ts",
+      "import": "./dist/cli.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "!src/**/*.test.ts",
+    "!src/**/*.test.tsx",
+    "!src/trials"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "prepack": "node ../../scripts/prepack.mjs"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "dependencies": {
+    "@teovo/db": "^0.1.0",
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1"
+  },
+  "homepage": "https://github.com/teovo-dev/teovo/tree/main/packages/cli#readme",
+  "bugs": {
+    "url": "https://github.com/teovo-dev/teovo/issues"
+  },
+  "keywords": [
+    "ai",
+    "assistant",
+    "cli",
+    "migrations",
+    "in-app-assistant"
+  ],
+  "engines": {
+    "node": ">=20"
+  }
 }
