@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { createAssistant, NO_SPEND, type SpendRules } from './assistant'
 import { memoryStorage } from './storage'
 import { callTool, chat, say, scriptedModel, type Step } from './testing'
-import { defineTool, type Identity } from './tools'
+import { defineTool, type Identity, type TeovoTool } from './tools'
 
 const nisha: Identity = { tenantId: 'shop', userId: 'nisha', role: 'staff' }
 
@@ -30,7 +30,7 @@ function wallet(balance: number) {
   return { w, rules }
 }
 
-function app(steps: Step[], spend: SpendRules, tools = [] as ReturnType<typeof defineTool>[]) {
+function app(steps: Step[], spend: SpendRules, tools: TeovoTool<any, any, any>[] = []) {
   const storage = memoryStorage()
   const teovo = createAssistant({ identify: () => nisha, asUser: () => null, instructions: 'Help.', storage, tools, models: [scriptedModel(steps)], spend })
   return { teovo, storage }
