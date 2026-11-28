@@ -38,7 +38,8 @@ a maintainer approves it with two-factor authentication.
 
    The workflow checks the tag matches every package's version, runs the type-check and all tests, and stages the
    packages in order (server, db, react, cli), with provenance.
-4. Approve each staged package on npmjs.com (Staged Packages) or with `npm stage approve`, using your 2FA code.
+4. Approve each staged package on npmjs.com (your account → Staged Packages) or with `npm stage list` and
+   `npm stage approve <stage-id>`, using your security key. Only then does the version go public.
 
 ## What each package ships
 

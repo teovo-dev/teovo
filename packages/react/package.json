@@ -1,6 +1,6 @@
 {
   "name": "@teovo/react",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Teovo React panel and screen-context hooks",
   "license": "MIT",
   "type": "module",
