@@ -217,6 +217,12 @@ const cardItemsVersions: Migration = {
 alter table tv_proposals add column if not exists version int;`,
 }
 
+/** A card's change in plain sentences (Proposal.lines). */
+const cardLines: Migration = {
+  id: '0013_card_lines',
+  sql: `alter table tv_proposals add column if not exists lines jsonb;`,
+}
+
 /** Pictures kept in an object store (Supabase Storage, R2) only need their owner row here, not the bytes. */
 const fileIndex: Migration = {
   id: '0008_file_index',
@@ -305,7 +311,7 @@ export function migrations(options: SchemaOptions = {}): Migration[] {
   else if (options.rls) list.push({ ...rlsMigration(tables, options.rls), id: `0100_rls_${suffix}` })
   // Tables added later get their rules in their own migration, so apps that already ran the ones above get them too.
   list.push(auditAndMisses, privacySwitches)
-  if (options.features?.proposals) list.push(cardItemsVersions)
+  if (options.features?.proposals) list.push(cardItemsVersions, cardLines)
   const later = ['tv_card_events', 'tv_misses']
   if (options.rls === 'server-only') list.push({ ...serverOnlyMigration(later), id: '0111_server_only_audit_misses' })
   else if (options.rls) list.push({ ...rlsMigration(later, options.rls), id: '0110_rls_audit_misses' })

@@ -119,7 +119,10 @@
 .tv-card-items s { color: var(--tv-muted); }
 .tv-item-change + .tv-item-change::before { content: ' · '; color: var(--tv-muted); }
 .tv-card-buttons button { flex: 1; }
-.tv-card-done { color: var(--tv-ok); font-size: 0.875em; font-weight: 500; display: flex; gap: 10px; align-items: center; }
+.tv-card-done { color: var(--tv-ok); font-size: 0.875em; font-weight: 500; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.tv-card-note::before { content: '✓ '; }
+/* The change in plain sentences (Proposal.lines). */
+.tv-card-lines { list-style: none; margin: 0 0 10px; padding: 0; display: flex; flex-direction: column; gap: 2px; font-size: 0.9375em; color: var(--tv-muted); }
 .tv-card-untrusted { font-size: 0.875em; color: var(--tv-muted); border-left: 3px solid #d97706; padding-left: 8px; }
 
 .tv-choices-options { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -218,6 +221,9 @@
 .tv-page { display: flex; align-items: center; gap: 6px; padding: 0 4px 6px; color: var(--tv-muted); font-size: 0.8125em; min-width: 0; }
 .tv-page svg { flex: none; width: 13px; height: 13px; }
 .tv-page span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The × that stops telling the assistant about this screen. */
+.tv-page-off { flex: none; border: 0; background: none; color: inherit; font: inherit; font-size: 1.1em; line-height: 1; padding: 0 4px; border-radius: 6px; cursor: pointer; }
+.tv-page-off:hover { background: var(--tv-subtle); color: var(--tv-fg); }
 .tv-composer {
   display: flex; flex-direction: column; border: 1px solid var(--tv-border); border-radius: 16px; background: var(--tv-bg);
   box-shadow: 0 1px 3px rgb(0 0 0 / 0.06); transition: border-color 0.15s, box-shadow 0.15s;
@@ -338,3 +344,14 @@
 .tv-powered { text-align: center; font-size: 11.5px; color: var(--tv-muted); padding: 0 12px 8px; }
 .tv-powered a { color: inherit; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; }
 .tv-powered a:hover { color: var(--tv-fg); }
+
+/* The chat's top bar (AssistantHeader): its name, History, the dock / float switch and close. */
+.tv-header { display: flex; align-items: center; gap: 6px; min-height: 56px; padding: 8px 8px 8px 14px; border-bottom: 1px solid var(--tv-border); background: var(--tv-bg); color: var(--tv-fg); font-family: var(--tv-font); }
+.tv-header-mark { display: inline-grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--tv-subtle); color: var(--tv-accent); flex: none; }
+.tv-header-mark svg { width: 15px; height: 15px; }
+.tv-header-title { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tv-header-btn { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 10px; background: none; border: 0; color: var(--tv-muted); cursor: pointer; }
+.tv-header-btn:hover, .tv-header-btn[aria-pressed='true'] { background: var(--tv-subtle); color: var(--tv-fg); }
+.tv-header-btn svg { width: 18px; height: 18px; }
+@media (max-width: 640px) { .tv-header-layout { display: none; } }
+.tv-panel-history { overflow: hidden; }

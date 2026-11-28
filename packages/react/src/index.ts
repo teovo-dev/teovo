@@ -1,5 +1,7 @@
 /** @teovo/react: the assistant panel, its provider, and the hook screens use to say where the user is. */
 export { AssistantProvider, useAssistant, useAssistantContext, useAssistantName, useThreads, type AssistantProviderProps } from './provider.js'
+export { AssistantHeader, type AssistantHeaderProps } from './header.js'
+export { SPARKLE } from './icons.js'
 export { ThreadList, type ThreadListProps } from './threads.js'
 export { defaultViews, formatValue, type CellFormat, type ViewComponent, type ViewPart, type ViewProps } from './views.js'
 export { readFile, shrinkPicture, SHRINK_BYTES, SHRINK_SIDE, useRecorder, useVoice, type PendingFile } from './input.js'

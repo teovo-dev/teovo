@@ -95,7 +95,13 @@ useAssistantContext({ path: '/orders/142', title: 'Order', record: { type: 'orde
 ```
 
 - `endpoint` must match the prefix where you mounted `teovo.fetch`.
-- Props are documented in `packages/react/src/provider.tsx`, `panel.tsx` and `sheet.tsx`.
+- Props are documented in `packages/react/src/provider.tsx`, `panel.tsx`, `sheet.tsx` and `header.tsx`.
+- **Don't build chat UI in the app.** Teovo already has the header (name, History, dock/float, close), earlier
+  chats, the remembered conversation (`rememberThread`), opening and sending from anywhere (`useAssistant().ask`),
+  the page chip with its × , cards with `lines` and an after-confirm `note`/`link`, and closing the phone chat when
+  a button opens a screen. If the chat has its own place (a full page, a side column) instead of `AssistantSheet`,
+  put `<AssistantHeader />` above `<AssistantPanel />`. If something chat-related is missing, add it to
+  `@teovo/react`, not to the app.
 
 ### Rules that keep it safe
 

@@ -1,7 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { readFile, useRecorder, useVoice, type PendingFile } from './input.js'
 import { Markdown } from './markdown.js'
-import { SPARKLE, themeStyle, type Theme } from './sheet.js'
+import { SPARKLE } from './icons.js'
+import { themeStyle, type Theme } from './sheet.js'
+import { ThreadList } from './threads.js'
 import { useAssistant } from './provider.js'
 import type { Action, AllowanceItem, Card, CardDecision, Formats, Page, Sources, Step, TeovoMessage, View } from './types.js'
 import { defaultViews, formatValue, isCurrent, type CellFormat, type ViewComponent } from './views.js'
@@ -51,14 +53,20 @@ export interface AssistantPanelProps {
   stepDetails?: boolean
   /** A small "Powered by Teovo" link at the bottom of the chat. Default true; false hides it. */
   poweredBy?: boolean
+  /** Show the earlier conversations here when the header's History is pressed. Default true. */
+  history?: boolean
   className?: string
 }
 
-export type CardState = { status: 'open' | 'busy' | 'confirmed' | 'skipped' | 'undone' | 'expired'; reversible?: boolean; error?: string }
+export type CardState = {
+  status: 'open' | 'busy' | 'confirmed' | 'skipped' | 'undone' | 'expired'; reversible?: boolean; error?: string
+  /** After confirming: what applying it said ("Sale #12 saved"), and where to see it. */
+  note?: string; link?: { label: string; to: string }
+}
 
 /** A ready-made chat panel. Unstyled apart from `tv-` class names; import '@teovo/react/styles.css' for defaults. */
 export function AssistantPanel(props: AssistantPanelProps) {
-  const { chat, newChat, suggestions, clearSuggestions, page, policy, noticeAccepted, acceptNotice, allowance, words } = useAssistant()
+  const { chat, newChat, suggestions, clearSuggestions, page, policy, noticeAccepted, acceptNotice, allowance, words, view, setView, leaveOutPage } = useAssistant()
   const [text, setText] = useState('')
   const busy = chat.status === 'submitted' || chat.status === 'streaming'
   const log = useRef<HTMLDivElement>(null)
@@ -136,6 +144,14 @@ export function AssistantPanel(props: AssistantPanelProps) {
     if (picker.current) picker.current.value = ''
   }
 
+  if (view === 'history' && props.history !== false) {
+    return (
+      <section className={`tv-panel tv-panel-history ${props.className ?? ''}`} aria-label="Earlier chats" data-theme={props.theme?.mode} style={themeStyle(props.theme)}>
+        <ThreadList locale={policy.locale} onOpen={() => setView('chat')} />
+      </section>
+    )
+  }
+
   return (
     <section className={`tv-panel ${props.className ?? ''}`} aria-label="Assistant" data-theme={props.theme?.mode} style={themeStyle(props.theme)}>
       <div ref={log} className="tv-messages" role="log" aria-live="polite" data-count={count}
@@ -176,6 +192,7 @@ export function AssistantPanel(props: AssistantPanelProps) {
               <rect x="3" y="4" width="18" height="16" rx="2" /><path d="M3 9h18" />
             </svg>
             <span>{props.pageLabel ? props.pageLabel(page) : pageText(page)}</span>
+            <button type="button" className="tv-page-off" aria-label="Don’t use this screen" title="Don’t tell the assistant about this screen" onClick={leaveOutPage}>×</button>
           </div>
         ) : null}
         {completion ? (
@@ -230,7 +247,7 @@ export function AssistantPanel(props: AssistantPanelProps) {
 }
 
 function Message({ message, ask, stopped, last, busy, ...props }: { message: TeovoMessage; ask: (t: string) => void; stopped?: boolean; last: boolean; busy: boolean } & AssistantPanelProps) {
-  const { onAction, submitForm, chat } = useAssistant()
+  const { runAction, submitForm, chat } = useAssistant()
   const [editing, setEditing] = useState<string | null>(null)
   const ownText = message.parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join('\n')
   if (editing !== null) {
@@ -282,7 +299,7 @@ function Message({ message, ask, stopped, last, busy, ...props }: { message: Teo
             <div key={p.id ?? i} className="tv-sources">
               <span>From:</span>
               {links.map((l) => (
-                <button key={l.to} type="button" className="tv-source" onClick={() => onAction?.({ label: l.label, action: 'navigate', args: { to: l.to } })}>{l.label}</button>
+                <button key={l.to} type="button" className="tv-source" onClick={() => runAction({ label: l.label, action: 'navigate', args: { to: l.to } })}>{l.label}</button>
               ))}
             </div>
           )
@@ -290,7 +307,7 @@ function Message({ message, ask, stopped, last, busy, ...props }: { message: Teo
         if (p.type === 'data-action') {
           const a = p.data as Action
           if (props.renderAction) return <span key={p.id ?? i} className="tv-action-own">{props.renderAction(a)}</span>
-          return <button key={p.id ?? i} type="button" className="tv-action" onClick={() => onAction?.(a)}>{a.label}</button>
+          return <button key={p.id ?? i} type="button" className="tv-action" onClick={() => runAction(a)}>{a.label}</button>
         }
         return null
       })}
@@ -474,7 +491,7 @@ function StoredPicture({ id, alt }: { id: string; alt: string }) {
 }
 
 function CardView({ card, renderCard, formats }: { card: Card; formats?: Formats } & AssistantPanelProps) {
-  const { decideCard } = useAssistant()
+  const { decideCard, runAction } = useAssistant()
   const [state, setState] = useState<CardState>({ status: FINAL[card.status as keyof typeof FINAL] ?? 'open', reversible: card.reversible })
 
   async function decide(d: CardDecision) {
@@ -484,7 +501,7 @@ function CardView({ card, renderCard, formats }: { card: Card; formats?: Formats
     setState({ ...state, status: 'busy', error: undefined })
     try {
       const now = await decideCard(card, d)
-      setState({ status: AFTER[d], reversible: now.reversible })
+      setState({ status: AFTER[d], reversible: now.reversible, ...(d === 'confirm' && now.note ? { note: now.note } : {}), ...(d === 'confirm' && now.link ? { link: now.link } : {}) })
     } catch (e) {
       const error = e instanceof Error ? e.message : String(e)
       setState({ ...before, error })
@@ -509,6 +526,9 @@ function CardView({ card, renderCard, formats }: { card: Card; formats?: Formats
           Prepared after reading {card.untrustedSources.join(', ')}. Check it before you confirm.
         </div>
       ) : null}
+      {card.lines?.length ? (
+        <ul className="tv-card-lines">{card.lines.map((l, i) => <li key={i}>{l}</li>)}</ul>
+      ) : null}
       {card.items?.length ? (
         <>
           <div className="tv-card-count">{card.items.length} {card.items.length === 1 ? 'change' : 'changes'}</div>
@@ -530,7 +550,7 @@ function CardView({ card, renderCard, formats }: { card: Card; formats?: Formats
             })}
           </tbody></table>
         </>
-      ) : fields.length ? (
+      ) : fields.length && !(card.lines?.length && !card.before && !card.after) ? (
         <table className={`tv-card-diff${isNew ? ' tv-card-new' : ''}`}><tbody>
           {fields.map((f) => (
             <tr key={f.key}>
@@ -543,7 +563,11 @@ function CardView({ card, renderCard, formats }: { card: Card; formats?: Formats
       ) : null}
       {state.error ? <div className="tv-error" role="alert">{state.error}</div> : null}
       {state.status === 'confirmed' ? (
-        <div className="tv-card-done">Done{state.reversible ? <button type="button" onClick={() => void decide('undo')}>Undo</button> : null}</div>
+        <div className="tv-card-done">
+          <span className="tv-card-note">{state.note ?? 'Done'}</span>
+          {state.link ? <button type="button" className="tv-card-link" onClick={() => runAction({ label: state.link!.label, action: 'navigate', args: { to: state.link!.to } })}>{state.link.label}</button> : null}
+          {state.reversible ? <button type="button" onClick={() => void decide('undo')}>Undo</button> : null}
+        </div>
       ) : state.status === 'skipped' || state.status === 'undone' || state.status === 'expired' ? (
         <div className="tv-card-done">{{ skipped: 'Skipped', undone: 'Undone', expired: 'Expired' }[state.status]}</div>
       ) : (

@@ -41,6 +41,10 @@ const isApp = (h: CardHandler | undefined): h is AppCard => !!h && 'inApp' in h 
 export interface ApplyResult {
   /** Whatever undo needs (e.g. the id of the row apply created). Stored with the card; never sent to the browser. */
   undo?: unknown
+  /** A short line the card shows once confirmed, e.g. "Sale #12 saved". Default: "Done". */
+  note?: string
+  /** Where to see the result; the card shows it as a button that opens the screen (onAction 'navigate'). */
+  link?: { label: string; to: string }
 }
 
 export type Decision = 'confirm' | 'skip' | 'undo'
@@ -113,7 +117,8 @@ export async function decide<DB>(opts: {
     try {
       const out = await applier.apply(card.payload, ctx)
       const reversible = Boolean(applier.undo)
-      return (await storage.updateCard(id, ['confirmed'], { reversible, undo: out?.undo ?? null })) ?? claimed
+      const saved = (await storage.updateCard(id, ['confirmed'], { reversible, undo: out?.undo ?? null })) ?? claimed
+      return { ...saved, ...(out?.note ? { note: out.note } : {}), ...(out?.link ? { link: out.link } : {}) }
     } catch (e) {
       // Nothing was applied: put the card back so the user can try again or skip it.
       await storage.updateCard(id, ['confirmed'], { status: 'shown', decidedBy: undefined, decidedAt: undefined })
