@@ -53,6 +53,19 @@ describe('@teovo/server/testing', () => {
     expect(replayed.cards[0]!.payload).toEqual({ orderId: fresh, amount: 200 })
   })
 
+  it('records text a model streamed in pieces as one piece, so an id split across chunks can still be swapped', async () => {
+    const id = '9006f962-5bda-44cb-9b1f-c308fec80fbc'
+    const parts = [{ type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: `{"category_id": "${id.slice(0, 7)}` }, { type: 'text-delta', id: 't', delta: `${id.slice(7)}"}` }, { type: 'text-end', id: 't' }, { type: 'finish', finishReason: { unified: 'stop', raw: undefined }, usage: {} }]
+    const real = scriptedModel(() => ({ parts: parts as never }))
+    const cassette: Cassette = { steps: [] }
+    const res = await recordingModel(real, cassette).doStream({ prompt: [] } as never)
+    let text = ''
+    for await (const p of res.stream as unknown as AsyncIterable<{ type: string; delta?: string }>) if (p.type === 'text-delta') text += p.delta
+    expect(text).toBe(`{"category_id": "${id}"}`)   // the app still gets every piece
+    expect(cassette.steps[0]!.parts.filter((p) => p.type === 'text-delta')).toHaveLength(1)
+    expect(JSON.stringify(swapIds(cassette, new Map([[id, '@@category:Raw material@@']])))).toContain('@@category:Raw material@@')
+  })
+
   it('fails loudly when the assistant asks for more steps than were recorded', async () => {
     const r = await chat(shop(replayModel({ steps: [callTool('find_order', { no: 1 })] })).teovo, 'loop')
     expect(r.error).toBe('The assistant could not finish this reply. Try again.')
