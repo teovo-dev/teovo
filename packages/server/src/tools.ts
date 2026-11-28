@@ -60,6 +60,11 @@ export interface ToolContext<DB = unknown> {
   db: DB
   /** Wrap text that came from outside the app (customer notes, screenshots, web pages). See untrusted.ts. */
   untrusted: (text: string, source: string) => string
+  /**
+   * With `spend` set: set more aside for this reply before costly work (e.g. a report), in the app's unit. False when
+   * it can't be: then don't do the costly part, and say so. Undefined when the app has no spend rules.
+   */
+  reserve?: (amount: number, reason?: string) => Promise<boolean>
 }
 
 type ToolResult<K extends ToolKind> = K extends 'propose' ? Proposal : K extends 'action' ? Action : unknown

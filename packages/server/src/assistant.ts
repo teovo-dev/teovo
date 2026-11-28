@@ -6,7 +6,7 @@ import { fallbackModel } from './fallback.js'
 import { CardError, cardForModel, decide, publicCard, type CardHandler, type CardRules, type Decision } from './cards.js'
 import type { CardEventKind, Miss } from './storage.js'
 import { allowance, checkLimits, limitMessage, type LimitHit, type Limits } from './limits.js'
-import type { ClaimedRun, Storage, StoredCard, Thread, UsageRow } from './storage.js'
+import type { ClaimedRun, Storage, StoredCard, Thread, Totals, UsageRow } from './storage.js'
 import { toolsFor, type Action, type Identity, type RecordLink, type Proposal, type TeovoTool, type ToolContext } from './tools.js'
 import { makeUntrusted, UNTRUSTED_RULE } from './untrusted.js'
 
@@ -129,6 +129,12 @@ export interface AssistantConfig<DB = unknown> {
    * (all three of Teovo's, after `npx teovo migrate`). See RunsConfig.
    */
   runs?: RunsConfig<DB>
+  /**
+   * A spend check and hold, for apps that charge for replies (credits, a wallet): before each reply its price is set
+   * aside, a tool (ctx.reserve) or the cost so far can raise it, and when the reply ends it is settled. Teovo keeps
+   * no balance: the app's own `reserve` and `settle` do. See SpendRules.
+   */
+  spend?: SpendRules<DB>
   /** Saved on each run, so a change in replies can be traced to a change in instructions. */
   promptVersion?: string
   /** Tool inputs and outputs longer than this are cut in the run log (the model still sees all of it). Default 8000 characters. */
@@ -176,10 +182,39 @@ export interface RunsConfig<DB = unknown> {
   worker?: string
 }
 
+export interface SpendRules<DB = unknown> {
+  /** What to set aside before a reply, in the app's unit. */
+  hold: number | ((ctx: { identity: Identity; text: string; db: DB }) => number | Promise<number>)
+  /**
+   * Set `amount` aside for this reply: first (before it starts) or more (mid-reply). True when done; false or a
+   * sentence for the user when there isn't enough. Key it by runId: a long run that resumes never asks again for the
+   * first hold, but a request retried by the network might.
+   */
+  reserve: (r: { identity: Identity; runId: string; threadId: string; amount: number; first: boolean; reason?: string }) => boolean | string | Promise<boolean | string>
+  /**
+   * The reply ended: charge it and give the rest back. `status` tells a finished reply from a stopped or failed one
+   * (charge those or not, as the app decides); `used` is what it used (messages, tokens, neurons) and `cost` what
+   * `cost` made of it. Called once per reply; a long run resumed after a crash reports only the try that finished.
+   */
+  settle: (s: { identity: Identity; runId: string; threadId: string; status: 'done' | 'failed' | 'stopped'; used: Totals; cost?: number; held: number }) => void | Promise<void>
+  /**
+   * What the reply has cost so far, from what it used. With it, whenever the cost passes what is held, `step` more is
+   * reserved after the step; when that is refused, the reply ends there with a sentence. Without it, only tools raise.
+   */
+  cost?: (used: Totals) => number
+  /** How much more to reserve each time. Default: the first hold. */
+  step?: number
+}
+
+/** Said when a reply can't start, or can't go on, because there isn't enough to spend. */
+export const NO_SPEND = 'There is not enough left to spend on the assistant for this. An admin can add more.'
+
 /** What a reply needs, whether it runs in the request that asked or on another server later. */
 interface ReplyCtx<DB> {
   identity: Identity; thread: Thread; runId: string; message: UIMessage; history: UIMessage[]; page?: Page
   models: readonly LanguageModelV4[]; settings: TenantSettings; db: DB; attempt: number; signal: AbortSignal
+  /** What is set aside for this reply (spend). */
+  held: number
   end: (e: { status: 'done' | 'failed' | 'stopped'; model?: string; error?: string }) => Promise<void>
   /** A resumed run: what its last try finished, sent again first, and the same as a message for the model. */
   replay?: Chunk[]; partial?: UIMessage
@@ -376,6 +411,19 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
       return json(429, { error: limitMessage(raced), limit: raced })
     }
 
+    // The price set aside before anything is saved or paid for, so a refusal leaves nothing behind.
+    const db = await config.asUser(identity, req)
+    let held = 0
+    if (config.spend) {
+      held = await holdFor(identity, text, db)
+      const ok = await reserveFor({ identity, runId, threadId: thread.id, amount: held, first: true })
+      if (ok !== true) {
+        await storage.finishRun(runId, { status: 'failed', error: 'Not enough to spend' })
+        if (!body.threadId && !earlier.length) await storage.archiveThread(identity.tenantId, identity.userId, thread.id)
+        return json(402, { error: ok })
+      }
+    }
+
     if (!earlier.length && !thread.title) await storage.setThreadTitle(thread.id, titleFrom(message))
     // Pictures go to the file store; the saved message keeps a reference. The model still reads this message's
     // pictures in full, and earlier ones only as a note.
@@ -383,9 +431,8 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     const history = trimToolResults(picturesOnce([...earlier, message].slice(-(config.historyMessages ?? 30)), message), config.historyToolChars ?? 1500)
     await storage.saveMessages(thread.id, [saved])
 
-    const db = await config.asUser(identity, req)
     await storage.addUsage([{ tenantId: identity.tenantId, userId: identity.userId, runId, provider: first.provider, model: first.modelId, unit: 'messages', amount: 1 }])
-    const rc = { identity, thread, runId, message, history, page, models, settings, db, attempt: 1 }
+    const rc = { identity, thread, runId, message, history, page, models, settings, db, held, attempt: 1 }
     const headers = { 'x-teovo-thread': thread.id }
     if (!queue) return createUIMessageStreamResponse({ stream: await reply({ ...rc, signal: req.signal, end: (e) => storage.finishRun(runId, e) }), headers })
     // A long run: queued in the run log, then run here (unless a worker takes them), and sent from the log, so it goes
@@ -393,7 +440,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     await queue.enqueue(runId, { identity, messageId: message.id, ...(page ? { page } : {}), models: models.map((m) => m.modelId) })
     if (config.runs?.inline !== false) {
       const claimed = await queue.claim(runId, worker, leaseMs)
-      if (claimed) keepAlive(drive(claimed, { thread, message, history, models, settings, db }), ctx)
+      if (claimed) keepAlive(drive(claimed, { thread, message, history, models, settings, db, held }), ctx)
     }
     return createUIMessageStreamResponse({ stream: tail(runId), headers })
   }
@@ -407,12 +454,36 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     const text = message.parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join(' ')
     // Step numbers go on across tries, so a resumed run's steps follow the ones before.
     let seq = (rc.attempt - 1) * 1000
+    // Spend: what this reply has used and what is set aside for it; `outOf` ends it after the step that ran out.
+    const spend = config.spend
+    let held = rc.held
+    const used: Totals = { messages: 1 }
+    let outOf: string | undefined
+    const reserve = async (amount: number, reason?: string, auto = false): Promise<boolean> => {
+      if (!spend) return true
+      const ok = await reserveFor({ identity, runId, threadId: thread.id, amount, first: false, ...(reason ? { reason } : {}) })
+      if (ok === true) { held += amount; return true }
+      if (auto) outOf ??= ok
+      return false
+    }
+    const counted = async (st: { usage?: { inputTokens?: number; outputTokens?: number }; providerMetadata?: Record<string, unknown> }) => {
+      used.input_tokens = (used.input_tokens ?? 0) + (st.usage?.inputTokens ?? 0)
+      used.output_tokens = (used.output_tokens ?? 0) + (st.usage?.outputTokens ?? 0)
+      const n = Number((st.providerMetadata?.workersAi as { neurons?: number } | undefined)?.neurons) || 0
+      if (n) used.neurons = (used.neurons ?? 0) + n
+      if (!spend?.cost || outOf) return
+      const step = spend.step ?? rc.held
+      while (!outOf && spend.cost(used) > held) if (!(step > 0) || !(await reserve(step, 'cost', true))) outOf ??= NO_SPEND
+    }
     const statuses = new Map((await storage.listCards(thread.id)).map((c) => [c.id, c]))
     const nonce = crypto.randomUUID().slice(0, 8)
     // Which outside text this run has read: the user's pictures, and whatever tools fenced as untrusted.
     const seen = new Set<string>(message.parts.some((p) => p.type === 'file') ? ['picture'] : [])
     const fence = makeUntrusted(nonce)
-    const ctx: ToolContext<DB> = { identity, db, untrusted: (text, source) => { seen.add(source.replace(/[^\w .-]/g, '').slice(0, 40) || 'outside text'); return fence(text, source) } }
+    const ctx: ToolContext<DB> = {
+      identity, db, untrusted: (text, source) => { seen.add(source.replace(/[^\w .-]/g, '').slice(0, 40) || 'outside text'); return fence(text, source) },
+      ...(spend ? { reserve: (amount: number, reason?: string) => reserve(amount, reason) } : {}),
+    }
     const instructions = typeof config.instructions === 'function' ? await config.instructions({ identity, page }) : config.instructions
     const summary = page && config.screen ? await Promise.resolve().then(() => config.screen!(page, ctx)).catch((e) => { config.on?.error?.(e, { identity, threadId: thread.id }); return null }) : null
     const shownSummary = summary === null ? null : String(redact(summary))
@@ -563,7 +634,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
         const runCards: { kind: string; title: string }[] = []
         // With done-checks, the reply's words wait here until they pass; everything else goes out as it happens.
         const checks = config.checks ?? []
-        let held: Chunk[] = []
+        let heldWords: Chunk[] = []
         const reading: Promise<void>[] = []
         const send = (from: ReadableStream<InferUIMessageChunk<UIMessage>>) => {
           const s = from as ReadableStream<Chunk>
@@ -571,7 +642,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
           let ended!: () => void
           reading.push(new Promise<void>((r) => { ended = r }))
           writer.merge(s.pipeThrough(new TransformStream<Chunk, Chunk>({
-            transform(c, out) { if (c.type === 'text-start' || c.type === 'text-delta' || c.type === 'text-end') held.push(c); else out.enqueue(c) },
+            transform(c, out) { if (c.type === 'text-start' || c.type === 'text-delta' || c.type === 'text-end') heldWords.push(c); else out.enqueue(c) },
             flush() { ended() },
           })))
         }
@@ -595,7 +666,8 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
             system,
             messages,
             tools,
-            stopWhen: isStepCount(config.maxSteps ?? 8),
+            stopWhen: [isStepCount(config.maxSteps ?? 8), () => Boolean(outOf)],
+            onStepFinish: counted,
             // First output is timed by fallbackModel (per model, so a stalled one hands over to the next); the SDK
             // keeps the gaps between chunks and the total.
             timeout: { chunkMs: timeouts.chunkMs, totalMs: timeouts.totalMs },
@@ -617,7 +689,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
           // right after a tool result. That is a blip, not an answer: carry on once from there with tools still on, so
           // a reply that needs one (a button, a table, a card) can still use it.
           const last = (await result.steps).at(-1)
-          if (last && !last.text.trim() && !last.toolCalls.length && !shown && !(await said()) && !signal.aborted) {
+          if (last && !last.text.trim() && !last.toolCalls.length && !shown && !(await said()) && !signal.aborted && !outOf) {
             result = run(sofar)
             results.push(result)
             text = await result.text
@@ -625,10 +697,10 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
           }
           // Models sometimes end a turn in silence after a tool call. Never leave the user with an empty reply: ask
           // once more, with tools off, for the answer in words. (Not after a view or card: those are the answer.)
-          if (!(await said()) && !shown && !signal.aborted) {
+          if (!(await said()) && !shown && !signal.aborted && !outOf) {
             const again = streamText({
               model, system: `${system}\n\nYou have what you need from the tools above. Now answer the user in words; do not call tools.`,
-              messages: sofar, tools, toolChoice: 'none', maxRetries: 1, abortSignal: signal,
+              messages: sofar, tools, toolChoice: 'none', maxRetries: 1, abortSignal: signal, onStepFinish: counted,
               timeout: { chunkMs: timeouts.chunkMs, totalMs: timeouts.totalMs },
             })
             results.push(again)
@@ -648,18 +720,18 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
             const retries = config.checkRetries ?? 1
             for (let attempt = 0; ; attempt++) {
               await Promise.all(reading)   // every held word of this try has arrived
-              if (signal.aborted) { for (const c of held) writer.write(c); break }   // a stopped reply keeps what it had
-              const words = held.filter((c) => c.type === 'text-delta').map((c) => (c as { delta: string }).delta).join('')
+              if (signal.aborted || outOf) { for (const c of heldWords) writer.write(c); break }   // a stopped reply keeps what it had
+              const words = heldWords.filter((c) => c.type === 'text-delta').map((c) => (c as { delta: string }).delta).join('')
               const toolCalls = (await Promise.all(results.map((r) => Promise.resolve(r.steps).catch(() => [])))).flat()
                 .flatMap((st) => st.toolCalls.map((tc) => ({ name: tc.toolName, input: tc.input })))
               const found = await firstProblem(checks, { text: words, question: text0, cards: runCards, toolCalls, attempt }, { identity: identity!, db, page }, (e) => config.on?.error?.(e, { identity, threadId: thread.id }))
-              if (!found) { for (const c of held) writer.write(c); break }
+              if (!found) { for (const c of heldWords) writer.write(c); break }
               const final = attempt >= retries
               config.on?.check?.({ runId, name: found.name, problem: found.problem, attempt, final }, identity!)
               // In the run log too, so the run viewer shows what was refused and why.
               const refused = clip(words, config.logLimit ?? 8000)
               await storage.saveStep({ runId, seq: seq++, type: 'check', name: found.name, input: refused.value, truncated: refused.truncated, error: found.problem, durationMs: 0 })
-              held = []
+              heldWords = []
               if (final) {
                 const id = `checked-${runId}`
                 writer.write({ type: 'text-start', id })
@@ -676,6 +748,13 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
               sofar = [...sofar, ...(await result.responseMessages)]
             }
           }
+          // Out of what it may spend: what it found so far stays, and it says why it stopped.
+          if (outOf) {
+            const id = `spend-${runId}`
+            writer.write({ type: 'text-start', id })
+            writer.write({ type: 'text-delta', id, delta: outOf })
+            writer.write({ type: 'text-end', id })
+          }
           if (links.size) writer.write({ type: 'data-sources', id: `sources-${runId}`, data: { links: [...links.values()] } })
           if (config.suggestions) {
             // Follow-ups ride along as a transient part: shown under this reply, never saved in the history. Before
@@ -684,7 +763,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
             if (s && s.suggestions.length) writer.write({ type: 'data-suggestions', data: tidy(s), transient: true })
           }
           writer.write({ type: 'finish' })
-          await finish('done')
+          await finish(outOf ? 'stopped' : 'done', outOf ? new Error(`Spend: ${outOf}`) : undefined)
         } catch (e) {
           await finish(signal.aborted ? 'stopped' : 'failed', streamError ?? e)
           throw e
@@ -703,6 +782,10 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
           const neurons = steps.reduce((n, s) => n + (Number((s.providerMetadata?.workersAi as { neurons?: number } | undefined)?.neurons) || 0), 0)
           if (neurons > 0) rows.push({ ...base, unit: 'neurons', amount: neurons })
           if (rows.length) { await storage.addUsage(rows); config.on?.usage?.(rows) }
+          if (spend && (await (rc.owns?.() ?? true))) {
+            await Promise.resolve().then(() => spend.settle({ identity, runId, threadId: thread.id, status, used, ...(spend.cost ? { cost: spend.cost(used) } : {}), held }))
+              .catch((e) => config.on?.error?.(e, { identity, threadId: thread.id }))
+          }
         }
       },
       onError: (e) => {
@@ -718,6 +801,17 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
         }
       },
     })
+  }
+
+  /** Spend: what to set aside for a reply. */
+  async function holdFor(identity: Identity, text: string, db: DB): Promise<number> {
+    const h = config.spend!.hold
+    return typeof h === 'number' ? h : await h({ identity, text, db })
+  }
+  /** Spend: the app's reserve, with a refusal as a sentence for the user. A reserve that throws counts as a refusal. */
+  async function reserveFor(r: Parameters<SpendRules<DB>['reserve']>[0]): Promise<true | string> {
+    const ok = await Promise.resolve().then(() => config.spend!.reserve(r)).catch((e) => { config.on?.error?.(e, { identity: r.identity, threadId: r.threadId }); return false })
+    return ok === true ? true : typeof ok === 'string' && ok.trim() ? ok.trim() : NO_SPEND
   }
 
   /** A tenant's settings, with what is switched off for every tenant added in. */
@@ -769,14 +863,15 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     let models = ids.map((id) => known.find((m) => m.modelId === id)).filter((m): m is LanguageModelV4 => Boolean(m) && !off.has(m!.modelId))
     if (!models.length) models = config.models.filter((m) => !off.has(m.modelId))
     if (!models.length) return { error: 'Every model is switched off' }
-    return { identity, thread, runId: claim.id, message, history, page, models, settings, db: await config.runs.asUser(identity) }
+    const db = await config.runs.asUser(identity)
+    return { identity, thread, runId: claim.id, message, history, page, models, settings, db, held: config.spend ? await holdFor(identity, text, db) : 0 }
   }
 
   /**
    * Run a claimed reply to the end on this server: the stream goes to the log in batches (and straight to anyone this
    * server is sending it to), a heartbeat keeps the lease and listens for Stop, and the run is finished last.
    */
-  async function drive(claim: ClaimedRun, pre?: Pick<ReplyCtx<DB>, 'thread' | 'message' | 'history' | 'models' | 'settings' | 'db'>): Promise<void> {
+  async function drive(claim: ClaimedRun, pre?: Pick<ReplyCtx<DB>, 'thread' | 'message' | 'history' | 'models' | 'settings' | 'db' | 'held'>): Promise<void> {
     const q = queue!
     const { identity } = claim.job
     const report = (e: unknown) => config.on?.error?.(e, { identity, threadId: claim.threadId })
@@ -811,6 +906,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
       }, report)
     }, beatMs)
     let end: Parameters<ReplyCtx<DB>['end']>[0] | undefined
+    let replied = false   // reply() settles spend itself; a run that never got there is settled here
     // A reply that can't go on: one plain sentence, saved, so the conversation shows what happened.
     const giveUp = async (error: string) => {
       const msg = { id: crypto.randomUUID(), role: 'assistant' as const, metadata: { runId: claim.id, threadId: claim.threadId }, parts: [{ type: 'text' as const, text: INTERRUPTED }] }
@@ -825,6 +921,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
       if ('error' in base) { await giveUp(base.error); return }
       let replay: Chunk[] | undefined
       for (let a = claim.attempts - 1; a >= 1 && !replay?.length; a--) replay = finishedSteps((await q.events(claim.id, a, -1)).flatMap((e) => e.chunks as Chunk[]))
+      replied = true
       const stream = await reply({
         ...base, attempt: claim.attempts, signal: local.ctrl.signal, owns,
         end: async (e) => { end = e },
@@ -845,7 +942,11 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
       flush()
       await writes
       // Last, so whoever reads the log has everything once the run shows as ended.
-      if (await owns()) await config.storage.finishRun(claim.id, end ?? { status: 'failed', error: 'The reply ended without finishing' }).catch(report)
+      if (await owns()) {
+        const e = end ?? { status: 'failed' as const, error: 'The reply ended without finishing' }
+        await config.storage.finishRun(claim.id, e).catch(report)
+        if (!replied && config.spend) await Promise.resolve().then(() => config.spend!.settle({ identity, runId: claim.id, threadId: claim.threadId, status: e.status, used: {}, held: 0 })).catch(report)
+      }
       locals.delete(claim.id)
       for (const s of local.subs) s(null)
     }
@@ -931,6 +1032,12 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     }
     if (!(await queue.requestStop(identity.tenantId, runId, isAdmin(identity) ? undefined : identity.userId))) return json(404, { error: 'That reply is not running.' })
     locals.get(runId)?.ctrl.abort()   // here already: no need to wait for the heartbeat
+    // Stopped while still queued (never taken by a server, so ended at once): no server will settle its spend hold.
+    const after = config.spend ? await queue.state(runId) : null
+    if (after?.status === 'stopped' && after.attempts === 0 && after.job) {
+      await Promise.resolve().then(() => config.spend!.settle({ identity: after.job!.identity, runId, threadId: after.threadId, status: 'stopped', used: {}, held: 0 }))
+        .catch((e) => config.on?.error?.(e, { identity, threadId: after.threadId }))
+    }
     return json(200, { stopping: true })
   }
 

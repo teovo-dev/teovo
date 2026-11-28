@@ -3,7 +3,7 @@
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import { defaultSettingsMiddleware, wrapLanguageModel } from 'ai'
 import { migrate, postgresFiles, postgresStorage } from '@teovo/db'
-import { builtinViews, createAssistant, defineCheck, defineReader, defineTool, noClaimedChanges, type Identity } from '@teovo/server'
+import { builtinViews, createAssistant, defineCheck, defineReader, defineTool, noClaimedChanges, type Identity, type SpendRules } from '@teovo/server'
 import { readFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import pg from 'pg'
@@ -38,6 +38,30 @@ function slowly<T extends { run: (...a: any[]) => unknown }>(tools: T[]): T[] {
   return ms ? tools.map((t) => ({ ...t, run: async (...a: unknown[]) => { await new Promise((r) => setTimeout(r, ms)); return t.run(...a) } })) : tools
 }
 
+const demoWallet: SpendRules | undefined = process.env.DEMO_CREDITS ? (() => {
+  let balance = Number(process.env.DEMO_CREDITS)
+  const holds = new Map<string, number>()
+  return {
+    hold: 1,
+    cost: (u) => Math.max(1, Math.ceil(((u.input_tokens ?? 0) + (u.output_tokens ?? 0)) / 5000)),
+    reserve: ({ runId, amount, first }) => {
+      if (first && holds.has(runId)) return true
+      if (amount > balance) return first ? `The shop has ${balance} credit${balance === 1 ? '' : 's'} left; a reply needs ${amount}. Add more on the billing page.` : false
+      balance -= amount
+      holds.set(runId, (holds.get(runId) ?? 0) + amount)
+      console.log(`[credits] held ${amount} for ${runId.slice(0, 8)}${first ? '' : ' (more)'}; ${balance} left`)
+      return true
+    },
+    settle: ({ runId, status, cost, used }) => {
+      const held = holds.get(runId) ?? 0
+      const charge = status === 'done' ? Math.min(held, cost ?? held) : 0
+      balance += held - charge
+      holds.delete(runId)
+      console.log(`[credits] ${runId.slice(0, 8)} ${status}: used ${JSON.stringify(used)}, charged ${charge}, gave back ${held - charge}; ${balance} left`)
+    },
+  }
+})() : undefined
+
 const teovo = createAssistant({
   // The demo picks the user from a header the page sends; a real app reads its session here.
   identify: (req): Identity => {
@@ -62,6 +86,9 @@ const teovo = createAssistant({
   // Long runs: a reply goes on when the panel closes, Stop works from any server, and a reply this server was writing
   // when it stopped is carried on from its last finished step by the next server to start (startWorker below).
   runs: { asUser: (identity) => ({ role: identity.role }), leaseMs: 10_000 },
+  // For trying the spend hold by hand: DEMO_CREDITS=3 npm run server gives the shop 3 credits. A reply holds 1, costs
+  // 1 per 5,000 tokens it uses (raised as it goes), and is charged when it finishes; a stopped or failed one costs nothing.
+  ...(demoWallet ? { spend: demoWallet } : {}),
   formats: { locale: 'en-IN', currency: 'INR', timeZone: 'Asia/Kolkata' },
   limits: { user: { messages: 200 } },
   // Done-checks: a reply is held until it passes these. Teovo's own catches "Payment recorded" next to a card that

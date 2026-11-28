@@ -209,7 +209,7 @@ export function supabaseStorage(db: SupabaseLike): Storage {
       },
       async state(id) {
         if (!UUID.test(id)) return null
-        const rows = await ok(db.from('tv_runs').select('id, thread_id, tenant_id, user_id, status, attempts').eq('id', id).limit(1))
+        const rows = await ok(db.from('tv_runs').select('id, thread_id, tenant_id, user_id, status, attempts, job').eq('id', id).limit(1))
         return rows[0] ? runState(rows[0]) : null
       },
       async active(threadId) {
