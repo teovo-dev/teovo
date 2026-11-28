@@ -26,6 +26,7 @@ cover it but nobody has tried it by hand. A feature counts as done only when thi
 | Old pictures removed from Supabase Storage too (`supabaseFiles` + `supabaseFileIndex`), so `removeOldFiles()` works there | v1.1 | Built (#PR) | Tests only | scoops | kit tables |
 | Screens only some roles may open (`screens: [{ …, roles: ['owner'] }]`): other roles never hear of them, and open_screen refuses them | v1.1 | Built (#PR) | Tests only | scoops | kit |
 | `onCardDecided` on the provider: the app hears when a card was confirmed, skipped or undone (server-applied or its own), e.g. to reload the screen | v1.1 | Built (#PR) | Tests only | scoops | kit |
+| `useReader(name, { onError })`: the screen hears why a read failed (e.g. to show a toast); read resolves to null | v1.1 | Built (#PR) | Tests only | scoops | kit |
 | Readers (one input → one checked answer: text, a picture or a recording → a form draft; same models, fallback, limits, usage and untrusted rule as the chat; `teovo.read` for webhooks) and voice to text (`voice`, `workersAiWhisper`, `VoiceButton`, the chat microphone) | v1.1 | Built (#51) | Yes: Little Oven Quick add filled from a Hinglish note, a spoken recording and a bill photo with Gemini, and ignored an injected instruction | scoops | kit, Vercel AI SDK |
 | Confirm and skip cards | v1 | Built (#7) | Yes (#26: labels, ₹ and dates, new-record layout) | scoops | kit |
 | Undo by reversing the change, stored so it survives a reload | v1 | Built (#7) | Yes, after a reload too | scoops, in memory only | kit tables |

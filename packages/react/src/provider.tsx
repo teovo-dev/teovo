@@ -392,17 +392,20 @@ export function useAssistantName(): string | undefined {
 
 /**
  * A reader from a screen: read(input) runs it; result, busy and error follow. E.g. "describe a product" fills the
- * form: const r = useReader<Draft>('product'); … await r.read(text).
+ * form: const r = useReader<Draft>('product'); … await r.read(text). `onError` hears why a read failed, e.g. to show
+ * a toast; read then resolves to null.
  */
-export function useReader<T = unknown>(name: string) {
+export function useReader<T = unknown>(name: string, opts: { onError?: (message: string) => void } = {}) {
   const { read: run } = useAssistant()
   const [result, setResult] = useState<T | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const onError = useRef(opts.onError)
+  onError.current = opts.onError
   const read = useCallback(async (input: ReadInput): Promise<T | null> => {
     setBusy(true); setError(null)
     try { const r = await run<T>(name, input); setResult(r); return r }
-    catch (e) { setError(e instanceof Error ? e.message : String(e)); return null }
+    catch (e) { const m = e instanceof Error ? e.message : String(e); setError(m); onError.current?.(m); return null }
     finally { setBusy(false) }
   }, [run, name])
   const reset = useCallback(() => { setResult(null); setError(null) }, [])
