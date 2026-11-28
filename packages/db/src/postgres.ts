@@ -1,4 +1,4 @@
-import { periodKey, type CardEvent, type CardPatch, type Miss, type Storage, type StoredCard, type Thread, type Totals, type Unit } from '@teovo/server'
+import { periodKey, type CardEvent, type CardPatch, type Miss, type RunSummary, type StepRecord, type Storage, type StoredCard, type Thread, type Totals, type Unit } from '@teovo/server'
 import type { UIMessage } from 'ai'
 import type { Query } from './migrate.js'
 
@@ -21,6 +21,20 @@ const card = (r: any): StoredCard => {
 }
 const COLUMN: Record<keyof CardPatch, string> = { status: 'status', decidedBy: 'decided_by', decidedAt: 'decided_at', reversible: 'reversible', undo: 'undo', undoneAt: 'undone_at' }
 
+/** A tv_runs row (with title and usage joined in) as the run viewer shows it. */
+export const runSummary = (r: any, usage: Totals): RunSummary => ({
+  id: r.id, threadId: r.thread_id, tenantId: r.tenant_id, userId: r.user_id, status: r.status, startedAt: iso(r.started_at)!,
+  ...(r.model ? { model: r.model } : {}), ...(r.prompt_version ? { promptVersion: r.prompt_version } : {}), ...(r.question ? { question: r.question } : {}),
+  ...(r.finished_at ? { finishedAt: iso(r.finished_at) } : {}), ...(r.error ? { error: r.error } : {}),
+  ...(r.rating !== null && r.rating !== undefined ? { rating: Number(r.rating) as 1 | -1 } : {}), ...(r.rating_note ? { ratingNote: r.rating_note } : {}),
+  title: r.title ?? null, usage,
+})
+export const stepRecord = (x: any): StepRecord => ({
+  runId: x.run_id, seq: x.seq, type: x.type, name: x.name, truncated: x.truncated, durationMs: x.duration_ms ?? 0, at: iso(x.created_at),
+  ...(x.tool_call_id ? { toolCallId: x.tool_call_id } : {}), ...(x.input !== null ? { input: x.input } : {}),
+  ...(x.output !== null ? { output: x.output } : {}), ...(x.error ? { error: x.error } : {}),
+})
+
 const thread = (r: any): Thread => ({ id: r.id, tenantId: r.tenant_id, userId: r.user_id, title: r.title, createdAt: new Date(r.created_at).toISOString() })
 
 /**
@@ -28,6 +42,14 @@ const thread = (r: any): Thread => ({ id: r.id, tenantId: r.tenant_id, userId: r
  * Hyperdrive client…). Run `migrate` first. Threads are only ever found by tenant and user together.
  */
 export function postgresStorage(query: Query): Storage {
+  /** What each run used, summed by unit. */
+  async function usageOf(ids: string[]): Promise<Map<string, Totals>> {
+    const out = new Map<string, Totals>()
+    if (!ids.length) return out
+    const r = await query('select run_id, unit, sum(amount)::float8 as amount from tv_usage where run_id = any($1::uuid[]) group by run_id, unit', [ids])
+    for (const x of r.rows) out.set(x.run_id, { ...out.get(x.run_id), [x.unit as Unit]: Number(x.amount) })
+    return out
+  }
   return {
     async getThread(tenantId, userId, id) {
       if (!/^[0-9a-f-]{36}$/i.test(id)) return null
@@ -113,8 +135,8 @@ export function postgresStorage(query: Query): Storage {
         [tenantId, s.enabled, s.instructions ?? null, json(s.glossary), json(s.toolsOff), json(s.formats), json(s.privacy), json(s.modelsOff)])
     },
     async startRun(r) {
-      await query('insert into tv_runs (id, thread_id, tenant_id, user_id, model, prompt_version) values ($1, $2, $3, $4, $5, $6)',
-        [r.id, r.threadId, r.tenantId, r.userId, r.model ?? null, r.promptVersion ?? null])
+      await query('insert into tv_runs (id, thread_id, tenant_id, user_id, model, prompt_version, question) values ($1, $2, $3, $4, $5, $6, $7)',
+        [r.id, r.threadId, r.tenantId, r.userId, r.model ?? null, r.promptVersion ?? null, r.question ?? null])
     },
     async finishRun(id, end) {
       await query('update tv_runs set status = $2, model = coalesce($3, model), error = $4, finished_at = now() where id = $1', [id, end.status, end.model ?? null, end.error ?? null])
@@ -128,6 +150,23 @@ export function postgresStorage(query: Query): Storage {
       await query(
         `insert into tv_run_steps (run_id, seq, type, tool_call_id, name, input, output, truncated, error, duration_ms) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
         [s.runId, s.seq, s.type, s.toolCallId ?? null, s.name, json(s.input), json(s.output), s.truncated, s.error ?? null, s.durationMs])
+    },
+    async listRuns(tenantId, f) {
+      const r = await query(
+        `select r.*, t.title from tv_runs r left join tv_threads t on t.id = r.thread_id
+         where r.tenant_id = $1 and ($2::text is null or r.user_id = $2) and ($3::text is null or r.status = $3)
+           and ($4::int is null or r.rating = $4) and ($5::timestamptz is null or r.started_at < $5)
+         order by r.started_at desc limit $6`,
+        [tenantId, f.userId ?? null, f.status ?? null, f.rating ?? null, f.before ?? null, f.limit])
+      const usage = await usageOf(r.rows.map((x) => x.id))
+      return r.rows.map((x) => runSummary(x, usage.get(x.id) ?? {}))
+    },
+    async getRun(tenantId, id) {
+      if (!/^[0-9a-f-]{36}$/i.test(id)) return null
+      const r = await query('select r.*, t.title from tv_runs r left join tv_threads t on t.id = r.thread_id where r.id = $1 and r.tenant_id = $2', [id, tenantId])
+      if (!r.rows[0]) return null
+      const steps = await query('select * from tv_run_steps where run_id = $1 order by seq, id', [id])
+      return { ...runSummary(r.rows[0], (await usageOf([id])).get(id) ?? {}), steps: steps.rows.map(stepRecord) }
     },
     async runningRuns(tenantId, userId, since) {
       const r = await query(`select count(*)::int as n from tv_runs where tenant_id = $1 and user_id = $2 and status = 'running' and started_at > $3`, [tenantId, userId, since.toISOString()])

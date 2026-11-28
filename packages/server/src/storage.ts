@@ -71,6 +71,13 @@ export interface Storage {
   /** Thumbs up (1) or down (-1) on a reply, or null to take it back; only by the person it answered. Returns false if not theirs. */
   rateRun(tenantId: string, userId: string, runId: string, rating: 1 | -1 | null, note?: string): Promise<boolean>
   saveStep(step: StepRecord): Promise<void>
+  /**
+   * A tenant's runs, newest first, for the run viewer (admins only). Optional: storages without it answer 501 there.
+   * `before` (an ISO time) pages back.
+   */
+  listRuns?(tenantId: string, filter: RunFilter): Promise<RunSummary[]>
+  /** One run of this tenant with its steps in order, or null. */
+  getRun?(tenantId: string, runId: string): Promise<RunDetail | null>
   /** Number of this person's runs still running that started after `since` (older ones count as abandoned). */
   runningRuns(tenantId: string, userId: string, since: Date): Promise<number>
   addUsage(rows: UsageRow[]): Promise<void>
@@ -103,17 +110,38 @@ export type Unit = 'messages' | 'input_tokens' | 'output_tokens' | 'neurons'
 export type Period = 'day' | 'month'
 export type Totals = Partial<Record<Unit, number>>
 export interface Budget { userId: string; unit: Unit; period: Period; limit: number }
-export interface RunRecord { id: string; threadId: string; tenantId: string; userId: string; model?: string; promptVersion?: string }
+export interface RunRecord { id: string; threadId: string; tenantId: string; userId: string; model?: string; promptVersion?: string; /** The message it answers, cut to 300 characters. */ question?: string }
+/**
+ * One step of a run in the log: a tool call, or a reply a done-check refused (type 'check': name is the check,
+ * input holds the refused words, error the problem).
+ */
 export interface StepRecord {
-  runId: string; seq: number; type: 'tool'; toolCallId?: string; name: string
+  runId: string; seq: number; type: 'tool' | 'check'; toolCallId?: string; name: string
   input?: unknown; output?: unknown; truncated: boolean; error?: string; durationMs: number
+  /** When the step ended (set by the storage). */
+  at?: string
 }
+export type RunStatus = 'running' | 'done' | 'failed' | 'stopped'
+export interface RunFilter { limit: number; before?: string; userId?: string; status?: RunStatus; rating?: 1 | -1 }
+/** A run as the run viewer lists it. */
+export interface RunSummary {
+  id: string; threadId: string; tenantId: string; userId: string; model?: string; promptVersion?: string
+  status: RunStatus; startedAt: string; finishedAt?: string; error?: string
+  rating?: 1 | -1 | null; ratingNote?: string
+  /** The message it answers (cut to 300 characters); older runs have none. */
+  question?: string
+  /** The conversation's title. */
+  title?: string | null
+  /** What the run used, summed by unit. */
+  usage: Totals
+}
+export interface RunDetail extends RunSummary { steps: StepRecord[] }
 export interface UsageRow { tenantId: string; userId: string; runId?: string; provider: string; model: string; unit: Unit; amount: number }
 
 /** The UTC day or month a moment falls in, as the key usage is summed under ('2026-11-27' / '2026-11'). */
 export const periodKey = (period: Period, at = new Date()) => at.toISOString().slice(0, period === 'day' ? 10 : 7)
 
-export interface MemoryRun extends RunRecord { status: 'running' | 'done' | 'failed' | 'stopped'; startedAt: Date; error?: string; rating?: 1 | -1 | null; ratingNote?: string }
+export interface MemoryRun extends RunRecord { status: RunStatus; startedAt: Date; finishedAt?: Date; error?: string; rating?: 1 | -1 | null; ratingNote?: string }
 
 const strip = ({ archived: _, ...t }: Thread & { archived?: boolean }): Thread => ({ ...t })
 
@@ -133,6 +161,14 @@ export function memoryStorage() {
     for (const r of rows) t[r.unit] = (t[r.unit] ?? 0) + r.amount
     return t
   }
+  const summary = (r: MemoryRun): RunSummary => ({
+    id: r.id, threadId: r.threadId, tenantId: r.tenantId, userId: r.userId, status: r.status, startedAt: r.startedAt.toISOString(),
+    ...(r.model ? { model: r.model } : {}), ...(r.promptVersion ? { promptVersion: r.promptVersion } : {}), ...(r.question ? { question: r.question } : {}),
+    ...(r.finishedAt ? { finishedAt: r.finishedAt.toISOString() } : {}), ...(r.error ? { error: r.error } : {}),
+    ...(r.rating !== undefined ? { rating: r.rating } : {}), ...(r.ratingNote ? { ratingNote: r.ratingNote } : {}),
+    title: threads.get(r.threadId)?.title ?? null,
+    usage: sum(usageRows.filter((u) => u.runId === r.id)),
+  })
   const storage: Storage & { threads: typeof threads; messages: typeof messages; cards: typeof cards; runs: typeof runs; steps: typeof steps; usageRows: typeof usageRows; budgetRows: typeof budgetRows; settings: typeof settings; cardEvents: typeof cardEvents; misses: typeof misses } = {
     threads, messages, cards, runs, steps, usageRows, budgetRows, settings, cardEvents, misses,
     async addCardEvent(e) { cardEvents.push({ ...e, at: e.at ?? new Date().toISOString() }) },
@@ -211,9 +247,19 @@ export function memoryStorage() {
     async startRun(run) { runs.set(run.id, { ...run, status: 'running', startedAt: new Date() }) },
     async finishRun(id, end) {
       const r = runs.get(id)
-      if (r) Object.assign(r, { status: end.status, error: end.error, ...(end.model ? { model: end.model } : {}) })
+      if (r) Object.assign(r, { status: end.status, error: end.error, finishedAt: new Date(), ...(end.model ? { model: end.model } : {}) })
     },
-    async saveStep(step) { steps.push(structuredClone(step)) },
+    async saveStep(step) { steps.push(structuredClone({ ...step, at: new Date().toISOString() })) },
+    async listRuns(tenantId, f) {
+      return [...runs.values()]
+        .filter((r) => r.tenantId === tenantId && (!f.userId || r.userId === f.userId) && (!f.status || r.status === f.status) && (!f.rating || r.rating === f.rating) && (!f.before || r.startedAt.toISOString() < f.before))
+        .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime()).slice(0, f.limit).map(summary)
+    },
+    async getRun(tenantId, id) {
+      const r = runs.get(id)
+      if (!r || r.tenantId !== tenantId) return null
+      return { ...summary(r), steps: steps.filter((s) => s.runId === id).sort((a, b) => a.seq - b.seq).map((s) => structuredClone(s)) }
+    },
     async rateRun(tenantId, userId, runId, rating, note) {
       const r = runs.get(runId)
       if (!r || r.tenantId !== tenantId || r.userId !== userId) return false

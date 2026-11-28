@@ -2,7 +2,7 @@
  * Optional defaults for @teovo/react. Every colour, the corner radius and the font are CSS variables, so an app can
  * theme the panel with the `theme` prop or its own CSS: .tv-panel { --tv-accent: #0f766e; }
  */
-.tv-sheet-root, .tv-panel:not(.tv-sheet-root .tv-panel) {
+.tv-sheet-root, .tv-panel:not(.tv-sheet-root .tv-panel), .tv-runs {
   --tv-accent: #4f46e5;
   --tv-accent-text: #ffffff;
   --tv-bg: #ffffff;
@@ -17,12 +17,12 @@
   --tv-font: inherit;
 }
 @media (prefers-color-scheme: dark) {
-  .tv-sheet-root:not([data-theme='light']), .tv-panel:not([data-theme='light']):not(.tv-sheet-root .tv-panel) {
+  .tv-sheet-root:not([data-theme='light']), .tv-panel:not([data-theme='light']):not(.tv-sheet-root .tv-panel), .tv-runs:not([data-theme='light']) {
     --tv-bg: #15171c; --tv-fg: #eceef2; --tv-muted: #9ba1ad; --tv-border: #2c3039; --tv-subtle: #1d2027;
     --tv-user-bg: color-mix(in srgb, var(--tv-accent) 28%, var(--tv-bg)); --tv-error: #f87171; --tv-ok: #34d399;
   }
 }
-.tv-panel[data-theme='dark'], .tv-sheet-root[data-theme='dark'] {
+.tv-panel[data-theme='dark'], .tv-sheet-root[data-theme='dark'], .tv-runs[data-theme='dark'] {
   --tv-bg: #15171c; --tv-fg: #eceef2; --tv-muted: #9ba1ad; --tv-border: #2c3039; --tv-subtle: #1d2027;
   --tv-user-bg: color-mix(in srgb, var(--tv-accent) 28%, var(--tv-bg)); --tv-error: #f87171; --tv-ok: #34d399;
 }
@@ -379,6 +379,44 @@
 .tv-voice-buttons .tv-voice-done:hover { background: #f87171; }
 .tv-voice-busy { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 14px 0; font-size: 14px; }
 @media (prefers-reduced-motion: reduce) { .tv-voice-dot { animation: none; } }
+
+/* ---------- Run viewer (admin screens) ---------- */
+.tv-runs { font-family: var(--tv-font); color: var(--tv-fg); font-size: 14px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.tv-runs *, .tv-runs *::before { box-sizing: border-box; }
+.tv-runs-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.tv-runs-filters select, .tv-runs-btn {
+  font: inherit; color: var(--tv-fg); background: var(--tv-bg); border: 1px solid var(--tv-border); border-radius: 8px; padding: 6px 10px; min-height: 34px;
+}
+.tv-runs-btn { cursor: pointer; }
+.tv-runs-btn:hover:not(:disabled) { background: var(--tv-subtle); }
+.tv-runs-btn:disabled { opacity: 0.6; cursor: default; }
+.tv-runs-more { align-self: center; }
+.tv-runs-empty, .tv-runs-muted { color: var(--tv-muted); }
+.tv-runs-empty { padding: 20px 0; text-align: center; }
+.tv-runs-wrap { overflow-x: auto; border: 1px solid var(--tv-border); border-radius: var(--tv-radius); background: var(--tv-bg); }
+.tv-runs-table { width: 100%; border-collapse: collapse; }
+.tv-runs-table th { text-align: left; font-size: 0.75em; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--tv-muted); padding: 10px 12px; border-bottom: 1px solid var(--tv-border); white-space: nowrap; }
+.tv-runs-table td { padding: 9px 12px; border-bottom: 1px solid var(--tv-border); vertical-align: top; }
+.tv-runs-table tbody tr:last-child td { border-bottom: 0; }
+.tv-runs-open td { background: var(--tv-subtle); }
+.tv-runs-link { font: inherit; color: var(--tv-accent); background: none; border: 0; padding: 0; cursor: pointer; text-align: left; text-decoration: underline; text-underline-offset: 2px; }
+.tv-runs-status { display: inline-block; font-size: 0.8em; padding: 2px 8px; border-radius: 999px; background: var(--tv-subtle); white-space: nowrap; }
+.tv-runs-done { color: var(--tv-ok); }
+.tv-runs-failed { color: var(--tv-error); }
+.tv-runs-detail-cell { background: var(--tv-subtle); }
+.tv-runs-detail { display: flex; flex-direction: column; gap: 12px; align-items: flex-start; }
+.tv-runs-facts { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; margin: 0; }
+.tv-runs-facts dt { color: var(--tv-muted); }
+.tv-runs-facts dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.tv-runs-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; width: 100%; }
+.tv-runs-steps li { border: 1px solid var(--tv-border); border-radius: 10px; background: var(--tv-bg); }
+.tv-runs-steps summary { display: flex; gap: 10px; align-items: baseline; padding: 8px 10px; cursor: pointer; flex-wrap: wrap; }
+.tv-runs-step-name { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; }
+.tv-runs-step-check { border-color: color-mix(in srgb, #d97706 45%, var(--tv-border)); }
+.tv-runs-step-failed { border-color: color-mix(in srgb, var(--tv-error) 45%, var(--tv-border)); }
+.tv-runs-label { font-size: 0.75em; color: var(--tv-muted); padding: 0 10px; }
+.tv-runs-steps pre { margin: 2px 10px 10px; padding: 8px; background: var(--tv-subtle); border-radius: 8px; font-size: 12px; max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+@media (max-width: 640px) { .tv-runs-sm { display: none; } .tv-runs-facts { grid-template-columns: 1fr; } }
 
 /* ---------- AllowanceMeter: usage against the limits, for a settings screen (sits on the app's own page) ---------- */
 .tv-meter { --tv-meter-ok: var(--tv-accent, #4f46e5); font-family: inherit; }

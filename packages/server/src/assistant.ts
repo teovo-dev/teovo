@@ -1,6 +1,7 @@
 import type { LanguageModelV4 } from '@ai-sdk/provider'
 import { convertToModelMessages, createUIMessageStream, createUIMessageStreamResponse, isStepCount, streamText, tool, toUIMessageStream, type ModelMessage, type ToolSet, type InferUIMessageChunk, type UIMessage } from 'ai'
 import { CHECK_FAILED, firstProblem, refusedNote, type DoneCheck } from './checks.js'
+import { runTrace } from './trace.js'
 import { fallbackModel } from './fallback.js'
 import { CardError, cardForModel, decide, publicCard, type CardHandler, type CardRules, type Decision } from './cards.js'
 import type { CardEventKind, Miss } from './storage.js'
@@ -279,7 +280,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     const models = (routed?.length ? routed : config.models).filter((m) => !offModels.has(m.modelId))
     if (!models.length) return json(503, { error: 'The assistant is paused for everyone at the moment. Try again later.' })
     const first = models[0]!
-    await storage.startRun({ id: runId, threadId: thread.id, tenantId: identity.tenantId, userId: identity.userId, model: first.modelId, promptVersion: config.promptVersion })
+    await storage.startRun({ id: runId, threadId: thread.id, tenantId: identity.tenantId, userId: identity.userId, model: first.modelId, promptVersion: config.promptVersion, question: (text.replace(/\s+/g, ' ').trim() || (message.parts.some((p) => p.type === 'file') ? 'Picture' : '')).slice(0, 300) })
     // Count again now that this reply is registered: two messages sent at the same moment both passed the check
     // above, and only now can one see the other. Nothing is saved or paid for yet, so backing off costs nothing.
     const maxRunning = config.limits?.maxRunning ?? 2
@@ -557,6 +558,9 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
               if (!found) { for (const c of held) writer.write(c); break }
               const final = attempt >= retries
               config.on?.check?.({ runId, name: found.name, problem: found.problem, attempt, final }, identity!)
+              // In the run log too, so the run viewer shows what was refused and why.
+              const refused = clip(words, config.logLimit ?? 8000)
+              await storage.saveStep({ runId, seq: seq++, type: 'check', name: found.name, input: refused.value, truncated: refused.truncated, error: found.problem, durationMs: 0 })
               held = []
               if (final) {
                 const id = `checked-${runId}`
@@ -746,6 +750,44 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
   async function logEvent(c: StoredCard, event: CardEventKind, who: Identity) {
     await config.storage.addCardEvent({ cardId: c.id, threadId: c.threadId, tenantId: who.tenantId, userId: who.userId, kind: c.kind, title: c.title, event })
       .catch((e) => config.on?.error?.(e, { identity: who, threadId: c.threadId }))
+  }
+
+  /**
+   * GET …/runs (filters: limit, before, userId, status, rating=up|down), GET …/runs/:id (its steps, question and reply)
+   * and GET …/runs/:id/trace (an OpenTelemetry trace to download). Admins only: runs hold everyone's questions.
+   */
+  async function runsRoute(req: Request, id?: string, trace = false): Promise<Response> {
+    const identity = await config.identify(req)
+    if (!identity) return json(401, { error: 'Sign in to use the assistant.' })
+    if (!isAdmin(identity)) return json(403, { error: 'Only an admin can see this.' })
+    const { storage } = config
+    if (!storage.listRuns || !storage.getRun) return json(501, { error: 'This storage does not keep a run log to browse.' })
+    if (!id) {
+      const q = new URL(req.url).searchParams
+      const before = q.get('before') && !Number.isNaN(Date.parse(q.get('before')!)) ? new Date(q.get('before')!).toISOString() : undefined
+      const status = q.get('status')
+      const rating = q.get('rating') === 'up' ? 1 : q.get('rating') === 'down' ? -1 : undefined
+      const runs = await storage.listRuns(identity.tenantId, {
+        limit: Math.min(200, Math.max(1, Number(q.get('limit')) || 50)),
+        ...(before ? { before } : {}), ...(q.get('userId') ? { userId: q.get('userId')! } : {}),
+        ...(status === 'running' || status === 'done' || status === 'failed' || status === 'stopped' ? { status } : {}),
+        ...(rating ? { rating } : {}),
+      })
+      return json(200, { runs })
+    }
+    const run = await storage.getRun(identity.tenantId, id)
+    if (!run) return json(404, { error: 'That run was not found.' })
+    if (trace) {
+      return new Response(JSON.stringify(runTrace(run, { service: config.name?.trim() || 'teovo' }), null, 2), { headers: {
+        'content-type': 'application/json', 'content-disposition': `attachment; filename="teovo-run-${run.id}.json"`,
+      } })
+    }
+    // The question it answered and the reply it gave, from the conversation.
+    const messages = await storage.listMessages(run.threadId)
+    const at = messages.findIndex((m) => m.role === 'assistant' && (m.metadata as { runId?: string } | undefined)?.runId === run.id)
+    const words = (m?: UIMessage) => m?.parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join('\n').trim() || undefined
+    const question = at > 0 ? words(messages.slice(0, at).reverse().find((m) => m.role === 'user')) : undefined
+    return json(200, { run: { ...run, ...(question ? { question } : {}), ...(at >= 0 && words(messages[at]) ? { reply: words(messages[at]) } : {}) } })
   }
 
   const isAdmin = (i: Identity) => (config.settingsRoles ?? ['owner', 'admin']).includes(i.role)
@@ -957,6 +999,14 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     /** Delete a person's (or with no userId, a whole tenant's) conversations, pictures and logs, e.g. on a privacy request. */
     wipe,
     /**
+     * One run as an OpenTelemetry trace (OTLP JSON), e.g. to send to a collector's /v1/traces. Null when the run is not
+     * this tenant's, or the storage keeps no run log to read.
+     */
+    async trace(tenantId: string, runId: string) {
+      const run = await config.storage.getRun?.(tenantId, runId)
+      return run ? runTrace(run, { service: config.name?.trim() || 'teovo' }) : null
+    },
+    /**
      * Run a reader from the server, with no signed-in user, e.g. a webhook (a bank SMS → a payment). Counted against
      * that identity's limits. `db` is what the reader's instructions and after get as ctx.db. Throws ReaderError.
      */
@@ -995,6 +1045,9 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
       if (t && ((req.method === 'GET' && !t[2]) || (req.method === 'POST' && t[2]))) return threads(req, t[1]!.toLowerCase(), Boolean(t[2]))
       const rt = /\/runs\/([0-9a-f-]{36})\/rating$/i.exec(path)
       if (req.method === 'POST' && rt) return rate(req, rt[1]!.toLowerCase())
+      if (req.method === 'GET' && path.endsWith('/runs')) return runsRoute(req)
+      const rv = /\/runs\/([0-9a-f-]{36})(\/trace)?$/i.exec(path)
+      if (req.method === 'GET' && rv) return runsRoute(req, rv[1]!.toLowerCase(), Boolean(rv[2]))
       if (req.method === 'GET' && path.endsWith('/policy')) return policy(req)
       const rd = /\/read\/([\w-]{1,64})$/.exec(path)
       if (req.method === 'POST' && rd) return readRoute(req, rd[1]!)

@@ -296,6 +296,13 @@ function rlsMigration(tables: string[], rls: Exclude<NonNullable<SchemaOptions['
   return { id: `rls_${tables.join('_').replace(/tv_/g, '').slice(0, 40)}`, sql }
 }
 
+const runViewer: Migration = {
+  id: '0014_run_viewer',
+  sql: `alter table tv_runs add column if not exists question text;
+create index if not exists tv_runs_tenant_started on tv_runs (tenant_id, started_at desc);
+create index if not exists tv_usage_run on tv_usage (run_id) where run_id is not null;`,
+}
+
 /** The migrations for these options, in order. */
 export function migrations(options: SchemaOptions = {}): Migration[] {
   const list: Migration[] = [core]
@@ -312,6 +319,7 @@ export function migrations(options: SchemaOptions = {}): Migration[] {
   // Tables added later get their rules in their own migration, so apps that already ran the ones above get them too.
   list.push(auditAndMisses, privacySwitches)
   if (options.features?.proposals) list.push(cardItemsVersions, cardLines)
+  list.push(runViewer)
   const later = ['tv_card_events', 'tv_misses']
   if (options.rls === 'server-only') list.push({ ...serverOnlyMigration(later), id: '0111_server_only_audit_misses' })
   else if (options.rls) list.push({ ...rlsMigration(later, options.rls), id: '0110_rls_audit_misses' })

@@ -1,4 +1,5 @@
 import { periodKey, type CardEvent, type CardPatch, type Miss, type Storage, type StoredCard, type StoredFile, type Thread, type Totals, type Unit } from '@teovo/server'
+import { runSummary, stepRecord } from './postgres.js'
 import type { UIMessage } from 'ai'
 
 /**
@@ -44,6 +45,18 @@ async function ok<T = any>(q: PromiseLike<{ data: T; error: { message: string } 
  * using supabase-js). Same tables and behaviour as postgresStorage; run the migrations (npx teovo generate) first.
  */
 export function supabaseStorage(db: SupabaseLike): Storage {
+  /** What each run used, summed by unit. */
+  async function usageOf(ids: string[]): Promise<Map<string, Totals>> {
+    const out = new Map<string, Totals>()
+    if (!ids.length) return out
+    const rows = await ok(db.from('tv_usage').select('run_id, unit, amount').in('run_id', ids))
+    for (const x of rows as any[]) {
+      const t = out.get(x.run_id) ?? {}
+      t[x.unit as Unit] = (t[x.unit as Unit] ?? 0) + Number(x.amount)
+      out.set(x.run_id, t)
+    }
+    return out
+  }
   return {
     async getThread(tenantId, userId, id) {
       if (!UUID.test(id)) return null
@@ -125,7 +138,7 @@ export function supabaseStorage(db: SupabaseLike): Storage {
       }, { onConflict: 'tenant_id' }))
     },
     async startRun(r) {
-      await ok(db.from('tv_runs').insert({ id: r.id, thread_id: r.threadId, tenant_id: r.tenantId, user_id: r.userId, model: r.model ?? null, prompt_version: r.promptVersion ?? null }))
+      await ok(db.from('tv_runs').insert({ id: r.id, thread_id: r.threadId, tenant_id: r.tenantId, user_id: r.userId, model: r.model ?? null, prompt_version: r.promptVersion ?? null, ...(r.question ? { question: r.question } : {}) }))
     },
     async finishRun(id, end) {
       await ok(db.from('tv_runs').update({ status: end.status, ...(end.model ? { model: end.model } : {}), error: end.error ?? null, finished_at: new Date().toISOString() }).eq('id', id))
@@ -141,6 +154,23 @@ export function supabaseStorage(db: SupabaseLike): Storage {
         run_id: s.runId, seq: s.seq, type: s.type, tool_call_id: s.toolCallId ?? null, name: s.name, input: s.input ?? null, output: s.output ?? null,
         truncated: s.truncated, error: s.error ?? null, duration_ms: s.durationMs,
       }))
+    },
+    async listRuns(tenantId, f) {
+      let q = db.from('tv_runs').select('*, thread:tv_threads(title)').eq('tenant_id', tenantId)
+      if (f.userId) q = q.eq('user_id', f.userId)
+      if (f.status) q = q.eq('status', f.status)
+      if (f.rating) q = q.eq('rating', f.rating)
+      if (f.before) q = q.lt('started_at', f.before)
+      const rows = await ok(q.order('started_at', { ascending: false }).limit(f.limit))
+      const usage = await usageOf(rows.map((x: any) => x.id))
+      return rows.map((x: any) => runSummary({ ...x, title: x.thread?.title }, usage.get(x.id) ?? {}))
+    },
+    async getRun(tenantId, id) {
+      if (!UUID.test(id)) return null
+      const rows = await ok(db.from('tv_runs').select('*, thread:tv_threads(title)').eq('id', id).eq('tenant_id', tenantId).limit(1))
+      if (!rows[0]) return null
+      const steps = await ok(db.from('tv_run_steps').select('*').eq('run_id', id).order('seq', { ascending: true }).order('id', { ascending: true }))
+      return { ...runSummary({ ...rows[0], title: rows[0].thread?.title }, (await usageOf([id])).get(id) ?? {}), steps: steps.map(stepRecord) }
     },
     async runningRuns(tenantId, userId, since) {
       const { count, error } = await db.from('tv_runs').select('id', { count: 'exact', head: true })
