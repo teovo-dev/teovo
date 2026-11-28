@@ -21,6 +21,11 @@ export interface AssistantProviderProps {
   onCard?: (card: Card, decision: CardDecision) => Promise<Partial<Card> | void> | Partial<Card> | void
   /** The user pressed a button the assistant offered (open a screen, run an app action). */
   onAction?: (action: Action) => void
+  /**
+   * After a card is confirmed, skipped or undone (by the server's applier or the app's onCard): e.g. reload the
+   * screen's data so it shows the change.
+   */
+  onCardDecided?: (card: Card, decision: CardDecision) => void
   /** Replace fetch, e.g. in tests or to call the handler in-process. */
   fetch?: typeof fetch
   /**
@@ -313,12 +318,14 @@ export function AssistantProvider(props: AssistantProviderProps) {
       await (p.fetch ?? fetch)(`${p.endpoint.replace(/\/$/, '')}/cards/${card.id}/${decision}`, {
         method: 'POST', headers: { ...h, 'content-type': 'application/json' }, body: JSON.stringify({ reversible: done.reversible === true }),
       }).catch(() => undefined)
+      p.onCardDecided?.({ ...card, ...done }, decision)
       return done
     }
     const h = typeof p.headers === 'function' ? await p.headers() : (p.headers ?? {})
     const res = await (p.fetch ?? fetch)(`${p.endpoint.replace(/\/$/, '')}/cards/${card.id}/${decision}`, { method: 'POST', headers: h })
     const body = (await res.json().catch(() => ({}))) as { card?: Card; error?: string }
     if (!res.ok) throw new Error(body.error ?? 'Something went wrong. Nothing was changed.')
+    p.onCardDecided?.({ ...card, ...body.card }, decision)
     return body.card ?? {}
   }, [])
 

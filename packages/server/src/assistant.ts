@@ -312,7 +312,9 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     // Ordered from most to least shared, so providers can cache the start: first what is the same for everyone (the
     // app's instructions and Teovo's rules), then what is the same for this tenant and person, then what changes
     // every message (the time, the screen).
-    const shared = `${config.name?.trim() ? `Your name is ${config.name.trim()}; you are the assistant built into this app.\n\n` : ''}${instructions}${screensText(config.screens ?? [])}${config.views?.length ? `\n\n${VIEWS_RULE}${formsText(config.forms ?? {})}` : ''}${config.tools.some((t) => t.kind === 'propose') || config.views?.some((v) => v.name === 'form') ? `\n\n${CARDS_RULE}` : ''}\n\n${UNTRUSTED_RULE}`
+    // Screens this person's role may open: the others are never mentioned, and open_screen refuses them.
+    const myScreens = (config.screens ?? []).filter((x) => !x.roles || x.roles.includes(identity.role))
+    const shared = `${config.name?.trim() ? `Your name is ${config.name.trim()}; you are the assistant built into this app.\n\n` : ''}${instructions}${screensText(myScreens)}${config.views?.length ? `\n\n${VIEWS_RULE}${formsText(config.forms ?? {})}` : ''}${config.tools.some((t) => t.kind === 'propose') || config.views?.some((v) => v.name === 'form') ? `\n\n${CARDS_RULE}` : ''}\n\n${UNTRUSTED_RULE}`
     const tenantPart = `${formatsText(formats)}${settingsText(settings)}${rolesText}${config.misses !== false && !(settings.toolsOff ?? []).includes('cannot_help') ? `\n\n${MISS_RULE}` : ''}`
     const system = `${shared}${tenantPart}${todayText(formats, config.now?.() ?? new Date())}${screenText(page, shownSummary, fence)}`
 
@@ -410,8 +412,8 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
             },
           })
         }
-        if (config.screens?.length) {
-          const screens = config.screens
+        if (myScreens.length) {
+          const screens = myScreens
           tools.open_screen = tool({
             description: 'Offer the user a button that opens one of the app\'s screens. Only the listed screens and filters work.',
             // One plain path, not a pattern plus an object of values: Gemini often failed to call the tool at all with

@@ -3,6 +3,7 @@
 // a usage meter for settings, and room for the open button above a bottom navigation bar.
 import type { LanguageModelV4StreamPart } from '@ai-sdk/provider'
 import { createAssistant, defineTool, memoryStorage, type AssistantConfig } from '@teovo/server'
+import type { Card, CardDecision } from './types'
 import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MockLanguageModelV4 } from 'ai/test'
@@ -93,5 +94,22 @@ describe('room under the open button', () => {
     render(<AssistantProvider endpoint="/api/assistant" fetch={server([])}><AssistantSheet buttonOffset="5.5rem"><AssistantPanel /></AssistantSheet></AssistantProvider>)
     const button = document.querySelector('.tv-sheet-open') as HTMLElement
     expect(button.style.getPropertyValue('--tv-open-offset')).toBe('5.5rem')
+  })
+})
+
+describe('onCardDecided', () => {
+  it("tells the app once the server applied a card, so its screens can reload", async () => {
+    const decided: [Card, CardDecision][] = []
+    const f = server([call('pay', { amount: 200 }), say('Ready.')], {
+      tools: [defineTool({ name: 'pay', kind: 'propose', description: 'Pay', input: z.object({ amount: z.number() }), run: ({ amount }) => ({ kind: 'pay', title: `Payment ₹${amount}`, payload: { amount } }) })],
+      cards: { pay: { apply: () => ({ note: 'Paid' }) } },
+    })
+    render(<AssistantProvider endpoint="/api/assistant" fetch={f} onCardDecided={(c, d) => decided.push([c, d])}><AssistantPanel /></AssistantProvider>)
+    await userEvent.type(screen.getByLabelText('Message'), 'she paid 200')
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await userEvent.click(await screen.findByRole('button', { name: 'Confirm' }))
+    await waitFor(() => expect(decided).toHaveLength(1))
+    expect(decided[0]![1]).toBe('confirm')
+    expect(decided[0]![0]).toMatchObject({ title: 'Payment ₹200', status: 'confirmed' })
   })
 })
