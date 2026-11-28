@@ -1,4 +1,4 @@
-import { useAssistant, useAssistantContext, useReader, VoiceButton } from '@teovo/react'
+import { RunViewer, useAssistant, useAssistantContext, useReader, VoiceButton } from '@teovo/react'
 import { useEffect, useState } from 'react'
 import { addDays, ago, longDate, money, shortDate, type Expense, type Order, type Product, type Shop, type Status } from './data.js'
 import { Avatar, Empty, Icon, Meter, PageHead, Pill, Stat, Tabs, payState } from './ui.js'
@@ -335,7 +335,7 @@ export function Expenses({ shop }: { shop: Shop }) {
 }
 
 // ---------- Admin ------------------------------------------------------------------------------------------------------
-/** What an app's own admin screen can show from Teovo: the trail of changes, the misses, and deleting conversations. */
+/** What an app's own admin screen can show from Teovo: the trail of changes, the misses, every reply, and deleting conversations. */
 export function Admin({ user }: { user: string }) {
   const [events, setEvents] = useState<{ title: string; event: string; userId: string; at: string }[]>([])
   const [misses, setMisses] = useState<{ question: string; reason: string; userId: string; at: string }[]>([])
@@ -362,6 +362,11 @@ export function Admin({ user }: { user: string }) {
             <thead><tr><th>When</th><th className="hide-sm">Who</th><th>Asked</th><th>Why not</th></tr></thead>
             <tbody>{misses.map((m, i) => <tr key={i}><td className="muted">{when(m.at)}</td><td className="hide-sm">{m.userId}</td><td>{m.question}</td><td className="muted">{m.reason}</td></tr>)}</tbody>
           </table></div> : <Empty>None yet.</Empty>}
+        </section>
+        <section className="card">
+          <div className="card-head"><h2>Every reply</h2></div>
+          <p className="muted">What each reply was asked, the tools it ran, what a check refused, and a trace to download.</p>
+          <RunViewer locale="en-IN" limit={15} userName={(id) => (id === 'demo-owner' ? 'Nisha (owner)' : id === 'demo-staff' ? 'Ravi (staff)' : id)} />
         </section>
         <section className="card">
           <div className="card-head"><h2>Your data</h2></div>

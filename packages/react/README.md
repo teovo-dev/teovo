@@ -21,3 +21,4 @@ useAssistantContext({ path: '/orders/2', title: 'Order #2' })
 - Only the new message is sent; the server keeps the history and checks it belongs to the signed-in user.
 - `useAssistant()` gives the messages, `sendMessage`, `stop`, `status` and `newChat` for apps that draw their own panel.
 - `renderText`, `renderCard` replace the default drawing of reply text and cards.
+- `<RunViewer />` on an app's admin screen (inside the provider): every reply with its question, tools, refused replies and usage, and an OpenTelemetry trace to download. Admins only.
