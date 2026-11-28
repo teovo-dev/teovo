@@ -286,6 +286,7 @@ function rlsMigration(tables: string[], rls: Exclude<NonNullable<SchemaOptions['
   const viaThread = `exists (select 1 from tv_threads t where t.id = thread_id and t.tenant_id = (${rls.tenant}) and t.user_id = (${rls.user}))`
   const rule: Record<string, string> = {
     tv_threads: own, tv_runs: own, tv_messages: viaThread, tv_proposals: viaThread,
+    tv_run_events: `exists (select 1 from tv_runs r where r.id = run_id and r.tenant_id = (${rls.tenant}) and r.user_id = (${rls.user}))`,
     tv_run_steps: `exists (select 1 from tv_runs r where r.id = run_id and r.tenant_id = (${rls.tenant}) and r.user_id = (${rls.user}))`,
     tv_files: own, tv_card_events: own, tv_misses: own, tv_usage: own, tv_usage_daily: `tenant_id = (${rls.tenant})`, tv_budgets: `tenant_id = (${rls.tenant})`, tv_tenant_settings: `tenant_id = (${rls.tenant})`,
   }
@@ -301,6 +302,30 @@ const runViewer: Migration = {
   sql: `alter table tv_runs add column if not exists question text;
 create index if not exists tv_runs_tenant_started on tv_runs (tenant_id, started_at desc);
 create index if not exists tv_usage_run on tv_usage (run_id) where run_id is not null;`,
+}
+
+/**
+ * Long runs: tv_runs doubles as the queue (queued status, the job, which server holds it until when, tries, a stop
+ * flag), and tv_run_events keeps each reply's stream in batches, so any server can send it, resume it or stop it.
+ */
+const longRuns: Migration = {
+  id: '0015_long_runs',
+  sql: `alter table tv_runs drop constraint if exists tv_runs_status_check;
+alter table tv_runs add constraint tv_runs_status_check check (status in ('queued', 'running', 'done', 'failed', 'stopped'));
+alter table tv_runs add column if not exists job jsonb;
+alter table tv_runs add column if not exists worker text;
+alter table tv_runs add column if not exists lease_until timestamptz;
+alter table tv_runs add column if not exists attempts int not null default 0;
+alter table tv_runs add column if not exists stop_requested_at timestamptz;
+create index if not exists tv_runs_waiting on tv_runs (started_at) where status in ('queued', 'running');
+create table if not exists tv_run_events (
+  run_id     uuid not null references tv_runs (id) on delete cascade,
+  attempt    int not null,
+  seq        int not null,
+  chunks     jsonb not null,
+  created_at timestamptz not null default now(),
+  primary key (run_id, attempt, seq)
+);`,
 }
 
 /** The migrations for these options, in order. */
@@ -323,12 +348,15 @@ export function migrations(options: SchemaOptions = {}): Migration[] {
   const later = ['tv_card_events', 'tv_misses']
   if (options.rls === 'server-only') list.push({ ...serverOnlyMigration(later), id: '0111_server_only_audit_misses' })
   else if (options.rls) list.push({ ...rlsMigration(later, options.rls), id: '0110_rls_audit_misses' })
+  list.push(longRuns)
+  if (options.rls === 'server-only') list.push({ ...serverOnlyMigration(['tv_run_events']), id: '0115_server_only_run_events' })
+  else if (options.rls) list.push({ ...rlsMigration(['tv_run_events'], options.rls), id: '0115_rls_run_events' })
   return list
 }
 
 /** Tables each feature needs, for the start-up check. */
 export const FEATURE_TABLES: Record<string, string[]> = {
-  core: ['tv_threads', 'tv_messages', 'tv_runs', 'tv_run_steps', 'tv_usage', 'tv_usage_daily', 'tv_budgets', 'tv_tenant_settings', 'tv_card_events', 'tv_misses', 'tv_migrations'],
+  core: ['tv_threads', 'tv_messages', 'tv_runs', 'tv_run_steps', 'tv_run_events', 'tv_usage', 'tv_usage_daily', 'tv_budgets', 'tv_tenant_settings', 'tv_card_events', 'tv_misses', 'tv_migrations'],
   proposals: ['tv_proposals'],
   files: ['tv_files'],
 }

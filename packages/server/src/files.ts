@@ -64,6 +64,16 @@ export async function storeFiles(message: UIMessage, rules: FileRules, owner: { 
   return { ...message, parts }
 }
 
+/** The reverse of storeFiles, for a reply run away from its request: the message's own pictures, as data again. */
+export async function loadFiles(message: UIMessage, store: FileStore, tenantId: string): Promise<UIMessage> {
+  const parts = await Promise.all(message.parts.map(async (p) => {
+    if (p.type !== 'file' || !p.url.startsWith(FILE_SCHEME)) return p
+    const f = await store.get(tenantId, p.url.slice(FILE_SCHEME.length))
+    return f ? { ...p, url: encodeDataUrl(f.mediaType, f.bytes) } : p
+  }))
+  return { ...message, parts }
+}
+
 /**
  * The one rule for pictures in what the model sees: the newest user message keeps its pictures (as data the model can
  * read); every earlier picture becomes a short note, so a photo isn't paid for again on every later message.

@@ -1,19 +1,19 @@
 import type { LanguageModelV4 } from '@ai-sdk/provider'
-import { convertToModelMessages, createUIMessageStream, createUIMessageStreamResponse, isStepCount, streamText, tool, toUIMessageStream, type ModelMessage, type ToolSet, type InferUIMessageChunk, type UIMessage } from 'ai'
+import { convertToModelMessages, createUIMessageStream, createUIMessageStreamResponse, isStepCount, readUIMessageStream, streamText, tool, toUIMessageStream, type ModelMessage, type ToolSet, type InferUIMessageChunk, type UIMessage } from 'ai'
 import { CHECK_FAILED, firstProblem, refusedNote, type DoneCheck } from './checks.js'
 import { runTrace } from './trace.js'
 import { fallbackModel } from './fallback.js'
 import { CardError, cardForModel, decide, publicCard, type CardHandler, type CardRules, type Decision } from './cards.js'
 import type { CardEventKind, Miss } from './storage.js'
 import { allowance, checkLimits, limitMessage, type LimitHit, type Limits } from './limits.js'
-import type { Storage, StoredCard, UsageRow } from './storage.js'
+import type { ClaimedRun, Storage, StoredCard, Thread, UsageRow } from './storage.js'
 import { toolsFor, type Action, type Identity, type RecordLink, type Proposal, type TeovoTool, type ToolContext } from './tools.js'
 import { makeUntrusted, UNTRUSTED_RULE } from './untrusted.js'
 
 import { makeRedactor, type RedactOptions } from './redact.js'
 import { checkForm, formHandler, formsText, missingFields, VIEWS_RULE, type FormData, type FormHandler, type FormSpec, type TeovoView } from './views.js'
 import { checkMessage, type AttachmentRules } from './attachments.js'
-import { picturesOnce, storeFiles, type FileRules } from './files.js'
+import { loadFiles, picturesOnce, storeFiles, type FileRules } from './files.js'
 import { checkFormats, DEFAULT_FORMATS, formatsText, todayText, type Formats } from './formats.js'
 import { DEFAULT_SETTINGS, noticeId, SettingsError, settingsText, validateSettings, type TenantSettings } from './settings.js'
 import { findScreen, readPage, screenPath, screensText, screenText, tidy, type Page, type ScreenFn, type ScreenInfo, type SuggestionsFn } from './screens.js'
@@ -122,6 +122,13 @@ export interface AssistantConfig<DB = unknown> {
   checks?: readonly DoneCheck<DB>[]
   /** How many times a refused reply is written again. Default 1. */
   checkRetries?: number
+  /**
+   * Long runs: each reply is queued in the run log and outlives its request. Closing the panel or losing the
+   * connection doesn't stop it; Stop works from any server; a reply whose server stopped or crashed is picked up by
+   * another from its last finished step; a reload shows the reply still being written. Needs a storage with a queue
+   * (all three of Teovo's, after `npx teovo migrate`). See RunsConfig.
+   */
+  runs?: RunsConfig<DB>
   /** Saved on each run, so a change in replies can be traced to a change in instructions. */
   promptVersion?: string
   /** Tool inputs and outputs longer than this are cut in the run log (the model still sees all of it). Default 8000 characters. */
@@ -143,6 +150,74 @@ export interface AssistantConfig<DB = unknown> {
     check?: (c: { runId: string; name: string; problem: string; attempt: number; final: boolean }, identity: Identity) => void
   }
 }
+
+export interface RunsConfig<DB = unknown> {
+  /**
+   * Run a reply on the server that took the message (default: true), or leave it queued for a worker
+   * (teovo.startWorker() in a long-running process, or teovo.work() from a scheduled job).
+   */
+  inline?: boolean
+  /**
+   * Act as the person when their reply runs away from their request: on a worker, or picked up after a restart.
+   * Required with inline: false. Without it, a reply that loses its server fails with a sentence instead of resuming.
+   */
+  asUser?: (identity: Identity) => Promise<DB> | DB
+  /** A server holds a run this long between heartbeats before another may take it over. Default 30 s. */
+  leaseMs?: number
+  /** How often a running reply renews its lease and checks for Stop from another server. Default 2 s. */
+  heartbeatMs?: number
+  /** Tries per reply (a restart mid-reply costs one) before it fails. Default 3. */
+  maxAttempts?: number
+  /** How often a server sending a reply that runs elsewhere checks the log for more. Default 500 ms. */
+  pollMs?: number
+  /** How often the reply's stream is written to the log while it runs. Default 300 ms (and at every finished step). */
+  flushMs?: number
+  /** This server's name in the run log. Default a random one per process. */
+  worker?: string
+}
+
+/** What a reply needs, whether it runs in the request that asked or on another server later. */
+interface ReplyCtx<DB> {
+  identity: Identity; thread: Thread; runId: string; message: UIMessage; history: UIMessage[]; page?: Page
+  models: readonly LanguageModelV4[]; settings: TenantSettings; db: DB; attempt: number; signal: AbortSignal
+  end: (e: { status: 'done' | 'failed' | 'stopped'; model?: string; error?: string }) => Promise<void>
+  /** A resumed run: what its last try finished, sent again first, and the same as a message for the model. */
+  replay?: Chunk[]; partial?: UIMessage
+  /** False once another server has taken this run over: then this one neither finishes nor saves it. */
+  owns?: () => Promise<boolean>
+}
+
+/** Something that keeps a Worker alive after its response (Cloudflare's ExecutionContext). */
+export interface WaitUntil { waitUntil?(promise: Promise<unknown>): void }
+
+/** Said when a reply can't be finished after its server stopped. */
+export const INTERRUPTED = 'This reply was cut off when the server restarted. Try again.'
+
+/**
+ * What a resumed run keeps of its last try: everything up to the end of the last step that ran a tool. A step
+ * still writing, or one with only words, is written again.
+ */
+function finishedSteps(chunks: Chunk[]): Chunk[] {
+  let keep = 0
+  let tool = false
+  chunks.forEach((c, i) => {
+    if (c.type === 'start-step') tool = false
+    if (c.type === 'tool-output-available' || c.type === 'tool-output-error') tool = true
+    if (c.type === 'finish-step' && tool) keep = i + 1
+  })
+  return chunks.slice(0, keep)
+}
+
+/** The message a stream of chunks builds, as the panel would show it. */
+async function messageOf(chunks: Chunk[]): Promise<UIMessage | undefined> {
+  let last: UIMessage | undefined
+  const stream = new ReadableStream<Chunk>({ start(c) { for (const x of chunks) c.enqueue(x); c.close() } })
+  for await (const m of readUIMessageStream({ stream: stream as ReadableStream<InferUIMessageChunk<UIMessage>> })) last = m
+  return last
+}
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+const ENDED = new Set(['done', 'failed', 'stopped'])
 
 const FAILED = 'The assistant could not finish this reply. Try again.'
 
@@ -226,7 +301,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
 
   const redact = makeRedactor(config.redact)
 
-  async function chat(req: Request): Promise<Response> {
+  async function chat(req: Request, ctx?: WaitUntil): Promise<Response> {
     const identity = await config.identify(req)
     if (!identity) return json(401, { error: 'Sign in to use the assistant.' })
 
@@ -238,10 +313,8 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     if (problem) return json(400, { error: problem })
 
     const { storage } = config
-    const [own, switches] = await Promise.all([storage.tenantSettings(identity.tenantId), storage.tenantSettings(SWITCHES)])
+    const { settings, switches } = await settingsOf(identity.tenantId)
     if (switches && !switches.enabled) return json(503, { error: 'The assistant is paused for everyone at the moment. Try again later.' })
-    // A tool switched off for everyone is off for this tenant too.
-    const settings: TenantSettings = { ...(own ?? DEFAULT_SETTINGS), toolsOff: [...new Set([...(own?.toolsOff ?? []), ...(switches?.toolsOff ?? [])])] }
     if (!settings.enabled) return json(403, { error: 'The assistant is turned off for your team. An admin can turn it on in settings.' })
     // The tenant's notice must have been accepted, in its current words; and pictures only if the tenant allows them.
     if (settings.privacy?.notice && body.consent !== (await noticeId(settings.privacy.notice))) {
@@ -280,7 +353,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     const models = (routed?.length ? routed : config.models).filter((m) => !offModels.has(m.modelId))
     if (!models.length) return json(503, { error: 'The assistant is paused for everyone at the moment. Try again later.' })
     const first = models[0]!
-    await storage.startRun({ id: runId, threadId: thread.id, tenantId: identity.tenantId, userId: identity.userId, model: first.modelId, promptVersion: config.promptVersion, question: (text.replace(/\s+/g, ' ').trim() || (message.parts.some((p) => p.type === 'file') ? 'Picture' : '')).slice(0, 300) })
+    await storage.startRun({ id: runId, threadId: thread.id, tenantId: identity.tenantId, userId: identity.userId, model: first.modelId, promptVersion: config.promptVersion, ...(queue ? { status: 'queued' as const } : {}), question: (text.replace(/\s+/g, ' ').trim() || (message.parts.some((p) => p.type === 'file') ? 'Picture' : '')).slice(0, 300) })
     // Count again now that this reply is registered: two messages sent at the same moment both passed the check
     // above, and only now can one see the other. Nothing is saved or paid for yet, so backing off costs nothing.
     const maxRunning = config.limits?.maxRunning ?? 2
@@ -302,7 +375,28 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
 
     const db = await config.asUser(identity, req)
     await storage.addUsage([{ tenantId: identity.tenantId, userId: identity.userId, runId, provider: first.provider, model: first.modelId, unit: 'messages', amount: 1 }])
-    let seq = 0
+    const rc = { identity, thread, runId, message, history, page, models, settings, db, attempt: 1 }
+    const headers = { 'x-teovo-thread': thread.id }
+    if (!queue) return createUIMessageStreamResponse({ stream: await reply({ ...rc, signal: req.signal, end: (e) => storage.finishRun(runId, e) }), headers })
+    // A long run: queued in the run log, then run here (unless a worker takes them), and sent from the log, so it goes
+    // on when this request ends and any server can send it, stop it or pick it up again.
+    await queue.enqueue(runId, { identity, messageId: message.id, ...(page ? { page } : {}), models: models.map((m) => m.modelId) })
+    if (config.runs?.inline !== false) {
+      const claimed = await queue.claim(runId, worker, leaseMs)
+      if (claimed) keepAlive(drive(claimed, { thread, message, history, models, settings, db }), ctx)
+    }
+    return createUIMessageStreamResponse({ stream: tail(runId), headers })
+  }
+
+  /** One reply, as the panel's stream: from the screen and instructions to the checked, saved answer. */
+  async function reply(rc: ReplyCtx<DB>): Promise<ReadableStream<Chunk>> {
+    const { identity, thread, runId, message, history, page, models, settings, db, signal } = rc
+    const { storage } = config
+    const first = models[0]!
+    const timeouts = { ...DEFAULT_TIMEOUTS, ...config.timeouts }
+    const text = message.parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join(' ')
+    // Step numbers go on across tries, so a resumed run's steps follow the ones before.
+    let seq = (rc.attempt - 1) * 1000
     const statuses = new Map((await storage.listCards(thread.id)).map((c) => [c.id, c]))
     const nonce = crypto.randomUUID().slice(0, 8)
     // Which outside text this run has read: the user's pictures, and whatever tools fenced as untrusted.
@@ -325,11 +419,13 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     const tenantPart = `${formatsText(formats)}${settingsText(settings)}${rolesText}${config.misses !== false && !(settings.toolsOff ?? []).includes('cannot_help') ? `\n\n${MISS_RULE}` : ''}`
     const system = `${shared}${tenantPart}${todayText(formats, config.now?.() ?? new Date())}${screenText(page, shownSummary, fence)}`
 
-    const stream = createUIMessageStream<UIMessage<{ runId: string; threadId: string; formats: Formats }>>({
+    return createUIMessageStream<UIMessage<{ runId: string; threadId: string; formats: Formats }>>({
       originalMessages: history as UIMessage<{ runId: string; threadId: string; formats: Formats }>[],
       execute: async ({ writer }) => {
         // The panel draws numbers and dates in views the same way.
-        writer.write({ type: 'start', messageMetadata: { runId, threadId: thread.id, formats } })
+        // A resumed run first sends again what the last try finished, then carries on from there.
+        if (rc.replay?.length) for (const c of rc.replay) writer.write(c)
+        else writer.write({ type: 'start', messageMetadata: { runId, threadId: thread.id, formats } })
         const tools: ToolSet = {}
         const off = new Set(settings.toolsOff ?? [])
         for (const t of toolsFor(config.tools, identity).filter((x) => !off.has(x.name))) {
@@ -469,7 +565,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
             flush() { ended() },
           })))
         }
-        const modelMessages = await convertToModelMessages(history, {
+        const modelMessages = await convertToModelMessages(rc.partial ? [...history, rc.partial] as typeof history : history, {
             // Earlier cards reach the model with their status now, so it knows what the user confirmed or skipped.
             convertDataPart: (p) => {
               if (p.type === 'data-view') {
@@ -494,7 +590,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
             // keeps the gaps between chunks and the total.
             timeout: { chunkMs: timeouts.chunkMs, totalMs: timeouts.totalMs },
             maxRetries: 1,
-            abortSignal: req.signal,
+            abortSignal: signal,
           })
           // Our sentence for the user, not the SDK's "An error occurred."; tool errors still reach the model as they are.
           send(toUIMessageStream({ stream: r.stream, sendStart: false, sendFinish: false, onError: () => FAILED, redactToolErrors: false }))
@@ -511,7 +607,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
           // right after a tool result. That is a blip, not an answer: carry on once from there with tools still on, so
           // a reply that needs one (a button, a table, a card) can still use it.
           const last = (await result.steps).at(-1)
-          if (last && !last.text.trim() && !last.toolCalls.length && !shown && !(await said()) && !req.signal.aborted) {
+          if (last && !last.text.trim() && !last.toolCalls.length && !shown && !(await said()) && !signal.aborted) {
             result = run(sofar)
             results.push(result)
             text = await result.text
@@ -519,10 +615,10 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
           }
           // Models sometimes end a turn in silence after a tool call. Never leave the user with an empty reply: ask
           // once more, with tools off, for the answer in words. (Not after a view or card: those are the answer.)
-          if (!(await said()) && !shown && !req.signal.aborted) {
+          if (!(await said()) && !shown && !signal.aborted) {
             const again = streamText({
               model, system: `${system}\n\nYou have what you need from the tools above. Now answer the user in words; do not call tools.`,
-              messages: sofar, tools, toolChoice: 'none', maxRetries: 1, abortSignal: req.signal,
+              messages: sofar, tools, toolChoice: 'none', maxRetries: 1, abortSignal: signal,
               timeout: { chunkMs: timeouts.chunkMs, totalMs: timeouts.totalMs },
             })
             results.push(again)
@@ -530,7 +626,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
             text = await Promise.resolve(again.text).catch(() => NO_ANSWER)
             // Still nothing (Gemini can end even this one with no words, e.g. UNEXPECTED_TOOL_CALL): a plain sentence,
             // never a blank reply.
-            if (!text.trim() && !req.signal.aborted) {
+            if (!text.trim() && !signal.aborted) {
               const id = `no-answer-${runId}`
               writer.write({ type: 'text-start', id })
               writer.write({ type: 'text-delta', id, delta: NO_ANSWER })
@@ -542,7 +638,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
             const retries = config.checkRetries ?? 1
             for (let attempt = 0; ; attempt++) {
               await Promise.all(reading)   // every held word of this try has arrived
-              if (req.signal.aborted) { for (const c of held) writer.write(c); break }   // a stopped reply keeps what it had
+              if (signal.aborted) { for (const c of held) writer.write(c); break }   // a stopped reply keeps what it had
               const words = held.filter((c) => c.type === 'text-delta').map((c) => (c as { delta: string }).delta).join('')
               const toolCalls = (await Promise.all(results.map((r) => Promise.resolve(r.steps).catch(() => [])))).flat()
                 .flatMap((st) => st.toolCalls.map((tc) => ({ name: tc.toolName, input: tc.input })))
@@ -580,12 +676,12 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
           writer.write({ type: 'finish' })
           await finish('done')
         } catch (e) {
-          await finish(req.signal.aborted ? 'stopped' : 'failed', streamError ?? e)
+          await finish(signal.aborted ? 'stopped' : 'failed', streamError ?? e)
           throw e
         }
 
         async function finish(status: 'done' | 'failed' | 'stopped', error?: unknown) {
-          await storage.finishRun(runId, { status, model: usedModel.modelId, ...(error ? { error: error instanceof Error ? error.message : String(error) } : {}) })
+          if (await (rc.owns?.() ?? true)) await rc.end({ status, model: usedModel.modelId, ...(error ? { error: error instanceof Error ? error.message : String(error) } : {}) })
           const all = await Promise.all(results.map((r) => Promise.resolve(r.totalUsage).catch(() => undefined)))
           const u = { inputTokens: all.reduce((n, x) => n + (x?.inputTokens ?? 0), 0), outputTokens: all.reduce((n, x) => n + (x?.outputTokens ?? 0), 0) }
           const base = { tenantId: identity!.tenantId, userId: identity!.userId, runId, provider: usedModel.provider, model: usedModel.modelId }
@@ -604,14 +700,239 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
         return FAILED
       },
       onEnd: async ({ messages }) => {
+        if (!(await (rc.owns?.() ?? true))) return   // another server carries this run on, and saves it
         const reply = messages.at(-1)
         // A reply the user stopped keeps what was written so far, marked, so a reload shows it was cut short.
         if (reply && reply.role === 'assistant') {
-          await storage.saveMessages(thread.id, [req.signal.aborted ? { ...reply, metadata: { ...(reply.metadata as object | undefined), stopped: true } } : reply])
+          await storage.saveMessages(thread.id, [signal.aborted ? { ...reply, metadata: { ...(reply.metadata as object | undefined), stopped: true } } : reply])
         }
       },
     })
-    return createUIMessageStreamResponse({ stream, headers: { 'x-teovo-thread': thread.id } })
+  }
+
+  /** A tenant's settings, with what is switched off for every tenant added in. */
+  async function settingsOf(tenantId: string) {
+    const [own, switches] = await Promise.all([config.storage.tenantSettings(tenantId), config.storage.tenantSettings(SWITCHES)])
+    // A tool switched off for everyone is off for this tenant too.
+    const settings: TenantSettings = { ...(own ?? DEFAULT_SETTINGS), toolsOff: [...new Set([...(own?.toolsOff ?? []), ...(switches?.toolsOff ?? [])])] }
+    return { settings, switches }
+  }
+
+  // ---- Long runs ----
+  const queue = config.runs ? config.storage.queue : undefined
+  if (config.runs && !queue) throw new Error('createAssistant: runs needs a storage with a queue (memoryStorage, postgresStorage or supabaseStorage)')
+  if (config.runs?.inline === false && !config.runs.asUser) throw new Error('createAssistant: runs.inline false needs runs.asUser, so a worker can act as the person')
+  const worker = config.runs?.worker ?? `teovo-${crypto.randomUUID().slice(0, 8)}`
+  const leaseMs = config.runs?.leaseMs ?? 30_000
+  const beatMs = config.runs?.heartbeatMs ?? 2_000
+  const maxAttempts = config.runs?.maxAttempts ?? 3
+  const pollMs = config.runs?.pollMs ?? 500
+  const flushMs = config.runs?.flushMs ?? 300
+
+  /** Runs this server is writing now: their stream so far, for sending it without waiting for the log. */
+  interface Local { attempt: number; chunks: Chunk[]; subs: Set<(c: Chunk | null) => void>; ctrl: AbortController; lost: boolean }
+  const locals = new Map<string, Local>()
+  const resumed = { type: 'data-resumed', data: {}, transient: true } as unknown as Chunk
+
+  function keepAlive(p: Promise<void>, ctx?: WaitUntil) {
+    const safe = p.catch((e) => config.on?.error?.(e, { identity: { tenantId: '', userId: '', role: '' }, threadId: '' }))
+    ctx?.waitUntil?.(safe)
+  }
+
+  /** What a run needs when it is not in the request that asked: read back from the conversation and the job. */
+  async function restore(claim: ClaimedRun): Promise<Omit<ReplyCtx<DB>, 'attempt' | 'signal' | 'end' | 'lost'> | { error: string }> {
+    const { identity, messageId, page, models: ids } = claim.job
+    if (!config.runs?.asUser) return { error: 'runs.asUser is not set, so no other server can carry this reply on' }
+    const thread = await config.storage.getThread(identity.tenantId, identity.userId, claim.threadId)
+    if (!thread) return { error: 'The conversation was removed' }
+    const list = await config.storage.listMessages(thread.id)
+    const at = list.findIndex((m) => m.id === messageId)
+    if (at < 0) return { error: 'The message was removed' }
+    const message = config.files ? await loadFiles(list[at]!, config.files.store, identity.tenantId) : list[at]!
+    const earlier = list.slice(0, at)
+    const history = trimToolResults(picturesOnce([...earlier, message].slice(-(config.historyMessages ?? 30)), message), config.historyToolChars ?? 1500)
+    const { settings, switches } = await settingsOf(identity.tenantId)
+    const off = new Set(switches?.modelsOff ?? [])
+    const text = message.parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join(' ')
+    const routed = config.route ? await Promise.resolve().then(() => config.route!({ identity, page, text, history: earlier.length })).catch(() => undefined) : undefined
+    const known = [...(routed ?? []), ...config.models]
+    let models = ids.map((id) => known.find((m) => m.modelId === id)).filter((m): m is LanguageModelV4 => Boolean(m) && !off.has(m!.modelId))
+    if (!models.length) models = config.models.filter((m) => !off.has(m.modelId))
+    if (!models.length) return { error: 'Every model is switched off' }
+    return { identity, thread, runId: claim.id, message, history, page, models, settings, db: await config.runs.asUser(identity) }
+  }
+
+  /**
+   * Run a claimed reply to the end on this server: the stream goes to the log in batches (and straight to anyone this
+   * server is sending it to), a heartbeat keeps the lease and listens for Stop, and the run is finished last.
+   */
+  async function drive(claim: ClaimedRun, pre?: Pick<ReplyCtx<DB>, 'thread' | 'message' | 'history' | 'models' | 'settings' | 'db'>): Promise<void> {
+    const q = queue!
+    const { identity } = claim.job
+    const report = (e: unknown) => config.on?.error?.(e, { identity, threadId: claim.threadId })
+    const local: Local = { attempt: claim.attempts, chunks: [], subs: new Set(), ctrl: new AbortController(), lost: false }
+    locals.set(claim.id, local)
+    let batch: Chunk[] = []
+    let seq = 0
+    let writes = Promise.resolve()
+    const flush = () => {
+      if (!batch.length) return
+      const chunks = batch
+      const n = seq++
+      batch = []
+      writes = writes.then(() => q.addEvents(claim.id, claim.attempts, n, chunks)).catch(report)
+    }
+    const emit = (c: Chunk) => {
+      local.chunks.push(c)
+      batch.push(c)
+      for (const s of local.subs) s(c)
+      if (c.type === 'finish-step' || c.type === 'finish') flush()
+    }
+    const ticker = setInterval(flush, flushMs)
+    // Asked before finishing and saving: a server that stalled past its lease must not overwrite the one that took over.
+    const owns = async () => {
+      if (!local.lost && !(await q.renew(claim.id, worker, leaseMs).catch(() => ({ stop: false })))) { local.lost = true; local.ctrl.abort() }
+      return !local.lost
+    }
+    const beat = setInterval(() => {
+      q.renew(claim.id, worker, leaseMs).then((r) => {
+        if (!r) { local.lost = true; local.ctrl.abort() }
+        else if (r.stop) local.ctrl.abort()
+      }, report)
+    }, beatMs)
+    let end: Parameters<ReplyCtx<DB>['end']>[0] | undefined
+    // A reply that can't go on: one plain sentence, saved, so the conversation shows what happened.
+    const giveUp = async (error: string) => {
+      const msg = { id: crypto.randomUUID(), role: 'assistant' as const, metadata: { runId: claim.id, threadId: claim.threadId }, parts: [{ type: 'text' as const, text: INTERRUPTED }] }
+      for (const c of [{ type: 'start', messageId: msg.id, messageMetadata: msg.metadata }, { type: 'text-start', id: 'x' }, { type: 'text-delta', id: 'x', delta: INTERRUPTED }, { type: 'text-end', id: 'x' }, { type: 'finish' }] as Chunk[]) emit(c)
+      await config.storage.saveMessages(claim.threadId, [msg as UIMessage])
+      end = { status: 'failed', error }
+    }
+    try {
+      if (claim.stopRequested) { end = { status: 'stopped' }; return }
+      if (claim.attempts > maxAttempts) { await giveUp(`Stopped after ${maxAttempts} tries`); return }
+      const base = pre ? { identity, runId: claim.id, page: claim.job.page, ...pre } : await restore(claim)
+      if ('error' in base) { await giveUp(base.error); return }
+      let replay: Chunk[] | undefined
+      for (let a = claim.attempts - 1; a >= 1 && !replay?.length; a--) replay = finishedSteps((await q.events(claim.id, a, -1)).flatMap((e) => e.chunks as Chunk[]))
+      const stream = await reply({
+        ...base, attempt: claim.attempts, signal: local.ctrl.signal, owns,
+        end: async (e) => { end = e },
+        ...(replay?.length ? { replay, partial: await messageOf(replay) } : {}),
+      })
+      const reader = stream.getReader()
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        emit(value)
+      }
+    } catch (e) {
+      report(e)
+      end ??= { status: local.ctrl.signal.aborted ? 'stopped' : 'failed', error: e instanceof Error ? e.message : String(e) }
+    } finally {
+      clearInterval(ticker)
+      clearInterval(beat)
+      flush()
+      await writes
+      // Last, so whoever reads the log has everything once the run shows as ended.
+      if (await owns()) await config.storage.finishRun(claim.id, end ?? { status: 'failed', error: 'The reply ended without finishing' }).catch(report)
+      locals.delete(claim.id)
+      for (const s of local.subs) s(null)
+    }
+  }
+
+  /**
+   * A run's stream for the panel, from its start: from this server's memory while it runs here, otherwise from the
+   * log as it grows. If the run is picked up again elsewhere, a data-resumed part tells the panel to read it afresh.
+   */
+  function tail(runId: string): ReadableStream<Chunk> {
+    const q = queue!
+    let cancelled = false
+    let unsub: (() => void) | undefined
+    return new ReadableStream<Chunk>({
+      async start(out) {
+        let attempt: number | undefined
+        let seq = -1
+        let sent = 0
+        const send = (c: Chunk) => { out.enqueue(c); sent++ }
+        try {
+          while (!cancelled) {
+            const local = locals.get(runId)
+            if (local && (attempt === undefined || attempt === local.attempt)) {
+              for (const c of local.chunks.slice(sent)) send(c)
+              await new Promise<void>((done) => {
+                const sub = (c: Chunk | null) => {
+                  if (c && !cancelled) { send(c); return }
+                  if (!c && local.lost && !cancelled) out.enqueue(resumed)
+                  local.subs.delete(sub)
+                  done()
+                }
+                local.subs.add(sub)
+                unsub = () => sub(null)
+              })
+              break
+            }
+            const st = await q.state(runId)
+            if (!st) break
+            if (st.attempts > 0 && attempt !== st.attempts) {
+              if (sent) { out.enqueue(resumed); break }   // picked up again elsewhere: the panel reads it afresh
+              attempt = st.attempts
+              seq = -1
+            }
+            if (attempt !== undefined) {
+              for (const e of await q.events(runId, attempt, seq)) { for (const c of e.chunks as Chunk[]) send(c); seq = e.seq }
+            }
+            if (ENDED.has(st.status)) break
+            await sleep(pollMs)
+          }
+          if (!cancelled) out.close()
+        } catch (e) {
+          if (!cancelled) out.error(e)
+        }
+      },
+      cancel() { cancelled = true; unsub?.() },
+    })
+  }
+
+  /** Take waiting runs (queued, or left by a server that stopped) and run them here. */
+  async function claimWaiting(room: number, onRun: (p: Promise<void>) => void): Promise<number> {
+    let n = 0
+    for (const id of await queue!.waiting(room)) {
+      const c = await queue!.claim(id, worker, leaseMs)
+      if (c) { n++; onRun(drive(c)) }
+    }
+    return n
+  }
+
+  /**
+   * POST …/runs/:id/stop, or …/threads/:id/stop for the reply a conversation is waiting for: stop a reply from any
+   * server. The person who asked can, and so can an admin (by run).
+   */
+  async function stopRoute(req: Request, id: string, by: 'run' | 'thread' = 'run'): Promise<Response> {
+    const identity = await config.identify(req)
+    if (!identity) return json(401, { error: 'Sign in to use the assistant.' })
+    if (!queue) return json(501, { error: 'Replies here stop when their request is closed.' })
+    let runId = id
+    if (by === 'thread') {
+      const thread = await config.storage.getThread(identity.tenantId, identity.userId, id)
+      const active = thread ? await queue.active(thread.id) : null
+      if (!active) return json(404, { error: 'That reply is not running.' })
+      runId = active
+    }
+    if (!(await queue.requestStop(identity.tenantId, runId, isAdmin(identity) ? undefined : identity.userId))) return json(404, { error: 'That reply is not running.' })
+    locals.get(runId)?.ctrl.abort()   // here already: no need to wait for the heartbeat
+    return json(200, { stopping: true })
+  }
+
+  /** GET …/threads/:id/stream: the reply this conversation is waiting for, from its start; 204 when there is none. */
+  async function streamRoute(req: Request, threadId: string): Promise<Response> {
+    const identity = await config.identify(req)
+    if (!identity) return json(401, { error: 'Sign in to use the assistant.' })
+    const thread = await config.storage.getThread(identity.tenantId, identity.userId, threadId)
+    if (!thread) return json(404, { error: 'That conversation was not found.' })
+    const id = queue ? await queue.active(thread.id) : null
+    if (!id) return new Response(null, { status: 204 })
+    return createUIMessageStreamResponse({ stream: tail(id), headers: { 'x-teovo-thread': thread.id } })
   }
 
   const rules: CardRules = { ttlMs: 24 * 3600_000, undoMs: 10 * 60_000, ...config.cardRules }
@@ -670,7 +991,9 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
       ...m,
       parts: m.parts.map((p) => (p.type === 'data-card' && 'id' in p && p.id && cards.has(p.id) ? { ...p, data: cards.get(p.id) } : p)),
     }))
-    return json(200, { thread: { id: thread.id, title: thread.title, createdAt: thread.createdAt }, messages })
+    // A reply still being written (long runs): the panel reads it with GET …/threads/:id/stream.
+    const running = queue ? await queue.active(thread.id) : null
+    return json(200, { thread: { id: thread.id, title: thread.title, createdAt: thread.createdAt }, messages, ...(running ? { running } : {}) })
   }
 
   async function submitForm(req: Request, threadId: string, viewId: string): Promise<Response> {
@@ -903,6 +1226,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     return json(200, {
       pictures: p.pictures !== false && Boolean(config.attachments),
       voice: Boolean(config.voice),
+      ...(queue ? { longRuns: true } : {}),
       readers: (config.readers ?? []).filter((r) => !r.roles || r.roles.includes(identity.role)).map((r) => r.name),
       ...(config.name?.trim() ? { name: config.name.trim() } : {}),
       ...(config.formats?.locale ? { locale: config.formats.locale } : {}),
@@ -1012,10 +1336,60 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
       if (!f?.keepDays || !f.store.removeOlderThan) return 0
       return f.store.removeOlderThan(new Date(now.getTime() - f.keepDays * 86_400_000))
     },
+    /**
+     * Long runs: take waiting replies (queued ones, and ones a stopped or crashed server left) and run them here;
+     * resolves when they have finished. For a scheduled job, e.g. a Cloudflare cron every minute. Returns how many.
+     */
+    async work(opts: { max?: number } = {}): Promise<number> {
+      if (!queue) return 0
+      const running: Promise<void>[] = []
+      const n = await claimWaiting(opts.max ?? 4, (p) => running.push(p))
+      await Promise.all(running)
+      return n
+    },
+    /**
+     * Long runs: keep taking waiting replies in this process (a Node server or worker). stop() stops taking more,
+     * gives running ones `waitMs` (default 8 s) to finish, and hands the rest back so another server carries them on.
+     */
+    startWorker(opts: { pollMs?: number; concurrency?: number } = {}) {
+      if (!queue) throw new Error('startWorker needs createAssistant({ runs })')
+      const active = new Set<Promise<void>>()
+      let on = true
+      let wake: () => void = () => {}
+      const loop = (async () => {
+        while (on) {
+          try {
+            const room = (opts.concurrency ?? 4) - active.size
+            if (room > 0) await claimWaiting(room, (p) => { const t = p.finally(() => active.delete(t)); active.add(t) })
+          } catch (e) {
+            config.on?.error?.(e, { identity: { tenantId: '', userId: '', role: '' }, threadId: '' })
+          }
+          await new Promise<void>((r) => { const t = setTimeout(r, opts.pollMs ?? 2000); wake = () => { clearTimeout(t); r() } })
+        }
+      })()
+      return {
+        async stop(o: { waitMs?: number } = {}) {
+          on = false
+          wake()
+          await loop
+          await Promise.race([Promise.all(active), sleep(o.waitMs ?? 8000)])
+          for (const [id, l] of locals) {
+            l.lost = true
+            l.ctrl.abort()
+            await queue.release(id, worker).catch(() => {})
+          }
+          await Promise.all(active)
+        },
+      }
+    },
     /** Mount under any path, e.g. app.all('/api/assistant/*', teovo.fetch). Handles POST …/chat (a message sent again replaces it and what came after), POST …/runs/:id/rating, GET …/threads, GET …/threads/:id, POST …/threads/:id/archive, GET …/suggestions, GET/PUT …/settings and POST …/cards/:id/(confirm|skip|undo). */
-    async fetch(req: Request): Promise<Response> {
+    async fetch(req: Request, ctx?: WaitUntil): Promise<Response> {
       const path = new URL(req.url).pathname
-      if (req.method === 'POST' && path.endsWith('/chat')) return chat(req)
+      if (req.method === 'POST' && path.endsWith('/chat')) return chat(req, ctx)
+      const ts = /\/threads\/([0-9a-f-]{36})\/stream$/i.exec(path)
+      if (req.method === 'GET' && ts) return streamRoute(req, ts[1]!.toLowerCase())
+      const rs = /\/(runs|threads)\/([0-9a-f-]{36})\/stop$/i.exec(path)
+      if (req.method === 'POST' && rs) return stopRoute(req, rs[2]!.toLowerCase(), rs[1] === 'threads' ? 'thread' : 'run')
       if (req.method === 'GET' && path.endsWith('/suggestions')) return suggestions(req)
       const fm = /\/files\/([0-9a-f-]{36})$/i.exec(path)
       if (req.method === 'GET' && fm) return file(req, fm[1]!.toLowerCase())

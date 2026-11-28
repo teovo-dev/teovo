@@ -31,7 +31,7 @@ suite('@teovo/db on Postgres', () => {
 
   it('creates core tables only, adds a feature later, and never repeats a migration', async () => {
     const { query, client } = await freshSchema()
-    expect(await migrate(query)).toEqual(['0001_core', '0003_tenant_formats', '0007_api_functions', '0009_ratings', '0010_audit_misses', '0011_privacy_switches', '0014_run_viewer'])
+    expect(await migrate(query)).toEqual(['0001_core', '0003_tenant_formats', '0007_api_functions', '0009_ratings', '0010_audit_misses', '0011_privacy_switches', '0014_run_viewer', '0015_long_runs'])
     expect(await missingTables(query, { proposals: true })).toEqual(['tv_proposals'])
     expect(await migrate(query, { features: { proposals: true } })).toEqual(['0002_proposals', '0004_proposal_sources', '0006_proposal_fields', '0012_card_items_versions', '0013_card_lines'])
     expect(await migrate(query, { features: { proposals: true } })).toEqual([])
@@ -292,6 +292,102 @@ suite('@teovo/db on Postgres', () => {
     expect(run!.steps[0]!.at).toBeTruthy()
     expect(await s.getRun!('shop-2', first)).toBeNull()
     expect(await s.getRun!('shop-1', 'not-a-uuid')).toBeNull()
+    client.release()
+  })
+
+  it('long runs: of many servers claiming at once exactly one wins; lease, stop, hand-back and the stream log', async () => {
+    const { query, client } = await freshSchema()
+    await migrate(query)
+    const s = postgresStorage(query)
+    const q = s.queue!
+    const t = await s.createThread('shop-1', 'u1')
+    const id = crypto.randomUUID()
+    await s.startRun({ id, threadId: t.id, tenantId: 'shop-1', userId: 'u1', status: 'queued' })
+    expect(await q.waiting(5)).toEqual([])   // no job yet
+    expect(await s.runningRuns('shop-1', 'u1', new Date(Date.now() - 60_000))).toBe(1)   // queued ones count
+    await q.enqueue(id, { identity: { tenantId: 'shop-1', userId: 'u1', role: 'staff' }, messageId: 'm1', models: ['gemini'] })
+    expect(await q.waiting(5)).toEqual([id])
+    // Ten servers, each on its own connection, at the same moment.
+    const pool = new pg.Pool({ connectionString: url, options: `-c search_path=${schema}`, max: 10 })
+    pools.push(pool)
+    const got = await Promise.all(Array.from({ length: 10 }, (_, i) => postgresStorage((text, params) => pool.query(text, params as unknown[])).queue!.claim(id, `w${i}`, 60_000)))
+    const won = got.filter(Boolean)
+    expect(won).toHaveLength(1)
+    expect(won[0]).toMatchObject({ id, attempts: 1, threadId: t.id, job: { messageId: 'm1' }, stopRequested: false })
+    const holder = `w${got.findIndex(Boolean)}`
+    expect(await q.waiting(5)).toEqual([])
+    expect(await q.renew(id, 'someone-else', 60_000)).toBeNull()
+    expect(await q.renew(id, holder, 60_000)).toEqual({ stop: false })
+    expect(await q.state(id)).toMatchObject({ status: 'running', attempts: 1, tenantId: 'shop-1' })
+    expect(await q.active(t.id)).toBe(id)
+    // The stream log, in order, once per seq.
+    await q.addEvents(id, 1, 0, [{ type: 'start' }])
+    await q.addEvents(id, 1, 1, [{ type: 'text-delta', delta: 'Hi' }])
+    await q.addEvents(id, 1, 1, [{ type: 'ignored' }])
+    expect(await q.events(id, 1, -1)).toEqual([{ seq: 0, chunks: [{ type: 'start' }] }, { seq: 1, chunks: [{ type: 'text-delta', delta: 'Hi' }] }])
+    expect(await q.events(id, 1, 0)).toHaveLength(1)
+    // Stop: only by its tenant (and person); the holder hears it at its next renew.
+    expect(await q.requestStop('shop-2', id)).toBe(false)
+    expect(await q.requestStop('shop-1', id, 'u2')).toBe(false)
+    expect(await q.requestStop('shop-1', id, 'u1')).toBe(true)
+    expect(await q.renew(id, holder, 60_000)).toEqual({ stop: true })
+    // Handed back: another server can take it at once.
+    await q.release(id, holder)
+    expect(await q.waiting(5)).toEqual([id])
+    expect(await q.claim(id, 'w-next', 60_000)).toMatchObject({ attempts: 2, stopRequested: true })
+    // A lease that runs out makes it waiting again.
+    await query(`update tv_runs set lease_until = now() - interval '1 second' where id = $1`, [id])
+    expect(await q.waiting(5)).toEqual([id])
+    await s.finishRun(id, { status: 'stopped' })
+    expect(await q.waiting(5)).toEqual([])
+    expect(await q.active(t.id)).toBeNull()
+    // A queued run that is stopped ends at once.
+    const id2 = crypto.randomUUID()
+    await s.startRun({ id: id2, threadId: t.id, tenantId: 'shop-1', userId: 'u1', status: 'queued' })
+    expect(await q.requestStop('shop-1', id2)).toBe(true)
+    expect(await q.state(id2)).toMatchObject({ status: 'stopped' })
+    // Wipe takes the stream log with the run.
+    await s.wipe('shop-1')
+    expect((await query('select count(*)::int as n from tv_run_events')).rows[0].n).toBe(0)
+    client.release()
+  })
+
+  it('long runs: a reply survives its server, through createAssistant on Postgres', async () => {
+    const { query, client } = await freshSchema()
+    await migrate(query, { features: { proposals: true } })
+    const storage = postgresStorage(query)
+    let open!: () => void
+    const stuck = new Promise<void>((r) => { open = r })
+    const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } }
+    const step = (parts: unknown[]) => ({ stream: new ReadableStream({ start(c) { for (const p of parts) c.enqueue(p); c.close() } }) })
+    const call = (name: string) => step([{ type: 'tool-call', toolCallId: `c-${name}`, toolName: name, input: '{}' }, { type: 'finish', finishReason: { unified: 'tool-calls', raw: undefined }, usage }])
+    const say = (text: string) => step([{ type: 'text-start', id: 't' }, { type: 'text-delta', id: 't', delta: text }, { type: 'text-end', id: 't' }, { type: 'finish', finishReason: { unified: 'stop', raw: undefined }, usage }])
+    const scripted = (steps: unknown[]) => { let i = 0; return new MockLanguageModelV4({ modelId: 'gemini', doStream: async () => steps[i++] as never }) }
+    const app = (model: MockLanguageModelV4, runs: object) => createAssistant({
+      identify: () => ({ tenantId: 'shop-1', userId: 'u1', role: 'staff' }), asUser: () => null, instructions: 'Help.', storage, models: [model],
+      tools: [
+        defineTool({ name: 'list_orders', kind: 'read', description: 'Orders', input: z.object({}), run: () => [{ no: 4, due: 250 }] }),
+        defineTool({ name: 'add_up', kind: 'read', description: 'Adds up', input: z.object({}), run: async () => { await stuck; return {} } }),
+      ],
+      runs: { pollMs: 10, flushMs: 5, asUser: () => null, ...runs },
+    })
+    const a = app(scripted([call('list_orders'), call('add_up'), say('late')]), { heartbeatMs: 60_000, leaseMs: 200 })
+    const b = app(scripted([say('Order 4 owes 250.')]), {})
+    const res = await a.fetch(new Request('https://x.test/chat', { method: 'POST', body: JSON.stringify({ message: { id: crypto.randomUUID(), role: 'user', parts: [{ type: 'text', text: 'who owes?' }] } }) }))
+    const threadId = res.headers.get('x-teovo-thread')!
+    const q = storage.queue!
+    for (let i = 0; i < 300 && !(await q.waiting(5)).length; i++) await new Promise((r) => setTimeout(r, 20))
+    expect(await b.work()).toBe(1)
+    const reply = (await storage.listMessages(threadId)).filter((m) => m.role === 'assistant')
+    expect(reply).toHaveLength(1)
+    expect(reply[0]!.parts.filter((p) => p.type.startsWith('tool-')).map((p) => p.type)).toEqual(['tool-list_orders'])
+    expect(reply[0]!.parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text)).toEqual(['Order 4 owes 250.'])
+    const run = (await query('select status, attempts from tv_runs')).rows[0]
+    expect(run).toEqual({ status: 'done', attempts: 2 })
+    open()
+    await res.body!.cancel()
+    await new Promise((r) => setTimeout(r, 50))
+    expect((await query('select status from tv_runs')).rows[0].status).toBe('done')   // the stalled server changed nothing
     client.release()
   })
 })
