@@ -32,7 +32,8 @@ another from its last finished tool step. Something has to take those over: `teo
 minute). With `runs: { inline: false }` replies wait for a worker instead of running in the request.
 
 - `@teovo/server/workers-ai`: Cloudflare Workers AI as a model (`workersAi`) and Whisper voice-to-text (`workersAiWhisper`).
-- `@teovo/server/testing`: record real conversations and replay them in tests (`recordingModel`, `replayModel`, `chat`).
+- `@teovo/server/testing`: record real conversations and replay them in tests (`recordingModel`, `replayModel`, `chat`), or
+  keep them as files: `recordChat` / `replayChat`, `recordRead` / `replayRead`, `idNames`, `saveRecording`, `loadRecordings`.
 
 Every option is documented in `AssistantConfig` (`src/assistant.ts`). The full guide, with the React panel and the
 tables, is [AGENTS.md](https://github.com/teovo-dev/teovo/blob/main/AGENTS.md). MIT licensed.
