@@ -17,6 +17,14 @@ export interface CardApplier<P = any, DB = any> {
   apply: (payload: P, ctx: ToolContext<DB>) => Promise<ApplyResult | void> | ApplyResult | void
   /** Take the change back, given what apply returned as `undo`. Without it the card can't be undone. */
   undo?: (undo: unknown, payload: P, ctx: ToolContext<DB>) => Promise<void> | void
+  /**
+   * 'low': a small change that is easy to take back (a status, a note, a tag) is applied as soon as the card is made,
+   * without Confirm; the card shows it done, with Undo for `undoMs`. It still waits for Confirm when this applier has
+   * no `undo`, when the card was prepared after reading outside text (a customer message, a picture), when the
+   * person's role may not confirm it, or when no one is at the screen (a reply the app started). Default: every card
+   * waits for Confirm.
+   */
+  risk?: 'low'
   /** The payload version this applier expects (the tool's version). Default 1. */
   version?: number
   /** Bring an older card's payload up to `version`. Without it, a card from another version is refused, not guessed at. */

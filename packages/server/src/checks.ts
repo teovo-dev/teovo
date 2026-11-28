@@ -7,8 +7,8 @@ export interface ReplyToCheck {
   text: string
   /** The user's message it answers. */
   question: string
-  /** Cards prepared in this run (they are already on screen; only the words are held back). */
-  cards: { kind: string; title: string }[]
+  /** Cards prepared in this run (they are already on screen; only the words are held back). `applied`: a low-risk card applied at once. */
+  cards: { kind: string; title: string; applied?: boolean }[]
   /** Tools the model called in this run, in order. */
   toolCalls: { name: string; input: unknown }[]
   /** Which try this is: 0 for the first reply, 1 after one refusal, … */
@@ -60,10 +60,11 @@ export async function firstProblem<DB>(
 export const noClaimedChanges: DoneCheck = {
   name: 'no-claimed-changes',
   check: (r) => {
-    if (!r.cards.length) return null
+    const waiting = r.cards.filter((c) => !c.applied)
+    if (!waiting.length) return null
     const claims = /\b(has been|have been|is now|are now|successfully|i(?:'|’)ve)\s+(recorded|saved|updated|added|created|marked|changed|deleted|applied|done)\b|\b(recorded|saved|updated|done)\s*[.!✅]/i
     return claims.test(r.text)
-      ? `It says a change is already made, but "${r.cards[0]!.title}" only waits for the user to confirm. Say it is ready to confirm.`
+      ? `It says a change is already made, but "${waiting[0]!.title}" only waits for the user to confirm. Say it is ready to confirm.`
       : null
   },
 }

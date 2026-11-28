@@ -460,6 +460,21 @@ describe('AssistantPanel', () => {
     expect(screen.getByRole('button', { name: 'Undo' })).toBeTruthy()
   })
 
+  it('a low-risk card arrives already applied, with its note and Undo, and no Confirm', async () => {
+    let paid = 0
+    const s = server([call('record_payment', { amount: 200 }), say('Done; you can undo it from the card.')], true, {
+      record_payment: { risk: 'low', apply: () => { paid += 200; return { undo: 200, note: 'Payment saved' } }, undo: () => { paid -= 200 } },
+    })
+    mount({ fetch: s.fetch })
+    await ask('paid 200')
+    await screen.findByText('Payment saved')
+    expect(paid).toBe(200)
+    expect(screen.queryByRole('button', { name: 'Confirm' })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: 'Undo' }))
+    await screen.findByText('Undone')
+    expect(paid).toBe(0)
+  })
+
   it('asks with choices, sends the pick, and closes the choices once answered', async () => {
     const s = server([call('show_choices', { question: 'Which Riya?', options: [{ label: 'Riya Sharma' }, { label: 'Riya K' }] }), say('Pick one.'), say('Riya K owes ₹880.')], true, {}, { views: builtinViews })
     mount({ fetch: s.fetch })

@@ -306,8 +306,10 @@ const teovo = createAssistant({
       undo: (u) => { for (const { no, id } of u as { no: number; id: number }[]) { const o = order(no); o.payments = o.payments.filter((p) => p.id !== id) } },
     },
     set_status: {
+      // Moving an order on is small and easy to take back: it is done at once, with Undo on the card.
+      risk: 'low',
       current: ({ no }: { no: number }) => ({ status: order(no).status }),
-      apply: ({ no, status }: { no: number; status: Status }) => { const o = order(no); const old = o.status; o.status = status; return { undo: { no, old } } },
+      apply: ({ no, status }: { no: number; status: Status }) => { const o = order(no); const old = o.status; o.status = status; return { undo: { no, old }, note: `Order #${no} is ${status}` } },
       undo: (u) => { const { no, old } = u as { no: number; old: Status }; order(no).status = old },
     },
     restock: {
