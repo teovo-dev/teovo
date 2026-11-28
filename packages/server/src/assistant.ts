@@ -41,7 +41,7 @@ export interface AssistantConfig<DB = unknown> {
    */
   name?: string
   /** The app's own instructions for the model. */
-  instructions: string | ((ctx: { identity: Identity; page?: Page }) => string | Promise<string>)
+  instructions: string | ((ctx: { identity: Identity; page?: Page; db: DB }) => string | Promise<string>)
   storage: Storage
   /** Model calls per message, tool calls included. Default 8. */
   maxSteps?: number
@@ -299,6 +299,14 @@ export interface StartResult {
 }
 
 /** teovo.start() refused before anything was saved: a limit, the assistant switched off, not enough to spend. */
+/**
+ * Thrown by `identify` to refuse a request with its own status and sentence: e.g. 403 "You don't have access to this
+ * business" for someone signed in but not a member. (Returning null means "not signed in": 401.)
+ */
+export class IdentifyError extends Error {
+  constructor(readonly status: number, message: string) { super(message); this.name = 'IdentifyError' }
+}
+
 export class StartError extends Error {
   constructor(readonly status: number, message: string) { super(message); this.name = 'StartError' }
 }
@@ -670,7 +678,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
       ...(files.length ? { files } : {}), ...withFile(fileOf(identity)),
       ...(spend ? { reserve: (amount: number, reason?: string) => reserve(amount, reason) } : {}),
     }
-    const instructions = typeof config.instructions === 'function' ? await config.instructions({ identity, page }) : config.instructions
+    const instructions = typeof config.instructions === 'function' ? await config.instructions({ identity, page, db }) : config.instructions
     const summary = page && config.screen ? await Promise.resolve().then(() => config.screen!(page, ctx)).catch((e) => { config.on?.error?.(e, { identity, threadId: thread.id }); return null }) : null
     const shownSummary = summary === null ? null : String(redact(summary))
     const formats: Formats = { ...DEFAULT_FORMATS, ...config.formats, ...settings.formats }
@@ -1893,40 +1901,44 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     },
     /** Mount under any path, e.g. app.all('/api/assistant/*', teovo.fetch). Handles POST …/chat (a message sent again replaces it and what came after), POST …/runs/:id/rating, GET …/threads, GET …/threads/:id, POST …/threads/:id/archive, GET …/suggestions, GET/PUT …/settings and POST …/cards/:id/(confirm|skip|undo). */
     async fetch(req: Request, ctx?: WaitUntil): Promise<Response> {
-      const path = new URL(req.url).pathname
-      if (req.method === 'POST' && path.endsWith('/chat')) return chat(req, ctx)
-      const ts = /\/threads\/([0-9a-f-]{36})\/stream$/i.exec(path)
-      if (req.method === 'GET' && ts) return streamRoute(req, ts[1]!.toLowerCase())
-      const rp = /\/runs\/([0-9a-f-]{36})\/poll$/i.exec(path)
-      if (req.method === 'GET' && rp) return pollRoute(req, rp[1]!.toLowerCase())
-      const rs = /\/(runs|threads)\/([0-9a-f-]{36})\/stop$/i.exec(path)
-      if (req.method === 'POST' && rs) return stopRoute(req, rs[2]!.toLowerCase(), rs[1] === 'threads' ? 'thread' : 'run')
-      if (req.method === 'GET' && path.endsWith('/suggestions')) return suggestions(req)
-      const fm = /\/files\/([0-9a-f-]{36})$/i.exec(path)
-      if (req.method === 'GET' && fm) return file(req, fm[1]!.toLowerCase())
-      if ((req.method === 'GET' || req.method === 'PUT') && path.endsWith('/settings')) return tenantSettings(req)
-      if (req.method === 'GET' && path.endsWith('/threads')) return threads(req)
-      const t = /\/threads\/([0-9a-f-]{36})(\/archive)?$/i.exec(path)
-      const f = /\/threads\/([0-9a-f-]{36})\/views\/([^/]{1,100})\/submit$/i.exec(path)
-      if (req.method === 'POST' && f) return submitForm(req, f[1]!.toLowerCase(), decodeURIComponent(f[2]!))
-      if (t && ((req.method === 'GET' && !t[2]) || (req.method === 'POST' && t[2]))) return threads(req, t[1]!.toLowerCase(), Boolean(t[2]))
-      const rt = /\/runs\/([0-9a-f-]{36})\/rating$/i.exec(path)
-      if (req.method === 'POST' && rt) return rate(req, rt[1]!.toLowerCase())
-      if (req.method === 'GET' && path.endsWith('/runs')) return runsRoute(req)
-      const rv = /\/runs\/([0-9a-f-]{36})(\/trace)?$/i.exec(path)
-      if (req.method === 'GET' && rv) return runsRoute(req, rv[1]!.toLowerCase(), Boolean(rv[2]))
-      if (req.method === 'GET' && path.endsWith('/policy')) return policy(req)
-      const rd = /\/read\/([\w-]{1,64})$/.exec(path)
-      if (req.method === 'POST' && rd) return readRoute(req, rd[1]!)
-      if (req.method === 'POST' && path.endsWith('/transcribe')) return transcribeRoute(req)
-      if (req.method === 'GET' && path.endsWith('/allowance')) return allowanceRoute(req)
-      if (req.method === 'GET' && path.endsWith('/completions')) return completionsRoute(req)
-      if (req.method === 'GET' && path.endsWith('/audit')) return adminList(req, 'audit')
-      if (req.method === 'GET' && path.endsWith('/misses')) return adminList(req, 'misses')
-      if (req.method === 'POST' && path.endsWith('/wipe')) return wipeRoute(req)
-      const m = /\/cards\/([0-9a-f-]{36})\/(confirm|skip|undo)$/i.exec(path)
-      if (req.method === 'POST' && m) return card(req, m[1]!.toLowerCase(), m[2] as Decision)
-      return json(404, { error: 'Not found.' })
+      const route = async (): Promise<Response> => {
+        const path = new URL(req.url).pathname
+        if (req.method === 'POST' && path.endsWith('/chat')) return chat(req, ctx)
+        const ts = /\/threads\/([0-9a-f-]{36})\/stream$/i.exec(path)
+        if (req.method === 'GET' && ts) return streamRoute(req, ts[1]!.toLowerCase())
+        const rp = /\/runs\/([0-9a-f-]{36})\/poll$/i.exec(path)
+        if (req.method === 'GET' && rp) return pollRoute(req, rp[1]!.toLowerCase())
+        const rs = /\/(runs|threads)\/([0-9a-f-]{36})\/stop$/i.exec(path)
+        if (req.method === 'POST' && rs) return stopRoute(req, rs[2]!.toLowerCase(), rs[1] === 'threads' ? 'thread' : 'run')
+        if (req.method === 'GET' && path.endsWith('/suggestions')) return suggestions(req)
+        const fm = /\/files\/([0-9a-f-]{36})$/i.exec(path)
+        if (req.method === 'GET' && fm) return file(req, fm[1]!.toLowerCase())
+        if ((req.method === 'GET' || req.method === 'PUT') && path.endsWith('/settings')) return tenantSettings(req)
+        if (req.method === 'GET' && path.endsWith('/threads')) return threads(req)
+        const t = /\/threads\/([0-9a-f-]{36})(\/archive)?$/i.exec(path)
+        const f = /\/threads\/([0-9a-f-]{36})\/views\/([^/]{1,100})\/submit$/i.exec(path)
+        if (req.method === 'POST' && f) return submitForm(req, f[1]!.toLowerCase(), decodeURIComponent(f[2]!))
+        if (t && ((req.method === 'GET' && !t[2]) || (req.method === 'POST' && t[2]))) return threads(req, t[1]!.toLowerCase(), Boolean(t[2]))
+        const rt = /\/runs\/([0-9a-f-]{36})\/rating$/i.exec(path)
+        if (req.method === 'POST' && rt) return rate(req, rt[1]!.toLowerCase())
+        if (req.method === 'GET' && path.endsWith('/runs')) return runsRoute(req)
+        const rv = /\/runs\/([0-9a-f-]{36})(\/trace)?$/i.exec(path)
+        if (req.method === 'GET' && rv) return runsRoute(req, rv[1]!.toLowerCase(), Boolean(rv[2]))
+        if (req.method === 'GET' && path.endsWith('/policy')) return policy(req)
+        const rd = /\/read\/([\w-]{1,64})$/.exec(path)
+        if (req.method === 'POST' && rd) return readRoute(req, rd[1]!)
+        if (req.method === 'POST' && path.endsWith('/transcribe')) return transcribeRoute(req)
+        if (req.method === 'GET' && path.endsWith('/allowance')) return allowanceRoute(req)
+        if (req.method === 'GET' && path.endsWith('/completions')) return completionsRoute(req)
+        if (req.method === 'GET' && path.endsWith('/audit')) return adminList(req, 'audit')
+        if (req.method === 'GET' && path.endsWith('/misses')) return adminList(req, 'misses')
+        if (req.method === 'POST' && path.endsWith('/wipe')) return wipeRoute(req)
+        const m = /\/cards\/([0-9a-f-]{36})\/(confirm|skip|undo)$/i.exec(path)
+        if (req.method === 'POST' && m) return card(req, m[1]!.toLowerCase(), m[2] as Decision)
+        return json(404, { error: 'Not found.' })
+      }
+      // identify may refuse with its own status and sentence (IdentifyError), from any route.
+      try { return await route() } catch (e) { if (e instanceof IdentifyError) return json(e.status, { error: e.message }); throw e }
     },
   }
 }

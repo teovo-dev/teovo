@@ -13,6 +13,20 @@ const files = postgresFiles(query)
 
 - Supabase: `supabaseStorage(client)`, `supabaseFiles(client, bucket, supabaseFileIndex(client))`, and
   `npx teovo generate` to write the SQL into `supabase/migrations`.
+- Supabase login: `supabaseLogin` gives `identify` and `asUser` from the user's Supabase token (checked, never just
+  decoded), with a client acting as them; the app writes only which tenant and role:
+
+  ```ts
+  import { createClient } from '@supabase/supabase-js'
+  createAssistant({
+    ...supabaseLogin({
+      createClient, url, anonKey, forward: ['x-business-id'],
+      tenant: async ({ req, db }) => ((await db.rpc('is_member')).data ? req.headers.get('x-business-id') : null),   // null → 403
+      role: async ({ db }) => ((await db.rpc('is_owner')).data ? 'owner' : 'staff'),
+    }),
+    …
+  })
+  ```
 - Cloudflare R2: `r2Files(bucket)`.
 - Row-level security: `rls: 'server-only'` (only your server's key touches the tables) or per-tenant rules.
 

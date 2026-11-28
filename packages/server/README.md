@@ -8,10 +8,10 @@ voice to text, model fallback, per-tenant and per-user limits, usage and logs.
 import { createAssistant, defineTool, defineReader, builtinViews, noClaimedChanges } from '@teovo/server'
 
 export const teovo = createAssistant({
-  identify: async (req) => ({ tenantId, userId, role }),   // null → 401
+  identify: async (req) => ({ tenantId, userId, role }),   // null → 401; throw IdentifyError(403, '…') to refuse
   asUser: (identity) => dbClientActingAs(identity),       // ctx.db in every tool
   models: [primaryModel, fallbackModel],                   // Vercel AI SDK models, tried in order
-  instructions: 'You help … Use the tools for every number; never guess.',
+  instructions: 'You help … Use the tools for every number; never guess.',   // or ({ identity, page, db }) => …
   storage: postgresStorage(query),                         // from @teovo/db
   views: builtinViews,
   tools: [/* defineTool({ name, kind: 'read' | 'propose' | 'action', input, run }) */],
@@ -24,6 +24,23 @@ export const teovo = createAssistant({
 // response: teovo.fetch(request, ctx).
 if (url.pathname.startsWith('/api/assistant/')) return teovo.fetch(request)
 ```
+
+### Who is asking: `identify` and `asUser`
+
+`identify` reads the app's own login from the request; `asUser` gives tools a database client acting as that person,
+so the app's row level security still applies. On Supabase, `supabaseLogin` from `@teovo/db` does both. With
+another login, a few lines with its own SDK:
+
+```ts
+// Clerk
+identify: async (req) => { const a = await clerk.authenticateRequest(req); const s = a.toAuth(); return s?.userId ? { tenantId: s.orgId ?? s.userId, userId: s.userId, role: s.orgRole ?? 'member' } : null }
+// Auth.js (Next.js)
+identify: async () => { const s = await auth(); return s?.user?.id ? { tenantId: s.user.teamId, userId: s.user.id, role: s.user.role } : null }
+// Firebase
+identify: async (req) => { const t = req.headers.get('authorization')?.replace(/^Bearer /, ''); if (!t) return null; const u = await getAuth().verifyIdToken(t); return { tenantId: u.tenant ?? u.uid, userId: u.uid, role: u.role ?? 'member' } }
+```
+
+Always verify the token with the login's own SDK; never just decode it.
 
 Long runs (`runs`) keep each reply in the run log as it is written. Closing the panel doesn't stop it, Stop works
 from any server, a reload shows it still being written, and a reply whose server stopped or crashed is carried on by
