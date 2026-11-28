@@ -769,8 +769,9 @@ describe('chat UI the SDK owns', () => {
 describe('readers and voice in the app', () => {
   const product = defineReader({ name: 'product', accepts: ['text', 'image'], schema: z.object({ name: z.string().nullable(), price: z.number().nullable() }), instructions: 'Read a product.' })
 
+  const failures: string[] = []
   function Describe() {
-    const r = useReader<{ name: string | null; price: number | null }>('product')
+    const r = useReader<{ name: string | null; price: number | null }>('product', { onError: (m) => failures.push(m) })
     return (
       <div>
         <button type="button" onClick={() => void r.read('Kesar pista, 420')}>Fill from text</button>
@@ -793,6 +794,7 @@ describe('readers and voice in the app', () => {
     expect(s.bodies.at(-1).image.mediaType).toMatch(/^image\//)
     await userEvent.click(screen.getByRole('button', { name: 'Fill from text' }))
     expect((await screen.findByRole('alert')).textContent).toBe('Could not read that. Try again, or fill it in by hand.')
+    expect(failures).toEqual(['Could not read that. Try again, or fill it in by hand.'])   // onError heard it once
   })
 
   it('VoiceButton shows only when something can write recordings down, and says when the browser can’t record', async () => {

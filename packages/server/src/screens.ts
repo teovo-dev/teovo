@@ -15,7 +15,14 @@ export interface Page {
  * values the screen understands, by name with what they do, e.g. { unpaid: "'yes' to show only orders with money due" };
  * they go on the link as ?unpaid=yes, and the app's page reads them.
  */
-export interface ScreenInfo { path: string; title: string; description?: string; filters?: Record<string, string> }
+export interface ScreenInfo {
+  path: string
+  title: string
+  description?: string
+  filters?: Record<string, string>
+  /** Roles that may be sent to this screen. Omitted: every role. Others never hear of it. */
+  roles?: readonly string[]
+}
 
 const SAFE = /^[\w .,:@-]{1,64}$/
 

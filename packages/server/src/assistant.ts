@@ -13,7 +13,7 @@ import { makeUntrusted, UNTRUSTED_RULE } from './untrusted.js'
 import { makeRedactor, type RedactOptions } from './redact.js'
 import { checkForm, formHandler, formsText, missingFields, VIEWS_RULE, type FormData, type FormHandler, type FormSpec, type TeovoView } from './views.js'
 import { checkMessage, type AttachmentRules } from './attachments.js'
-import { loadFiles, picturesOnce, storeFiles, type FileRules } from './files.js'
+import { FILE_SCHEME, loadFiles, picturesOnce, storeFiles, type FileRules } from './files.js'
 import { checkFormats, DEFAULT_FORMATS, formatsText, todayText, type Formats } from './formats.js'
 import { DEFAULT_SETTINGS, noticeId, SettingsError, settingsText, validateSettings, type TenantSettings } from './settings.js'
 import { findScreen, readPage, screenPath, screensText, screenText, tidy, type Page, type ScreenFn, type ScreenInfo, type SuggestionsFn } from './screens.js'
@@ -212,6 +212,8 @@ export const NO_SPEND = 'There is not enough left to spend on the assistant for 
 /** What a reply needs, whether it runs in the request that asked or on another server later. */
 interface ReplyCtx<DB> {
   identity: Identity; thread: Thread; runId: string; message: UIMessage; history: UIMessage[]; page?: Page
+  /** The message as stored: its pictures as references to the file store. */
+  saved: UIMessage
   models: readonly LanguageModelV4[]; settings: TenantSettings; db: DB; attempt: number; signal: AbortSignal
   /** What is set aside for this reply (spend). */
   held: number
@@ -437,7 +439,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     await storage.saveMessages(thread.id, [saved])
 
     await storage.addUsage([{ tenantId: identity.tenantId, userId: identity.userId, runId, provider: first.provider, model: first.modelId, unit: 'messages', amount: 1 }])
-    const rc = { identity, thread, runId, message, history, page, models, settings, db, held, attempt: 1 }
+    const rc = { identity, thread, runId, message, saved, history, page, models, settings, db, held, attempt: 1 }
     const headers = { 'x-teovo-thread': thread.id }
     if (!queue) return createUIMessageStreamResponse({ stream: await reply({ ...rc, signal: req.signal, end: (e) => storage.finishRun(runId, e) }), headers })
     // A long run: queued in the run log, then run here (unless a worker takes them), and sent from the log, so it goes
@@ -445,7 +447,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     await queue.enqueue(runId, { identity, messageId: message.id, ...(page ? { page } : {}), models: models.map((m) => m.modelId) })
     if (config.runs?.inline !== false) {
       const claimed = await queue.claim(runId, worker, leaseMs)
-      if (claimed) keepAlive(drive(claimed, { thread, message, history, models, settings, db, held }), ctx)
+      if (claimed) keepAlive(drive(claimed, { thread, message, saved, history, models, settings, db, held }), ctx)
     }
     // For hosts that hold back streamed responses: a plain answer now, the reply through short polls.
     if (body.transport === 'poll') return new Response(JSON.stringify({ threadId: thread.id, runId }), { status: 202, headers: { ...headers, 'content-type': 'application/json' } })
@@ -454,7 +456,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
 
   /** One reply, as the panel's stream: from the screen and instructions to the checked, saved answer. */
   async function reply(rc: ReplyCtx<DB>): Promise<ReadableStream<Chunk>> {
-    const { identity, thread, runId, message, history, page, models, settings, db, signal } = rc
+    const { identity, thread, runId, message, saved, history, page, models, settings, db, signal } = rc
     const { storage } = config
     const first = models[0]!
     const timeouts = { ...DEFAULT_TIMEOUTS, ...config.timeouts }
@@ -487,8 +489,12 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     // Which outside text this run has read: the user's pictures, and whatever tools fenced as untrusted.
     const seen = new Set<string>(message.parts.some((p) => p.type === 'file') ? ['picture'] : [])
     const fence = makeUntrusted(nonce)
+    // The pictures on this message, as stored: a card can keep one (e.g. the bill an expense came from).
+    const files = saved.parts.flatMap((p) => (p.type === 'file' && p.url.startsWith(FILE_SCHEME)
+      ? [{ id: p.url.slice(FILE_SCHEME.length), mediaType: p.mediaType, ...(p.filename ? { filename: p.filename } : {}) }] : []))
     const ctx: ToolContext<DB> = {
       identity, db, untrusted: (text, source) => { seen.add(source.replace(/[^\w .-]/g, '').slice(0, 40) || 'outside text'); return fence(text, source) },
+      ...(files.length ? { files } : {}), ...withFile(fileOf(identity)),
       ...(spend ? { reserve: (amount: number, reason?: string) => reserve(amount, reason) } : {}),
     }
     const instructions = typeof config.instructions === 'function' ? await config.instructions({ identity, page }) : config.instructions
@@ -503,7 +509,9 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     // Ordered from most to least shared, so providers can cache the start: first what is the same for everyone (the
     // app's instructions and Teovo's rules), then what is the same for this tenant and person, then what changes
     // every message (the time, the screen).
-    const shared = `${config.name?.trim() ? `Your name is ${config.name.trim()}; you are the assistant built into this app.\n\n` : ''}${instructions}${screensText(config.screens ?? [])}${config.views?.length ? `\n\n${VIEWS_RULE}${formsText(config.forms ?? {})}` : ''}${config.tools.some((t) => t.kind === 'propose') || config.views?.some((v) => v.name === 'form') ? `\n\n${CARDS_RULE}` : ''}\n\n${UNTRUSTED_RULE}`
+    // Screens this person's role may open: the others are never mentioned, and open_screen refuses them.
+    const myScreens = (config.screens ?? []).filter((x) => !x.roles || x.roles.includes(identity.role))
+    const shared = `${config.name?.trim() ? `Your name is ${config.name.trim()}; you are the assistant built into this app.\n\n` : ''}${instructions}${screensText(myScreens)}${config.views?.length ? `\n\n${VIEWS_RULE}${formsText(config.forms ?? {})}` : ''}${config.tools.some((t) => t.kind === 'propose') || config.views?.some((v) => v.name === 'form') ? `\n\n${CARDS_RULE}` : ''}\n\n${UNTRUSTED_RULE}`
     const tenantPart = `${formatsText(formats)}${settingsText(settings)}${rolesText}${config.misses !== false && !(settings.toolsOff ?? []).includes('cannot_help') ? `\n\n${MISS_RULE}` : ''}`
     const system = `${shared}${tenantPart}${todayText(formats, config.now?.() ?? new Date())}${screenText(page, shownSummary, fence)}`
 
@@ -521,7 +529,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
             description: t.description,
             inputSchema: t.input,
             execute: async (input: unknown, { toolCallId }: { toolCallId: string }) => {
-              writer.write({ type: 'data-step', id: toolCallId, data: { name: t.name, kind: t.kind, state: 'running' } })
+              writer.write({ type: 'data-step', id: toolCallId, data: { name: t.name, kind: t.kind, state: 'running', ...(t.label ? { label: t.label } : {}) } })
               const started = Date.now()
               const step = { runId, seq: seq++, type: 'tool' as const, toolCallId, name: t.name }
               const max = config.logLimit ?? 8000
@@ -566,7 +574,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
                 throw e
               } finally {
                 // How long it took and whether it failed, for the steps list under the reply.
-                writer.write({ type: 'data-step', id: toolCallId, data: { name: t.name, kind: t.kind, state: 'done', ms: Date.now() - started, ...(failed ? { error: failed.slice(0, 300) } : {}) } })
+                writer.write({ type: 'data-step', id: toolCallId, data: { name: t.name, kind: t.kind, state: 'done', ...(t.label ? { label: t.label } : {}), ms: Date.now() - started, ...(failed ? { error: failed.slice(0, 300) } : {}) } })
               }
             },
           })
@@ -604,8 +612,8 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
             },
           })
         }
-        if (config.screens?.length) {
-          const screens = config.screens
+        if (myScreens.length) {
+          const screens = myScreens
           tools.open_screen = tool({
             description: 'Offer the user a button that opens one of the app\'s screens. Only the listed screens and filters work.',
             // One plain path, not a pattern plus an object of values: Gemini often failed to call the tool at all with
@@ -871,14 +879,14 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     if (!models.length) models = config.models.filter((m) => !off.has(m.modelId))
     if (!models.length) return { error: 'Every model is switched off' }
     const db = await config.runs.asUser(identity)
-    return { identity, thread, runId: claim.id, message, history, page, models, settings, db, held: config.spend ? await holdFor(identity, text, db) : 0 }
+    return { identity, thread, runId: claim.id, message, saved: list[at]!, history, page, models, settings, db, held: config.spend ? await holdFor(identity, text, db) : 0 }
   }
 
   /**
    * Run a claimed reply to the end on this server: the stream goes to the log in batches (and straight to anyone this
    * server is sending it to), a heartbeat keeps the lease and listens for Stop, and the run is finished last.
    */
-  async function drive(claim: ClaimedRun, pre?: Pick<ReplyCtx<DB>, 'thread' | 'message' | 'history' | 'models' | 'settings' | 'db' | 'held'>): Promise<void> {
+  async function drive(claim: ClaimedRun, pre?: Pick<ReplyCtx<DB>, 'thread' | 'message' | 'saved' | 'history' | 'models' | 'settings' | 'db' | 'held'>): Promise<void> {
     const q = queue!
     const { identity } = claim.job
     const report = (e: unknown) => config.on?.error?.(e, { identity, threadId: claim.threadId })
@@ -1426,6 +1434,16 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     return json(400, { error: 'Send scope "me", "user" with a userId, or "tenant".' })
   }
 
+  /** Read a picture this person shared (their own, in this tenant), for a tool or a card being applied. */
+  function fileOf(identity: Identity): ToolContext<DB>['file'] {
+    const files = config.files
+    if (!files) return undefined
+    return async (id) => {
+      const f = await files.store.get(identity.tenantId, id)
+      return f && f.userId === identity.userId ? f : null
+    }
+  }
+
   async function card(req: Request, id: string, decision: Decision): Promise<Response> {
     const identity = await config.identify(req)
     if (!identity) return json(401, { error: 'Sign in to use the assistant.' })
@@ -1434,7 +1452,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
       const body = (await req.json().catch(() => ({}))) as { reversible?: unknown }
       const done = await decide({
         storage: config.storage, appliers: config.cards ?? {}, rules, identity, id, decision, reversible: body.reversible === true,
-        ctx: async () => ({ identity, db: await config.asUser(identity, req), untrusted: makeUntrusted(crypto.randomUUID().slice(0, 8)) }),
+        ctx: async () => ({ identity, db: await config.asUser(identity, req), untrusted: makeUntrusted(crypto.randomUUID().slice(0, 8)), ...withFile(fileOf(identity)) }),
       })
       await logEvent(done, ({ confirm: 'confirmed', skip: 'skipped', undo: 'undone' } as const)[decision], identity)
       config.on?.decision?.(done, decision, identity)
@@ -1570,4 +1588,9 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
       return json(404, { error: 'Not found.' })
     },
   }
+}
+
+/** Spread into a ToolContext: adds `file` only when the assistant keeps files. */
+function withFile<DB>(file: ToolContext<DB>['file']): Pick<ToolContext<DB>, 'file'> {
+  return file ? { file } : {}
 }
