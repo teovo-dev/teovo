@@ -1,6 +1,6 @@
 import { useChat } from '@ai-sdk/react'
 import { DefaultChatTransport } from 'ai'
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { readFile } from './input.js'
 import type { Action, AllowanceItem, Card, CardDecision, Page, Policy, Suggestions, TeovoMessage, ThreadSummary } from './types.js'
 
@@ -21,6 +21,11 @@ export interface AssistantProviderProps {
   onCard?: (card: Card, decision: CardDecision) => Promise<Partial<Card> | void> | Partial<Card> | void
   /** The user pressed a button the assistant offered (open a screen, run an app action). */
   onAction?: (action: Action) => void
+  /**
+   * After a card is confirmed, skipped or undone (by the server's applier or the app's onCard): e.g. reload the
+   * screen's data so it shows the change.
+   */
+  onCardDecided?: (card: Card, decision: CardDecision) => void
   /** Replace fetch, e.g. in tests or to call the handler in-process. */
   fetch?: typeof fetch
   /**
@@ -55,6 +60,8 @@ interface AssistantState {
   /** Calls the handler: path under the endpoint, with the provider's headers and fetch. */
   request: (path: string, init?: RequestInit) => Promise<Response>
   setPage: (page: Page | undefined) => void
+  /** Used by useAssistantContext: one screen's page under its key, or undefined to drop it. */
+  registerPage: (key: string, page: Page | undefined, fallback?: boolean) => void
   /** The page the assistant is told about with each message (set by useAssistantContext). */
   page: Page | undefined
   /** Chips and hint for now: the screen's when the chat is idle, the follow-ups after a reply. */
@@ -273,6 +280,17 @@ export function AssistantProvider(props: AssistantProviderProps) {
     page.current = p
     setPageKey(JSON.stringify(p ?? null))
   }, [])
+  // Pages from useAssistantContext calls. The newest one that isn't a fallback wins; a fallback (say, the layout
+  // naming every screen) shows only while no screen names itself, whatever order React ran their effects in.
+  const pages = useRef(new Map<string, { page: Page; fallback: boolean; seq: number }>())
+  const pageSeq = useRef(0)
+  const registerPage = useCallback((key: string, p: Page | undefined, fallback = false) => {
+    const all = pages.current
+    if (p) all.set(key, { page: p, fallback, seq: all.get(key)?.seq ?? ++pageSeq.current })
+    else all.delete(key)
+    const best = [...all.values()].sort((a, b) => Number(a.fallback) - Number(b.fallback) || b.seq - a.seq)[0]
+    setPage(best?.page)
+  }, [setPage])
   const clearSuggestions = useCallback(() => setSuggestions({ suggestions: [] }), [])
 
   useEffect(() => {
@@ -326,12 +344,14 @@ export function AssistantProvider(props: AssistantProviderProps) {
       await (p.fetch ?? fetch)(`${p.endpoint.replace(/\/$/, '')}/cards/${card.id}/${decision}`, {
         method: 'POST', headers: { ...h, 'content-type': 'application/json' }, body: JSON.stringify({ reversible: done.reversible === true }),
       }).catch(() => undefined)
+      p.onCardDecided?.({ ...card, ...done }, decision)
       return done
     }
     const h = typeof p.headers === 'function' ? await p.headers() : (p.headers ?? {})
     const res = await (p.fetch ?? fetch)(`${p.endpoint.replace(/\/$/, '')}/cards/${card.id}/${decision}`, { method: 'POST', headers: h })
     const body = (await res.json().catch(() => ({}))) as { card?: Card; error?: string }
     if (!res.ok) throw new Error(body.error ?? 'Something went wrong. Nothing was changed.')
+    p.onCardDecided?.({ ...card, ...body.card }, decision)
     return body.card ?? {}
   }, [])
 
@@ -384,9 +404,9 @@ export function AssistantProvider(props: AssistantProviderProps) {
     return ((await res.json()) as { result: T }).result
   }, [request])
 
-  const value = useMemo<AssistantState>(() => ({ chat, stop, threadId, newChat, openThread, submitForm, request, setPage, page: currentPage, suggestions, clearSuggestions, decideCard, rate, policy, noticeAccepted: accepted, acceptNotice, allowance: allowanceItems, words, onAction: props.onAction,
+  const value = useMemo<AssistantState>(() => ({ chat, stop, threadId, newChat, openThread, submitForm, request, setPage, registerPage, page: currentPage, suggestions, clearSuggestions, decideCard, rate, policy, noticeAccepted: accepted, acceptNotice, allowance: allowanceItems, words, onAction: props.onAction,
     runAction, open, setOpen, view, setView, ask, leaveOutPage, pageLeftOut, setCovering, transcribe, read }),
-    [chat, stop, threadId, newChat, openThread, submitForm, request, setPage, currentPage, suggestions, clearSuggestions, decideCard, rate, policy, accepted, acceptNotice, allowanceItems, words, props.onAction,
+    [chat, stop, threadId, newChat, openThread, submitForm, request, setPage, registerPage, currentPage, suggestions, clearSuggestions, decideCard, rate, policy, accepted, acceptNotice, allowanceItems, words, props.onAction,
       runAction, open, setOpen, view, ask, leaveOutPage, pageLeftOut, setCovering, transcribe, read])
   return <Ctx.Provider value={value}>{props.children}</Ctx.Provider>
 }
@@ -398,17 +418,20 @@ export function useAssistantName(): string | undefined {
 
 /**
  * A reader from a screen: read(input) runs it; result, busy and error follow. E.g. "describe a product" fills the
- * form: const r = useReader<Draft>('product'); … await r.read(text).
+ * form: const r = useReader<Draft>('product'); … await r.read(text). `onError` hears why a read failed, e.g. to show
+ * a toast; read then resolves to null.
  */
-export function useReader<T = unknown>(name: string) {
+export function useReader<T = unknown>(name: string, opts: { onError?: (message: string) => void } = {}) {
   const { read: run } = useAssistant()
   const [result, setResult] = useState<T | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const onError = useRef(opts.onError)
+  onError.current = opts.onError
   const read = useCallback(async (input: ReadInput): Promise<T | null> => {
     setBusy(true); setError(null)
     try { const r = await run<T>(name, input); setResult(r); return r }
-    catch (e) { setError(e instanceof Error ? e.message : String(e)); return null }
+    catch (e) { const m = e instanceof Error ? e.message : String(e); setError(m); onError.current?.(m); return null }
     finally { setBusy(false) }
   }, [run, name])
   const reset = useCallback(() => { setResult(null); setError(null) }, [])
@@ -451,16 +474,20 @@ export function useThreads(limit = 30) {
 }
 
 /**
- * Tell the assistant which screen the user is on. Call it in each screen; the latest mounted screen wins,
- * and leaving the screen clears it.
+ * Tell the assistant which screen the user is on. Call it in each screen; the latest mounted screen wins, and leaving
+ * the screen clears it. `fallback: true` is for one call high up (e.g. the layout naming every route): it is used
+ * only while no screen names itself, so a record screen's "Order #4 · Kavya" always beats the layout's "An order".
  */
-export function useAssistantContext(page: Page): void {
-  const { setPage } = useAssistant()
+export function useAssistantContext(page: Page, opts: { fallback?: boolean } = {}): void {
+  const { registerPage } = useAssistant()
+  const key = useId()
   const { path, title } = page
   const type = page.record?.type, id = page.record?.id
   const state = page.state ? JSON.stringify(page.state) : ''
+  const empty = !path && !title && !(type && id) && !state
+  const fallback = opts.fallback === true
   useEffect(() => {
-    setPage({ path, title, ...(type && id ? { record: { type, id } } : {}), ...(state ? { state: JSON.parse(state) as Page['state'] } : {}) })
-    return () => setPage(undefined)
-  }, [setPage, path, title, type, id, state])
+    registerPage(key, empty ? undefined : { path, title, ...(type && id ? { record: { type, id } } : {}), ...(state ? { state: JSON.parse(state) as Page['state'] } : {}) }, fallback)
+    return () => registerPage(key, undefined)
+  }, [registerPage, key, empty, fallback, path, title, type, id, state])
 }
