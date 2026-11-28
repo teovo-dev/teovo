@@ -66,7 +66,7 @@ cover it but nobody has tried it by hand. A feature counts as done only when thi
 | Large on-screen content cut to what the question needs | v2 |  |  | bricks | kit hook |
 | Undo by restoring a version saved before the run | v2 |  |  | bricks, parityai | kit |
 | One assistant turn as one step in the app's own undo | v2 |  |  | bricks | kit |
-| Run viewer and trace export: `<RunViewer />` for an app's admin screen (every reply with its question, tools with inputs and results, refused replies, model, time and tokens; filters by status and rating), GET …/runs and …/runs/:id for admins, and an OpenTelemetry trace per run (…/runs/:id/trace, `teovo.trace()`, `runTrace`) | v2 | Built (#PR) | Yes: Little Oven admin with Gemini 2.5 Flash, a run with two tools and a refused reply, trace downloaded with 4 spans; staff refused; phone width | parityai, scobly, bricks | OpenTelemetry |
+| Run viewer and trace export: `<RunViewer />` for an app's admin screen (every reply with its question, tools with inputs and results, refused replies, model, time and tokens; filters by status and rating), GET …/runs and …/runs/:id for admins, and an OpenTelemetry trace per run (…/runs/:id/trace, `teovo.trace()`, `runTrace`) | v2 | Built (#59) | Yes: Little Oven admin with Gemini 2.5 Flash, a run with two tools and a refused reply, trace downloaded with 4 spans; staff refused; phone width | parityai, scobly, bricks | OpenTelemetry |
 | Guarded read-only query tool | v2 |  |  | parityai, bricks | kit |
 | Search over help content | v2 |  |  | parityai, whole guide in the prompt | kit |
 | Suggestions from data checks (such as orders unpaid for 5 days) and from the user's own habits, ranked by taps | v2 |  |  | new | kit tables |
