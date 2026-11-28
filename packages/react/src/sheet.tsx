@@ -65,6 +65,12 @@ export interface AssistantSheetProps {
   layoutSwitch?: boolean
   /** A History button in the header for earlier conversations (needs AssistantProvider). Default true. */
   history?: boolean
+  /**
+   * Extra room under the open button, as CSS, e.g. '5.5rem' to sit above the app's bottom navigation bar (the phone's
+   * safe area is added on top). For only some screen widths, set the CSS variable --tv-open-offset in the app's own
+   * media query instead, e.g. @media (max-width: 767px) { :root { --tv-open-offset: 5.5rem } }. Default none.
+   */
+  buttonOffset?: string
 }
 
 const LAYOUT_KEY = 'teovo:layout'
@@ -158,7 +164,7 @@ export function AssistantSheet(props: AssistantSheetProps) {
 
   return (
     <div className="tv-sheet-root" data-theme={props.theme?.mode} style={themeStyle(props.theme)}>
-      <button ref={button} type="button" className="tv-sheet-open" aria-expanded={open} aria-controls="tv-sheet" onClick={() => set(!open)}>
+      <button ref={button} type="button" className="tv-sheet-open" style={props.buttonOffset ? { '--tv-open-offset': props.buttonOffset } as CSSProperties : undefined} aria-expanded={open} aria-controls="tv-sheet" onClick={() => set(!open)}>
         {props.icon === undefined ? SPARKLE : props.icon}
         {label}
       </button>
