@@ -277,7 +277,8 @@ function Message({ message, ask, stopped, last, busy, ...props }: { message: Teo
       {message.role === 'assistant' && props.showSteps !== false
         ? <StepsList message={message} live={busy && last} open={props.showSteps === 'open'} labels={props.stepLabels} details={props.stepDetails !== false} />
         : null}
-      {message.parts.map((p, i) => {
+      {/* Buttons go under the reply: the model offers them before it writes its last sentence. */}
+      {message.parts.map((p, i) => [p, i] as const).sort(([a], [b]) => Number(a.type === 'data-action') - Number(b.type === 'data-action')).map(([p, i]) => {
         if (p.type === 'text') {
           if (!p.text) return null
           const drawn = props.renderText ? props.renderText(p.text) : message.role === 'assistant' ? <Markdown text={p.text} /> : p.text
@@ -501,7 +502,8 @@ function StoredPicture({ id, alt }: { id: string; alt: string }) {
 
 function CardView({ card, renderCard, formats }: { card: Card; formats?: Formats } & AssistantPanelProps) {
   const { decideCard, runAction } = useAssistant()
-  const [state, setState] = useState<CardState>({ status: FINAL[card.status as keyof typeof FINAL] ?? 'open', reversible: card.reversible })
+  // A low-risk card arrives already applied, with what applying it said.
+  const [state, setState] = useState<CardState>({ status: FINAL[card.status as keyof typeof FINAL] ?? 'open', reversible: card.reversible, ...(card.note ? { note: card.note } : {}), ...(card.link ? { link: card.link } : {}) })
 
   async function decide(d: CardDecision) {
     const allowed = d === 'undo' ? state.status === 'confirmed' && state.reversible : state.status === 'open'

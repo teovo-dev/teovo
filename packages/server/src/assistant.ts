@@ -749,11 +749,29 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
                   const recordVersion = await recordVersionOf(p, ctx)
                   const card: StoredCard = { ...p, ...(t.version ? { version: t.version } : {}), id: crypto.randomUUID(), threadId: thread.id, runId, status: 'shown', ...(seen.size ? { untrustedSources: [...seen] } : {}), ...(recordVersion !== undefined ? { recordVersion } : {}) }
                   await storage.saveCard(card)
-                  runCards.push({ kind: card.kind, title: card.title })
                   await logEvent(card, 'proposed', identity!)
                   config.on?.card?.(card)
+                  // A low-risk change is applied now, with Undo on the card, when it is safe to (see CardApplier.risk).
+                  const applier = config.cards?.[card.kind]
+                  let applied: StoredCard | undefined
+                  if (applier && !('inApp' in applier) && applier.risk === 'low' && applier.undo && !card.untrustedSources?.length &&
+                    (!applier.roles || applier.roles.includes(identity!.role)) && (message.metadata as { from?: string } | undefined)?.from !== 'app') {
+                    try {
+                      applied = await decide({ storage, appliers: config.cards!, rules, identity: identity!, id: card.id, decision: 'confirm', ctx: async () => ctx })
+                      await logEvent(applied, 'confirmed', identity!)
+                      config.on?.decision?.(applied, 'confirm', identity!)
+                    } catch (e) {
+                      // Not applied (the app refused it): the card waits for the user like any other.
+                      if (!(e instanceof CardError)) config.on?.error?.(e, { identity: identity!, threadId: thread.id })
+                    }
+                  }
+                  runCards.push({ kind: card.kind, title: card.title, ...(applied ? { applied: true } : {}) })
                   shown = true
-                  writer.write({ type: 'data-card', id: card.id, data: publicCard(card) })
+                  writer.write({ type: 'data-card', id: card.id, data: publicCard(applied ?? card) })
+                  if (applied) {
+                    return `DONE. "${p.title}" is a small change, so it was applied at once; the card shows it with an Undo button. ` +
+                      'In your reply, say it is done and that they can undo it from the card.'
+                  }
                   // Worded for small models too: they lean on the last tool result more than on the system prompt.
                   return `NOT DONE YET. "${p.title}" is shown to the user as a card with Confirm and Skip; nothing has changed. ` +
                     'In your reply, say it is ready for them to confirm. Do not say it is recorded, saved or done.'
@@ -916,7 +934,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
         let streamError: unknown
         let shown = false   // a card, view or button reached the user in this reply
         const links = new Map<string, RecordLink>()   // records the answer came from (read tools' links)
-        const runCards: { kind: string; title: string }[] = []
+        const runCards: { kind: string; title: string; applied?: boolean }[] = []
         // With done-checks, the reply's words wait here until they pass; everything else goes out as it happens.
         const checks = config.checks ?? []
         let heldWords: Chunk[] = []

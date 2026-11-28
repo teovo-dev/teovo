@@ -106,7 +106,7 @@ useAssistantContext({ path: '/orders/142', title: 'Order', record: { type: 'orde
 ### Rules that keep it safe
 
 - **The assistant acts as the user.** Tools read through `ctx.db` from `asUser`, never through an admin client. Tenant and permission checks belong in your database layer or in `asUser`.
-- **Every change goes through a card.** Any tool that changes data is `kind: 'propose'`. It returns a proposal with `kind`, `title`, `before`, `after` and `payload`. The change runs only in `cards[kind].apply`, after the user confirms. Return `{ undo }` from `apply` and add an `undo` function so the change can be undone.
+- **Every change goes through a card.** Any tool that changes data is `kind: 'propose'`. It returns a proposal with `kind`, `title`, `before`, `after` and `payload`. The change runs only in `cards[kind].apply`, after the user confirms. Return `{ undo }` from `apply` and add an `undo` function so the change can be undone. A small change that is easy to take back can be `risk: 'low'`: it is applied as the card is made, and the card shows it done with Undo (not for cards made after reading outside text, or in replies the app started).
 - **Outside text is marked.** Wrap text that came from customers, uploads or the web with `ctx.untrusted(text, 'source')`. That way the model treats it as data, not instructions.
 - **Personal data is hidden from the model.** Use `redact: { fields: [...], patterns: ['phone', 'email', 'upi'] }` to keep it out of the model's input and the run log.
 - **Read tools don't write.** A `read` tool never changes data.

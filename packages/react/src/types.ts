@@ -38,7 +38,7 @@ export interface Card {
   version?: number
   /** The change in plain sentences, written by the app's code. */
   lines?: string[]
-  /** After confirming (only in the answer to it): what applying it said, e.g. "Sale #12 saved". */
+  /** After confirming (in the answer to it, or on a low-risk card applied at once): what applying it said, e.g. "Sale #12 saved". */
   note?: string
   /** After confirming: where to see the result, e.g. { label: 'Open', to: '/sales/12' }. */
   link?: { label: string; to: string }
