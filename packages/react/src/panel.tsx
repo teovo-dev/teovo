@@ -33,7 +33,7 @@ export interface AssistantPanelProps {
    * the recording is passed here. Return the text to put in the message box; throw to show an error.
    */
   transcribe?: (audio: Blob) => Promise<string>
-  /** Draw a button the assistant offered yourself (e.g. a real link, so phones open WhatsApp without a popup block). */
+  /** Draw a button the assistant offered yourself (e.g. a real link, so phones open WhatsApp without a popup block). Return null or undefined to leave it to Teovo. */
   renderAction?: (action: Action) => ReactNode
   /** Show suggestion chips above the input. Default true (they only appear when the server has some). */
   showSuggestions?: boolean
@@ -310,7 +310,9 @@ function Message({ message, ask, stopped, last, busy, ...props }: { message: Teo
         }
         if (p.type === 'data-action') {
           const a = p.data as Action
-          if (props.renderAction) return <span key={p.id ?? i} className="tv-action-own">{props.renderAction(a)}</span>
+          // The app draws the buttons it wants to (e.g. a real WhatsApp link); Teovo draws the rest.
+          const own = props.renderAction?.(a)
+          if (own !== undefined && own !== null) return <span key={p.id ?? i} className="tv-action-own">{own}</span>
           return <button key={p.id ?? i} type="button" className="tv-action" onClick={() => runAction(a)}>{a.label}</button>
         }
         return null

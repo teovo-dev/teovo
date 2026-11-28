@@ -808,3 +808,14 @@ describe('readers and voice in the app', () => {
     expect((await screen.findByRole('alert')).textContent).toBe('This browser can’t record audio.')
   })
 })
+
+describe('app-drawn buttons', () => {
+  it('lets the app draw some buttons and leaves the rest to Teovo', async () => {
+    const s = server([call('open_order', { no: 7 }), say('Here.')])
+    const onAction = vi.fn()
+    render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch} onAction={onAction}><AssistantPanel renderAction={(a) => (a.action === 'whatsapp' ? <a href="https://wa.me/1">WhatsApp</a> : undefined)} /></AssistantProvider>)
+    await ask('open 7')
+    await userEvent.click(await screen.findByRole('button', { name: 'Open order #7' }))
+    expect(onAction).toHaveBeenCalledWith(expect.objectContaining({ action: 'navigate' }))
+  })
+})
