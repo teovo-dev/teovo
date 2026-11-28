@@ -3,7 +3,7 @@
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import { defaultSettingsMiddleware, wrapLanguageModel } from 'ai'
 import { migrate, postgresFiles, postgresStorage } from '@teovo/db'
-import { builtinViews, createAssistant, defineCheck, defineReader, defineTool, noClaimedChanges, type Identity, type SpendRules } from '@teovo/server'
+import { builtinViews, createAssistant, defineCheck, defineReader, defineTool, noClaimedChanges, queryTool, type Identity, type SpendRules } from '@teovo/server'
 import { readFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import pg from 'pg'
@@ -245,6 +245,27 @@ const teovo = createAssistant({
       name: 'change_total', kind: 'propose', roles: ['owner'], description: 'Prepare changing an order total (a discount or a correction).',
       input: z.object({ no: z.number(), total: z.number().positive() }),
       run: ({ no, total }) => ({ kind: 'change_total', title: `Order #${no} total ₹${order(no).total} → ₹${total}`, before: { total: order(no).total }, after: { total }, payload: { no, total }, fields: [{ key: 'total', label: 'Total', format: 'money' as const }] }),
+    }),
+    // For the questions the tools above don't cover ("which product sold most to businesses this month?"). The model
+    // fills in a checked query over these rows; no SQL, and only the columns listed here (no phone numbers).
+    queryTool({
+      tables: {
+        order_lines: {
+          description: 'One row per product on an order',
+          columns: { order_no: 'number', date: 'date', status: 'text', customer: 'text', customer_type: { type: 'text', description: 'Regular, Walk-in or Business' }, product: 'text', qty: 'number', amount: { type: 'number', description: 'Rupees, qty × price' } },
+          rows: () => shop.orders.flatMap((o) => o.items.map((i) => ({ order_no: o.no, date: o.date, status: o.status, customer: customerOf(o).name, customer_type: customerOf(o).type, product: productName(i.productId), qty: i.qty, amount: i.qty * i.price }))),
+        },
+        payments: {
+          description: 'One row per payment received',
+          columns: { order_no: 'number', date: 'date', customer: 'text', amount: { type: 'number', description: 'Rupees' }, method: { type: 'text', description: 'Cash, UPI, Card or Bank' } },
+          rows: () => shop.orders.flatMap((o) => o.payments.map((p) => ({ order_no: o.no, date: p.date, customer: customerOf(o).name, amount: p.amount, method: p.method }))),
+        },
+        expenses: {
+          description: 'One row per expense paid',
+          columns: { date: 'date', vendor: 'text', category: 'text', amount: { type: 'number', description: 'Rupees' }, method: 'text' },
+          rows: () => shop.expenses.map(({ date, vendor, category, amount, method }) => ({ date, vendor, category, amount, method })),
+        },
+      },
     }),
   ]),
   forms: {
