@@ -31,6 +31,24 @@ another from its last finished tool step. Something has to take those over: `teo
 (its `stop()` hands running replies back on shutdown), or `teovo.work()` from a scheduled job (a Cloudflare cron every
 minute). With `runs: { inline: false }` replies wait for a worker instead of running in the request.
 
+For questions the app's own read tools don't cover, `queryTool` lets the model fill in a checked query (one table,
+filters, groups, totals, order, limit), never SQL. Only the tables and columns you list can be named or returned:
+
+```ts
+queryTool({
+  tables: {
+    order_lines: {
+      description: 'One row per product on an order',
+      columns: { order_no: 'number', date: 'date', product: 'text', amount: { type: 'number', description: 'Rupees' } },
+      from: 'app.order_lines_view',                       // with sql; or rows: (ctx) => [...] to query in memory
+      scope: (ctx) => ({ tenant_id: ctx.identity.tenantId }),
+    },
+  },
+  // One parameterized SELECT: run it as the user, read-only, with a timeout.
+  sql: (s, ctx) => ctx.db.readOnly((c) => c.query(s.text, s.params)).then((r) => r.rows),
+})
+```
+
 - `@teovo/server/workers-ai`: Cloudflare Workers AI as a model (`workersAi`) and Whisper voice-to-text (`workersAiWhisper`).
 - `@teovo/server/testing`: record real conversations and replay them in tests (`recordingModel`, `replayModel`, `chat`), or
   keep them as files: `recordChat` / `replayChat`, `recordRead` / `replayRead`, `idNames`, `saveRecording`, `loadRecordings`.
