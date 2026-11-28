@@ -424,6 +424,23 @@ describe('AssistantPanel', () => {
     expect(onThread.mock.calls.at(-1)![0]).toBe(firstId)
   })
 
+  it('finds earlier conversations by their words in History\'s search box', async () => {
+    const s = server([say('Croissants are ₹90.'), say('Riya owes ₹880.')])
+    const view = mount({ fetch: s.fetch })
+    await ask('price of a croissant')
+    await screen.findByText('Croissants are ₹90.')
+    await userEvent.click(screen.getByRole('button', { name: 'New chat' }))
+    await ask('who owes money?')
+    await screen.findByText('Riya owes ₹880.')
+    view.rerender(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><ThreadList /><AssistantPanel /></AssistantProvider>)
+    await screen.findByRole('button', { name: 'price of a croissant' })
+    await userEvent.type(screen.getByRole('searchbox', { name: 'Search conversations' }), '880')
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'price of a croissant' })).toBeNull())
+    expect(screen.getByRole('button', { name: 'who owes money?' })).toBeTruthy()
+    await userEvent.type(screen.getByRole('searchbox', { name: 'Search conversations' }), 'xyz')
+    await screen.findByText('No conversations with “880xyz”.')
+  })
+
   it('lists earlier conversations, opens one, and continues it', async () => {
     const s = server([say('First answer.'), say('Second answer.'), say('Continued.')])
     const view = mount({ fetch: s.fetch })

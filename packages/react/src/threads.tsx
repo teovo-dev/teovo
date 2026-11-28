@@ -6,6 +6,8 @@ export interface ThreadListProps {
   /** Called after a conversation opens, e.g. to switch back to the chat view. */
   onOpen?: (id: string) => void
   limit?: number
+  /** A box above the list that finds conversations by their title or words. Default true. */
+  search?: boolean
   /** Language for the day headings and times, e.g. 'en-IN'. Default: the browser's. */
   locale?: string
   className?: string
@@ -29,12 +31,21 @@ function when(iso: string, locale?: string, now = new Date()): { day: string; ti
 /** Earlier conversations, one row per chat, grouped by day: tap one to continue it, or remove it from the list. */
 export function ThreadList(props: ThreadListProps) {
   const { openThread, threadId } = useAssistant()
-  const { threads, error, archive } = useThreads(props.limit)
+  const [query, setQuery] = useState('')
+  const { threads, error, archive } = useThreads(props.limit, query)
   const [failed, setFailed] = useState<string>()
-  if (error) return <div className="tv-error" role="alert">{error}</div>
-  if (!threads.length) return <div className={`tv-threads tv-empty ${props.className ?? ''}`}>No earlier conversations.</div>
+  const search = props.search === false ? null : (
+    <input type="search" className="tv-threads-search" placeholder="Search conversations" aria-label="Search conversations"
+      value={query} onChange={(e) => setQuery(e.target.value)} />
+  )
+  if (error) return <>{search}<div className="tv-error" role="alert">{error}</div></>
+  if (!threads.length) {
+    return <>{search}<div className={`tv-threads tv-empty ${props.className ?? ''}`}>{query.trim() ? `No conversations with “${query.trim()}”.` : 'No earlier conversations.'}</div></>
+  }
   let lastDay = ''
   return (
+    <>
+    {search}
     <ul className={`tv-threads ${props.className ?? ''}`} aria-label="Earlier conversations">
       {failed ? <li className="tv-error" role="alert">{failed}</li> : null}
       {threads.map((t: ThreadSummary) => {
@@ -55,5 +66,6 @@ export function ThreadList(props: ThreadListProps) {
         )
       })}
     </ul>
+    </>
   )
 }

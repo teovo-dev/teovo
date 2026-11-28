@@ -75,6 +75,10 @@ export function supabaseStorage(db: SupabaseLike): Storage {
       const rows = (await ok(db.rpc('tv_list_threads', { p_tenant: tenantId, p_user: userId, p_limit: limit }))) as any[]
       return (rows ?? []).map((r) => ({ ...thread(r), updatedAt: new Date(r.updated_at).toISOString() }))
     },
+    async searchThreads(tenantId, userId, q, limit) {
+      const rows = (await ok(db.rpc('tv_search_threads', { p_tenant: tenantId, p_user: userId, p_query: q, p_limit: limit }))) as any[]
+      return (rows ?? []).map((r) => ({ ...thread(r), updatedAt: new Date(r.updated_at).toISOString() }))
+    },
     async setThreadTitle(id, title) {
       await ok(db.from('tv_threads').update({ title }).eq('id', id))
     },

@@ -54,6 +54,11 @@ export interface Storage {
   createThread(tenantId: string, userId: string): Promise<Thread>
   /** This person's conversations, most recently active first, archived ones left out. */
   listThreads(tenantId: string, userId: string, limit: number): Promise<Thread[]>
+  /**
+   * This person's conversations whose title or words (theirs or the assistant's) contain `query`, any case, newest
+   * first. Optional: without it the History search matches titles only.
+   */
+  searchThreads?(tenantId: string, userId: string, query: string, limit: number): Promise<Thread[]>
   setThreadTitle(threadId: string, title: string): Promise<void>
   /** Keep a summary of the conversation's older messages (createAssistant summary). Optional: without it, none is kept. */
   setThreadSummary?(threadId: string, summary: ThreadSummary): Promise<void>
@@ -267,6 +272,13 @@ export function memoryStorage() {
     async listThreads(tenantId, userId, limit) {
       return [...threads.values()].filter((t) => t.tenantId === tenantId && t.userId === userId && !t.archived)
         .sort((a, b) => (b.updatedAt ?? b.createdAt).localeCompare(a.updatedAt ?? a.createdAt)).slice(0, limit).map(strip)
+    },
+    async searchThreads(tenantId, userId, query, limit) {
+      const q = query.toLowerCase()
+      const words = (id: string) => (messages.get(id) ?? []).flatMap((m) => m.parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text.toLowerCase()))
+      const mine = [...threads.values()].filter((t) => t.tenantId === tenantId && t.userId === userId && !t.archived)
+        .sort((a, b) => (b.updatedAt ?? b.createdAt).localeCompare(a.updatedAt ?? a.createdAt)).map(strip)
+      return mine.filter((t) => t.title?.toLowerCase().includes(q) || words(t.id).some((w) => w.includes(q))).slice(0, limit)
     },
     async setThreadTitle(id, title) { const t = threads.get(id); if (t) t.title = title },
     async setThreadSummary(id, summary) { const t = threads.get(id); if (t) t.summary = { ...summary } },

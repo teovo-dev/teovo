@@ -31,7 +31,7 @@ suite('@teovo/db on Postgres', () => {
 
   it('creates core tables only, adds a feature later, and never repeats a migration', async () => {
     const { query, client } = await freshSchema()
-    expect(await migrate(query)).toEqual(['0001_core', '0003_tenant_formats', '0007_api_functions', '0009_ratings', '0010_audit_misses', '0011_privacy_switches', '0014_run_viewer', '0015_long_runs', '0016_thread_summary'])
+    expect(await migrate(query)).toEqual(['0001_core', '0003_tenant_formats', '0007_api_functions', '0009_ratings', '0010_audit_misses', '0011_privacy_switches', '0014_run_viewer', '0015_long_runs', '0016_thread_summary', '0017_thread_search'])
     expect(await missingTables(query, { proposals: true })).toEqual(['tv_proposals'])
     expect(await migrate(query, { features: { proposals: true } })).toEqual(['0002_proposals', '0004_proposal_sources', '0006_proposal_fields', '0012_card_items_versions', '0013_card_lines'])
     expect(await migrate(query, { features: { proposals: true } })).toEqual([])
@@ -161,6 +161,29 @@ suite('@teovo/db on Postgres', () => {
     expect(await s.archiveThread('shop-1', 'u1', a.id)).toBe(false)
     expect((await s.listThreads('shop-1', 'u1', 10)).map((t) => t.id)).toEqual([b.id])
     expect(await s.getThread('shop-1', 'u1', a.id)).toBeNull()
+    client.release()
+  })
+
+  it('searches a person\'s conversations by title and words, not tool data, with % and _ taken literally', async () => {
+    const { query, client } = await freshSchema()
+    await migrate(query)
+    const s = postgresStorage(query)
+    const a = await s.createThread('shop-1', 'u1')
+    const b = await s.createThread('shop-1', 'u1')
+    const other = await s.createThread('shop-1', 'u2')
+    await s.setThreadTitle(a.id, 'Croissant prices')
+    await s.saveMessages(b.id, [
+      { id: 'm1', role: 'user', parts: [{ type: 'text', text: 'Who owes 50% of their bill?' }] },
+      { id: 'm2', role: 'assistant', parts: [{ type: 'tool-orders', toolCallId: 'c', state: 'output-available', input: {}, output: { customer: 'Hotel Lakeview' } } as never, { type: 'text', text: 'Riya Sharma owes half.' }] },
+    ])
+    await s.saveMessages(other.id, [{ id: 'm3', role: 'user', parts: [{ type: 'text', text: 'croissant' }] }])
+    const titles = async (q: string) => (await s.searchThreads!('shop-1', 'u1', q, 10)).map((t) => t.id)
+    expect(await titles('CROISSANT')).toEqual([a.id])
+    expect(await titles('riya sharma')).toEqual([b.id])
+    expect(await titles('50%')).toEqual([b.id])
+    expect(await titles('5_%')).toEqual([])
+    expect(await titles('Lakeview')).toEqual([])
+    expect(await titles('text')).toEqual([])
     client.release()
   })
 
