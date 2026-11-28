@@ -12,6 +12,7 @@ const card = (r: any): StoredCard => {
   if (r.reversible !== null && r.reversible !== undefined) c.reversible = r.reversible
   if (r.undo !== null && r.undo !== undefined) c.undo = r.undo
   if (r.undone_at) c.undoneAt = iso(r.undone_at)
+  if (r.record_version) c.recordVersion = r.record_version
   if (r.untrusted_sources) c.untrustedSources = r.untrusted_sources
   if (r.fields) c.fields = r.fields
   if (r.items) c.items = r.items
@@ -19,7 +20,7 @@ const card = (r: any): StoredCard => {
   if (r.version !== null && r.version !== undefined) c.version = r.version
   return c
 }
-const COLUMN: Record<keyof CardPatch, string> = { status: 'status', decidedBy: 'decided_by', decidedAt: 'decided_at', reversible: 'reversible', undo: 'undo', undoneAt: 'undone_at' }
+const COLUMN: Record<keyof CardPatch, string> = { status: 'status', decidedBy: 'decided_by', decidedAt: 'decided_at', reversible: 'reversible', undo: 'undo', undoneAt: 'undone_at', recordVersion: 'record_version' }
 
 /** A tv_runs row (with title and usage joined in) as the run viewer shows it. */
 export const runSummary = (r: any, usage: Totals): RunSummary => ({
@@ -95,9 +96,9 @@ export function postgresStorage(query: Query): Storage {
     },
     async saveCard(c: StoredCard) {
       await query(
-        `insert into tv_proposals (id, thread_id, run_id, kind, title, before, after, payload, status, untrusted_sources, fields, items, version, lines) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+        `insert into tv_proposals (id, thread_id, run_id, kind, title, before, after, payload, status, untrusted_sources, fields, items, version, lines, record_version) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
          on conflict (id) do nothing`,
-        [c.id, c.threadId, c.runId, c.kind, c.title, json(c.before), json(c.after), json(c.payload), c.status, json(c.untrustedSources), json(c.fields), json(c.items), c.version ?? null, json(c.lines)])
+        [c.id, c.threadId, c.runId, c.kind, c.title, json(c.before), json(c.after), json(c.payload), c.status, json(c.untrustedSources), json(c.fields), json(c.items), c.version ?? null, json(c.lines), c.recordVersion ?? null])
     },
     async getCard(tenantId, userId, id) {
       if (!/^[0-9a-f-]{36}$/i.test(id)) return null

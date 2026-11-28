@@ -100,6 +100,55 @@ describe('cards', () => {
     expect(a.storage.cards.get(id)!.status).toBe('expired')
   })
 
+  it('checks the record even when the card shows no before: Confirm refused if it changed after the card was made', async () => {
+    // A card worded as lines, with no before/after table. The applier's current is the whole order, keys in any order.
+    let flip = false
+    const lines = defineTool({ name: 'record_payment', kind: 'propose', description: 'Pay', input: z.object({ amount: z.number() }),
+      run: ({ amount }) => ({ kind: 'record_payment', title: `Payment ₹${amount}`, lines: ['Order #2'], payload: { no: 2, amount } }) })
+    const a = app({ tools: [lines] }, { current: () => { flip = !flip; return flip ? { no: 2, paid: a.order.paid } : { paid: a.order.paid, no: 2 } } })
+    const ok = await a.proposed()
+    expect(a.storage.cards.get(ok.id)!.recordVersion).toBe('{"no":2,"paid":0}')
+    expect((await a.decide(ok.id, 'confirm')).status).toBe(200)   // same record, keys in another order
+
+    const stale = await a.proposed()
+    a.order.paid += 300   // cash taken on the order screen meanwhile
+    expect(await a.decide(stale.id, 'confirm')).toEqual({ status: 409, body: { error: 'This changed after the card was made, so nothing was saved. Ask again for a fresh card.' } })
+    expect(a.storage.cards.get(stale.id)!.status).toBe('expired')
+    expect(a.order.paid).toBe(500)
+  })
+
+  it('refuses Undo when the record changed after Confirm, and keeps the fingerprint from the browser', async () => {
+    const a = app()
+    const { id } = await a.proposed()
+    const done = await a.decide(id, 'confirm')
+    expect(done.body.card).not.toHaveProperty('recordVersion')
+    expect(a.storage.cards.get(id)!.recordVersion).toBe('{"paid":200}')   // what applying left
+    a.order.paid += 100   // another payment came in after Confirm
+    expect(await a.decide(id, 'undo')).toEqual({ status: 409, body: { error: 'This changed after you confirmed it, so it can’t be undone here. Change it on its own screen instead.' } })
+    expect(a.storage.cards.get(id)!.status).toBe('confirmed')
+    expect(a.order.paid).toBe(300)
+    a.order.paid -= 100   // back as Confirm left it: Undo works again
+    expect((await a.decide(id, 'undo')).body.card).toMatchObject({ status: 'undone' })
+    expect(a.order.paid).toBe(0)
+  })
+
+  it("passes on current's sentence, and skips the Undo check when the record can't be read after applying", async () => {
+    let gone = false
+    const a = app({}, { current: () => { if (gone) throw new Error('Order #2 was deleted.'); return { paid: a.order.paid } } })
+    const c1 = await a.proposed()
+    gone = true
+    expect(await a.decide(c1.id, 'confirm')).toEqual({ status: 422, body: { error: 'Order #2 was deleted.' } })
+    expect(a.storage.cards.get(c1.id)!.status).toBe('shown')
+
+    // Readable before applying, not after (apply removed it): confirmed, and Undo is not blocked by a check it can't make.
+    gone = false
+    const b = app({}, { current: () => { if (gone) throw new Error('gone'); return { paid: b.order.paid } }, apply: () => { gone = true; return { undo: {} } }, undo: () => { gone = false } })
+    const c2 = await b.proposed()
+    expect((await b.decide(c2.id, 'confirm')).status).toBe(200)
+    expect(b.storage.cards.get(c2.id)!.recordVersion).toBeUndefined()
+    expect((await b.decide(c2.id, 'undo')).body.card).toMatchObject({ status: 'undone' })
+  })
+
   it('refuses old cards, other roles, other people, and kinds the app cannot apply', async () => {
     const old = app({ cardRules: { ttlMs: -1 } })
     const c1 = await old.proposed()

@@ -70,10 +70,13 @@ flowchart LR
 8. The run, each tool step (inputs and outputs cut past a limit) and the token usage are saved, on the model that actually answered.
 9. The user presses Confirm. `POST /cards/:id/confirm` does three things:
    - finds the card in the user's own threads
-   - checks the record hasn't changed since the card was prepared
+   - checks the record hasn't changed since the card was prepared (the applier's `current`, fingerprinted when the
+     card was made)
    - claims the card with a compare-and-set, so a double tap applies once
 
-   Then it calls the app's own `apply` as the user. Undo works for 10 minutes for the person who confirmed.
+   Then it calls the app's own `apply` as the user, and fingerprints the record again. Undo works for 10 minutes for
+   the person who confirmed, and is refused if the record changed after Confirm (another change, a second payment),
+   so it never writes over it.
 
 ## Endpoints
 

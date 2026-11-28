@@ -6,10 +6,13 @@ export interface CardApplier<P = any, DB = any> {
   /** Roles that may confirm this kind of card. Omitted: anyone who could see it. */
   roles?: readonly string[]
   /**
-   * The current values of the fields the card showed as `before`. If any differ, the record changed since the
-   * card was prepared, and Confirm is refused so the user never applies a change to data they didn't see.
+   * The record this card changes, as it is now (any JSON; null when it is gone). Teovo reads it when the card is made
+   * and again right after applying it, and keeps a fingerprint with the card. Confirm is refused if the record changed
+   * after the card was made, and Undo if it changed after Confirm, so neither writes over changes made meanwhile (an
+   * edit on another screen, a second payment). Without it nothing is checked. (A card that shows `before` and has no
+   * fingerprint, e.g. one made before an upgrade, is checked field by field against `before`, as before.)
    */
-  current?: (payload: P, ctx: ToolContext<DB>) => Promise<Record<string, unknown>> | Record<string, unknown>
+  current?: (payload: P, ctx: ToolContext<DB>) => unknown
   /** Make the change, as this user. Throw an Error with a sentence for the user to refuse it. */
   apply: (payload: P, ctx: ToolContext<DB>) => Promise<ApplyResult | void> | ApplyResult | void
   /** Take the change back, given what apply returned as `undo`. Without it the card can't be undone. */
@@ -31,6 +34,22 @@ export interface AppCard {
   roles?: readonly string[]
   /** The payload version the app applies now (the tool's version). A card from another version is refused. Default 1. */
   version?: number
+}
+
+/** The same JSON whatever order its keys come in (Postgres jsonb reorders them); absent and undefined alike. */
+export function fingerprint(value: unknown): string {
+  const canon = (v: unknown): unknown => (Array.isArray(v) ? v.map(canon)
+    : v && typeof v === 'object' ? Object.fromEntries(Object.keys(v).sort().filter((k) => (v as Record<string, unknown>)[k] !== undefined).map((k) => [k, canon((v as Record<string, unknown>)[k])]))
+    : v === undefined ? null : v)
+  return JSON.stringify(canon(value))
+}
+
+const CHANGED_BEFORE_CONFIRM = 'This changed after the card was made, so nothing was saved. Ask again for a fresh card.'
+const CHANGED_AFTER_CONFIRM = 'This changed after you confirmed it, so it can’t be undone here. Change it on its own screen instead.'
+
+/** The applier's current, with its error as the user's sentence (the record is gone, say), like apply's. */
+async function readCurrent<DB>(applier: CardApplier<any, DB>, payload: unknown, ctx: ToolContext<DB>): Promise<unknown> {
+  try { return await applier.current!(payload, ctx) } catch (e) { throw new CardError(422, e instanceof Error ? e.message : String(e)) }
 }
 
 const OLD_CARD = 'This card was prepared by an earlier version of the app. Ask again and the assistant will prepare a fresh one.'
@@ -61,8 +80,8 @@ export class CardError extends Error {
 }
 
 /** What the browser may see of a card. */
-export function publicCard(c: StoredCard): Omit<StoredCard, 'undo'> {
-  const { undo: _, ...rest } = c
+export function publicCard(c: StoredCard): Omit<StoredCard, 'undo' | 'recordVersion'> {
+  const { undo: _, recordVersion: _v, ...rest } = c
   return rest
 }
 
@@ -105,19 +124,22 @@ export async function decide<DB>(opts: {
       card.payload = applier.migrate(card.payload, card.version ?? 1)
     }
     const ctx = await opts.ctx()
-    if (applier.current && card.before) {
-      const cur = await applier.current(card.payload, ctx)
-      const changed = Object.keys(card.before).filter((k) => JSON.stringify(cur[k]) !== JSON.stringify(card.before![k]))
-      if (changed.length) {
+    if (applier.current && (card.recordVersion !== undefined || card.before)) {
+      const cur = await readCurrent(applier, card.payload, ctx)
+      // Fields the card showed that differ now, named in the sentence when there are any.
+      const changed = card.before ? Object.keys(card.before).filter((k) => fingerprint(((cur ?? {}) as Record<string, unknown>)[k]) !== fingerprint(card.before![k])) : []
+      if (changed.length || (card.recordVersion !== undefined && fingerprint(cur) !== card.recordVersion)) {
         await storage.updateCard(id, ['shown'], { status: 'expired' })
-        throw new CardError(409, `This changed since the card was prepared (${changed.join(', ')}). Ask again for a fresh card.`)
+        throw new CardError(409, changed.length ? `This changed since the card was prepared (${changed.join(', ')}). Ask again for a fresh card.` : CHANGED_BEFORE_CONFIRM)
       }
     }
     const claimed = await claim(['shown'], { status: 'confirmed', decidedBy: identity.userId, decidedAt: now.toISOString() })
     try {
       const out = await applier.apply(card.payload, ctx)
       const reversible = Boolean(applier.undo)
-      const saved = (await storage.updateCard(id, ['confirmed'], { reversible, undo: out?.undo ?? null })) ?? claimed
+      // What applying left, so Undo can tell whether anything changed it since. If it can't be read, Undo isn't checked.
+      const recordVersion = applier.current && reversible ? await readCurrent(applier, card.payload, ctx).then(fingerprint, () => undefined) : undefined
+      const saved = (await storage.updateCard(id, ['confirmed'], { reversible, undo: out?.undo ?? null, recordVersion })) ?? claimed
       return { ...saved, ...(out?.note ? { note: out.note } : {}), ...(out?.link ? { link: out.link } : {}) }
     } catch (e) {
       // Nothing was applied: put the card back so the user can try again or skip it.
@@ -131,9 +153,13 @@ export async function decide<DB>(opts: {
   if (!applier?.undo || !card.reversible) throw new CardError(409, 'This change can’t be undone here.')
   if (card.decidedBy !== identity.userId) throw new CardError(403, 'Only the person who confirmed this can undo it.')
   if (now.getTime() - new Date(card.decidedAt!).getTime() > rules.undoMs) throw new CardError(410, 'It’s too late to undo this here.')
+  const ctx = await opts.ctx()
+  if (applier.current && card.recordVersion !== undefined && fingerprint(await readCurrent(applier, card.payload, ctx)) !== card.recordVersion) {
+    throw new CardError(409, CHANGED_AFTER_CONFIRM)
+  }
   const claimed = await claim(['confirmed'], { status: 'undone', undoneAt: now.toISOString() })
   try {
-    await applier.undo(card.undo, card.payload, await opts.ctx())
+    await applier.undo(card.undo, card.payload, ctx)
     return claimed
   } catch (e) {
     await storage.updateCard(id, ['undone'], { status: 'confirmed', undoneAt: undefined })

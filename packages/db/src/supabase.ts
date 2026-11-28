@@ -23,6 +23,7 @@ const card = (r: any): StoredCard => {
   if (r.reversible !== null && r.reversible !== undefined) c.reversible = r.reversible
   if (r.undo !== null && r.undo !== undefined) c.undo = r.undo
   if (r.undone_at) c.undoneAt = iso(r.undone_at)
+  if (r.record_version) c.recordVersion = r.record_version
   if (r.untrusted_sources) c.untrustedSources = r.untrusted_sources
   if (r.fields) c.fields = r.fields
   if (r.items) c.items = r.items
@@ -30,7 +31,7 @@ const card = (r: any): StoredCard => {
   if (r.version !== null && r.version !== undefined) c.version = r.version
   return c
 }
-const COLUMN: Record<keyof CardPatch, string> = { status: 'status', decidedBy: 'decided_by', decidedAt: 'decided_at', reversible: 'reversible', undo: 'undo', undoneAt: 'undone_at' }
+const COLUMN: Record<keyof CardPatch, string> = { status: 'status', decidedBy: 'decided_by', decidedAt: 'decided_at', reversible: 'reversible', undo: 'undo', undoneAt: 'undone_at', recordVersion: 'record_version' }
 const thread = (r: any): Thread => ({ id: r.id, tenantId: r.tenant_id, userId: r.user_id, title: r.title, createdAt: new Date(r.created_at).toISOString() })
 
 /** Throws with the API's message; Teovo turns it into "could not finish" for the user and logs it. */
@@ -98,7 +99,7 @@ export function supabaseStorage(db: SupabaseLike): Storage {
       await ok(db.from('tv_proposals').upsert({
         id: c.id, thread_id: c.threadId, run_id: c.runId, kind: c.kind, title: c.title, before: c.before ?? null, after: c.after ?? null,
         payload: c.payload ?? null, status: c.status, untrusted_sources: c.untrustedSources ?? null, fields: c.fields ?? null,
-        items: c.items ?? null, version: c.version ?? null, lines: c.lines ?? null,
+        items: c.items ?? null, version: c.version ?? null, lines: c.lines ?? null, record_version: c.recordVersion ?? null,
       }, { onConflict: 'id', ignoreDuplicates: true }))   // the same card saved twice keeps the first (and its decision)
     },
     async getCard(tenantId, userId, id) {
