@@ -3,11 +3,12 @@
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import { defaultSettingsMiddleware, wrapLanguageModel } from 'ai'
 import { migrate, postgresFiles, postgresStorage } from '@teovo/db'
-import { builtinViews, createAssistant, defineCheck, defineReader, defineTool, noClaimedChanges, queryTool, type Identity, type SpendRules } from '@teovo/server'
+import { builtinViews, createAssistant, defineCheck, defineReader, defineTool, helpTool, noClaimedChanges, queryTool, type Identity, type SpendRules } from '@teovo/server'
 import { readFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import pg from 'pg'
 import { z } from 'zod'
+import { guide } from './help.js'
 import { customerOf, customerStats, daysAgo, due, order, orderView, paid, product, productName, sales, shop, stockState, STATUSES, today, type Method, type Status } from './shop.js'
 
 // .env next to this file: GEMINI_API_KEY and TEOVO_DATABASE_URL. Never committed.
@@ -246,6 +247,8 @@ const teovo = createAssistant({
       input: z.object({ no: z.number(), total: z.number().positive() }),
       run: ({ no, total }) => ({ kind: 'change_total', title: `Order #${no} total ₹${order(no).total} → ₹${total}`, before: { total: order(no).total }, after: { total }, payload: { no, total }, fields: [{ key: 'total', label: 'Total', format: 'money' as const }] }),
     }),
+    // "How do I…" and policy questions, answered from the shop's own guide (help.ts), by words and by meaning.
+    helpTool({ docs: guide, embeddings: google.embeddingModel('gemini-embedding-001') }),
     // For the questions the tools above don't cover ("which product sold most to businesses this month?"). The model
     // fills in a checked query over these rows; no SQL, and only the columns listed here (no phone numbers).
     queryTool({
