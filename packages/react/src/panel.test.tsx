@@ -1,13 +1,13 @@
 // @vitest-environment happy-dom
 // The panel against the real server handler (createAssistant) with a scripted model: no network, no mocks of our own code.
 import type { LanguageModelV4StreamPart } from '@ai-sdk/provider'
-import { builtinViews, createAssistant, defineTool, memoryFiles, memoryStorage, type AssistantConfig, type CardApplier } from '@teovo/server'
+import { builtinViews, createAssistant, defineReader, defineTool, memoryFiles, memoryStorage, type AssistantConfig, type CardApplier } from '@teovo/server'
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MockLanguageModelV4 } from 'ai/test'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { z } from 'zod'
-import { AssistantHeader, AssistantPanel, AssistantProvider, AssistantSheet, complete, ThreadList, useAssistant, useAssistantContext, type AssistantProviderProps } from './index'
+import { AssistantHeader, AssistantPanel, AssistantProvider, AssistantSheet, complete, ThreadList, useAssistant, useAssistantContext, useReader, VoiceButton, type AssistantProviderProps } from './index'
 
 const usage = { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } }
 const streamOf = (parts: unknown[]) => ({ stream: new ReadableStream({ start(c) { for (const p of parts) c.enqueue(p as LanguageModelV4StreamPart); c.close() } }) })
@@ -762,5 +762,49 @@ describe('chat UI the SDK owns', () => {
     expect(await screen.findByText('Sale #12 saved')).toBeTruthy()
     await userEvent.click(screen.getByRole('button', { name: 'Open' }))
     expect(onAction).toHaveBeenCalledWith({ label: 'Open', action: 'navigate', args: { to: '/sales/12' } })
+  })
+})
+
+
+describe('readers and voice in the app', () => {
+  const product = defineReader({ name: 'product', accepts: ['text', 'image'], schema: z.object({ name: z.string().nullable(), price: z.number().nullable() }), instructions: 'Read a product.' })
+
+  function Describe() {
+    const r = useReader<{ name: string | null; price: number | null }>('product')
+    return (
+      <div>
+        <button type="button" onClick={() => void r.read('Kesar pista, 420')}>Fill from text</button>
+        <button type="button" onClick={() => void r.read(new File(['x'], 'menu.png', { type: 'image/png' }))}>Fill from picture</button>
+        {r.busy ? <span>Reading…</span> : null}
+        {r.result ? <output>{r.result.name} at {r.result.price}</output> : null}
+        {r.error ? <p role="alert">{r.error}</p> : null}
+      </div>
+    )
+  }
+
+  it('useReader fills a form from text or a picture, and shows the server’s sentence when it can’t', async () => {
+    const s = server([say('{"name": "Kesar Pista", "price": 420}'), say('{"name": "Mango", "price": 380}'), say('no idea')], true, {}, { readers: [product] })
+    render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><Describe /></AssistantProvider>)
+    await userEvent.click(screen.getByRole('button', { name: 'Fill from text' }))
+    expect(await screen.findByText('Kesar Pista at 420')).toBeTruthy()
+    expect(s.bodies.at(-1)).toEqual({ text: 'Kesar pista, 420' })
+    await userEvent.click(screen.getByRole('button', { name: 'Fill from picture' }))
+    expect(await screen.findByText('Mango at 380')).toBeTruthy()
+    expect(s.bodies.at(-1).image.mediaType).toMatch(/^image\//)
+    await userEvent.click(screen.getByRole('button', { name: 'Fill from text' }))
+    expect((await screen.findByRole('alert')).textContent).toBe('Could not read that. Try again, or fill it in by hand.')
+  })
+
+  it('VoiceButton shows only when something can write recordings down, and says when the browser can’t record', async () => {
+    const s = server([])
+    const view = render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><VoiceButton label="Speak order" onText={() => {}} /></AssistantProvider>)
+    expect(screen.getByRole('button', { name: 'Speak order' })).toBeTruthy()   // the provider can always try the server
+    view.unmount()
+    render(<VoiceButton label="Say it" onText={() => {}} />)
+    expect(screen.queryByRole('button', { name: 'Say it' })).toBeNull()        // no provider, no transcribe: nothing to show
+    cleanup()
+    render(<VoiceButton label="Say it" transcribe={async () => 'hi'} onText={() => {}} />)
+    await userEvent.click(screen.getByRole('button', { name: 'Say it' }))
+    expect((await screen.findByRole('alert')).textContent).toBe('This browser can’t record audio.')
   })
 })

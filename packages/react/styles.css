@@ -355,3 +355,26 @@
 .tv-header-btn svg { width: 18px; height: 18px; }
 @media (max-width: 640px) { .tv-header-layout { display: none; } }
 .tv-panel-history { overflow: hidden; }
+
+/* VoiceButton: the microphone for an app's own forms, and its recording panel. */
+.tv-voice-btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 40px; padding: 0 12px; border-radius: 10px; border: 1px solid var(--tv-border, #e5e7eb); background: var(--tv-bg, #fff); color: var(--tv-fg, #111); font: inherit; font-weight: 600; cursor: pointer; }
+.tv-voice-btn:hover:not(:disabled) { background: var(--tv-subtle, #f3f4f6); }
+.tv-voice-btn svg { width: 18px; height: 18px; flex: none; }
+.tv-voice { position: fixed; inset: auto 0 0 0; z-index: 1100; display: flex; justify-content: center; padding: 12px; padding-bottom: max(12px, env(safe-area-inset-bottom)); font-family: var(--tv-font, system-ui, sans-serif); }
+.tv-voice-box { width: 100%; max-width: 440px; border-radius: 22px; background: #1c1917; color: #fff; padding: 16px; box-shadow: 0 16px 48px rgb(0 0 0 / 0.3); }
+.tv-voice-top { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+.tv-voice-time { margin-left: auto; font-variant-numeric: tabular-nums; opacity: 0.8; }
+.tv-voice-dot { width: 10px; height: 10px; border-radius: 50%; background: #ef4444; animation: tv-pulse 1s ease-in-out infinite; }
+@keyframes tv-pulse { 50% { opacity: 0.35; } }
+.tv-voice-bars { display: flex; align-items: flex-end; justify-content: center; gap: 3px; height: 56px; margin: 12px 0; }
+.tv-voice-bars div { width: 6px; border-radius: 999px; background: #f87171; transition: height 75ms; }
+.tv-voice-quiet div { background: rgb(251 191 36 / 0.7); }
+.tv-voice-hint { margin: 0; text-align: center; font-size: 14px; opacity: 0.85; }
+.tv-voice-warn { color: #fcd34d; font-weight: 600; opacity: 1; }
+.tv-voice-buttons { display: flex; gap: 8px; margin-top: 12px; }
+.tv-voice-buttons button { flex: 1; min-height: 44px; border: 0; border-radius: 12px; background: rgb(255 255 255 / 0.1); color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+.tv-voice-buttons button:hover { background: rgb(255 255 255 / 0.2); }
+.tv-voice-buttons .tv-voice-done { background: #ef4444; }
+.tv-voice-buttons .tv-voice-done:hover { background: #f87171; }
+.tv-voice-busy { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 14px 0; font-size: 14px; }
+@media (prefers-reduced-motion: reduce) { .tv-voice-dot { animation: none; } }

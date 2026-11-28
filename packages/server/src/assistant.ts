@@ -16,6 +16,7 @@ import { checkFormats, DEFAULT_FORMATS, formatsText, todayText, type Formats } f
 import { DEFAULT_SETTINGS, noticeId, SettingsError, settingsText, validateSettings, type TenantSettings } from './settings.js'
 import { findScreen, readPage, screenPath, screensText, screenText, tidy, type Page, type ScreenFn, type ScreenInfo, type SuggestionsFn } from './screens.js'
 import { z } from 'zod'
+import { bytesOf, COULD_NOT_HEAR, readWith, ReaderError, transcribeWith, type ReaderDef, type ReaderInput, type Transcriber } from './readers.js'
 export type { Page } from './screens.js'
 
 export interface AssistantConfig<DB = unknown> {
@@ -70,6 +71,26 @@ export interface AssistantConfig<DB = unknown> {
   /** Let users attach pictures (a bill, a screenshot). Off unless given. The model must be able to read images. */
   attachments?: AttachmentRules
   /**
+   * Readers: one input (text, a picture or a recording) in, one answer in a fixed shape out, e.g. a WhatsApp order →
+   * an order draft, a bill photo → an expense draft. Same models, fallback, limits and usage as the chat; no
+   * conversation. POST …/read/:name, useReader(name) in React, teovo.read(…) on the server (webhooks). Default none.
+   */
+  readers?: readonly ReaderDef<any, any, DB>[]
+  /**
+   * Voice to text: POST …/transcribe (raw audio body), the VoiceButton and the chat's microphone. Off unless given.
+   * Counted like a message in the limits.
+   */
+  voice?: {
+    /** Models that hear audio, tried in order: language models (Gemini) or transcribers (workersAiWhisper). Default: `models`. */
+    models?: readonly (LanguageModelV4 | Transcriber)[]
+    /** What people usually say, to help with names and spelling, e.g. 'orders for a dessert shop: tubs, brownies, GPay'. */
+    hint?: string
+    /** Always write it in English, translating Hindi, Hinglish and so on. Default true. */
+    english?: boolean
+    /** Largest recording, in bytes. Default 15 MB (about 2–3 minutes). */
+    maxBytes?: number
+  }
+  /**
    * Keep attached pictures in a file store instead of inside the conversation. Strongly recommended with
    * attachments: the message keeps only a reference, served to its owner by GET …/files/:id.
    */
@@ -106,6 +127,8 @@ export interface AssistantConfig<DB = unknown> {
     rating?: (r: { runId: string; value: 1 | -1 | null; note?: string }, identity: Identity) => void
     /** The assistant couldn't answer or do something (it called cannot_help). */
     miss?: (miss: Miss) => void
+    /** A reader answered (or failed: error set). */
+    read?: (r: { name: string; ok: boolean; error?: string; ms: number }, identity: Identity) => void
   }
 }
 
@@ -673,12 +696,112 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
   }
 
   /** GET …/policy: the assistant's name, what this person must know before chatting (the tenant's notice and its id), and whether pictures are allowed. */
+  /** Everything a reader or a recording needs before a model is called: switched on, allowed, within limits. */
+  async function readyToRead(identity: Identity): Promise<{ models: readonly LanguageModelV4[] }> {
+    const [own, switches] = await Promise.all([config.storage.tenantSettings(identity.tenantId), config.storage.tenantSettings(SWITCHES)])
+    if (switches && !switches.enabled) throw new ReaderError(503, 'The assistant is paused for everyone at the moment. Try again later.')
+    if (own && !own.enabled) throw new ReaderError(403, 'The assistant is turned off for your team. An admin can turn it on in settings.')
+    const hit = await checkLimits(config.storage, identity, config.limits, 120_000)
+    if (hit) { config.on?.limit?.(hit, identity); throw new ReaderError(429, limitMessage(hit)) }
+    const off = new Set(switches?.modelsOff ?? [])
+    const models = config.models.filter((m) => !off.has(m.modelId))
+    if (!models.length) throw new ReaderError(503, 'The assistant is paused for everyone at the moment. Try again later.')
+    return { models }
+  }
+
+  const usageFor = (identity: Identity) => async (rows: UsageRow[]) => {
+    if (!rows.length) return
+    await config.storage.addUsage(rows)
+    config.on?.usage?.(rows)
+  }
+  const countOne = async (identity: Identity, what: string) =>
+    usageFor(identity)([{ tenantId: identity.tenantId, userId: identity.userId, provider: 'teovo', model: what, unit: 'messages', amount: 1 }])
+
+  async function hear(identity: Identity, audio: Uint8Array, mediaType: string, signal?: AbortSignal): Promise<string> {
+    const v = config.voice
+    if (!v) throw new ReaderError(404, 'Voice is not set up in this app.')
+    if (audio.byteLength > (v.maxBytes ?? 15 * 1024 * 1024)) throw new ReaderError(413, 'That recording is too long. Keep it under 2–3 minutes.')
+    if (audio.byteLength < 1000) throw new ReaderError(400, 'That was too short. Tap the microphone, speak, then tap Done.')
+    const { models } = await readyToRead(identity)
+    await countOne(identity, 'transcribe')
+    const text = await transcribeWith(audio, mediaType, { hint: v.hint, english: v.english !== false, models: v.models ?? models }, { identity, models, signal, usage: usageFor(identity) })
+    if (!text) throw new ReaderError(422, COULD_NOT_HEAR)
+    return text
+  }
+
+  /** One reader, start to finish. Throws ReaderError with a sentence for the user. */
+  async function runReader(name: string, input: ReaderInput, identity: Identity, db: DB, signal?: AbortSignal): Promise<unknown> {
+    const def = (config.readers ?? []).find((r) => r.name === name)
+    if (!def) throw new ReaderError(404, `There is no reader called "${name}".`)
+    if (def.roles && !def.roles.includes(identity.role)) throw new ReaderError(403, 'You don’t have access to this.')
+    const accepts = def.accepts ?? ['text']
+    const kinds = (['text', 'image', 'audio'] as const).filter((k) => input[k])
+    if (!kinds.length) throw new ReaderError(400, 'Nothing to read.')
+    const refused = kinds.find((k) => !accepts.includes(k))
+    if (refused) throw new ReaderError(400, refused === 'image' ? 'This can’t read pictures.' : refused === 'audio' ? 'This can’t take a recording.' : 'This needs a picture, not text.')
+    if (input.image && !/^image\/(png|jpeg|webp|gif)$/.test(input.image.mediaType)) throw new ReaderError(400, 'Use a PNG or JPG picture.')
+    const started = Date.now()
+    try {
+      let text = input.text?.trim() ?? ''
+      if (input.audio) text = [text, await hear(identity, bytesOf(input.audio.data), input.audio.mediaType, signal)].filter(Boolean).join('\n')
+      const { models } = await readyToRead(identity)
+      await countOne(identity, `read:${name}`)
+      const ctx: ToolContext<DB> = { identity, db, untrusted: makeUntrusted(crypto.randomUUID().slice(0, 8)) }
+      const instructions = typeof def.instructions === 'function' ? await def.instructions(ctx) : def.instructions
+      const result = await readWith(def, { text, image: input.image }, `${instructions.trim()}\n\n${todayText({ ...DEFAULT_FORMATS, ...config.formats } as Formats, new Date()).trim()}`, { identity, models, signal, usage: usageFor(identity) })
+      const out = def.after ? await def.after(result, ctx, { ...input, ...(text ? { text } : {}) }) : result
+      config.on?.read?.({ name, ok: true, ms: Date.now() - started }, identity)
+      return out
+    } catch (e) {
+      config.on?.read?.({ name, ok: false, error: e instanceof Error ? e.message : String(e), ms: Date.now() - started }, identity)
+      if (!(e instanceof ReaderError)) config.on?.error?.(e, { identity, threadId: '' })
+      throw e
+    }
+  }
+
+  /** POST …/read/:name with JSON { text?, image?: { data, mediaType }, audio?: { data, mediaType } }. */
+  async function readRoute(req: Request, name: string): Promise<Response> {
+    const identity = await config.identify(req)
+    if (!identity) return json(401, { error: 'Sign in to use the assistant.' })
+    if (Number(req.headers.get('content-length') ?? 0) > 25 * 1024 * 1024) return json(413, { error: 'That is too large.' })
+    const body = (await req.json().catch(() => null)) as ReaderInput | null
+    if (!body || typeof body !== 'object') return json(400, { error: 'Nothing to read.' })
+    const input: ReaderInput = {
+      ...(typeof body.text === 'string' && body.text.trim() ? { text: body.text.slice(0, 20_000) } : {}),
+      ...(body.image && typeof body.image.data === 'string' ? { image: { data: body.image.data, mediaType: String(body.image.mediaType) } } : {}),
+      ...(body.audio && typeof body.audio.data === 'string' ? { audio: { data: body.audio.data, mediaType: String(body.audio.mediaType) } } : {}),
+    }
+    try {
+      return json(200, { result: await runReader(name, input, identity, await config.asUser(identity, req), req.signal) })
+    } catch (e) {
+      if (e instanceof ReaderError) return json(e.status, { error: e.message })
+      return json(500, { error: 'Something went wrong. Try again.' })
+    }
+  }
+
+  /** POST …/transcribe with the recording as the body (Content-Type audio/…): { text }. */
+  async function transcribeRoute(req: Request): Promise<Response> {
+    const identity = await config.identify(req)
+    if (!identity) return json(401, { error: 'Sign in to use the assistant.' })
+    const audio = new Uint8Array(await req.arrayBuffer())
+    const mediaType = (req.headers.get('content-type') ?? 'audio/webm').split(';')[0]!.trim()
+    try {
+      return json(200, { text: await hear(identity, audio, mediaType, req.signal) })
+    } catch (e) {
+      if (e instanceof ReaderError) return json(e.status, { error: e.message })
+      config.on?.error?.(e, { identity, threadId: '' })
+      return json(500, { error: 'Something went wrong. Try again.' })
+    }
+  }
+
   async function policy(req: Request): Promise<Response> {
     const identity = await config.identify(req)
     if (!identity) return json(401, { error: 'Sign in to use the assistant.' })
     const p = (await config.storage.tenantSettings(identity.tenantId))?.privacy ?? {}
     return json(200, {
       pictures: p.pictures !== false && Boolean(config.attachments),
+      voice: Boolean(config.voice),
+      readers: (config.readers ?? []).filter((r) => !r.roles || r.roles.includes(identity.role)).map((r) => r.name),
       ...(config.name?.trim() ? { name: config.name.trim() } : {}),
       ...(config.formats?.locale ? { locale: config.formats.locale } : {}),
       ...(p.notice ? { notice: p.notice, noticeId: await noticeId(p.notice) } : {}),
@@ -756,6 +879,13 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     /** Delete a person's (or with no userId, a whole tenant's) conversations, pictures and logs, e.g. on a privacy request. */
     wipe,
     /**
+     * Run a reader from the server, with no signed-in user, e.g. a webhook (a bank SMS → a payment). Counted against
+     * that identity's limits. `db` is what the reader's instructions and after get as ctx.db. Throws ReaderError.
+     */
+    async read<R = unknown>(name: string, input: ReaderInput, opts: { identity: Identity; db: DB }): Promise<R> {
+      return (await runReader(name, input, opts.identity, opts.db)) as R
+    },
+    /**
      * For whoever runs the app, not tenants: pause the assistant for everyone (enabled: false), or take tools or models
      * out of service for every tenant at once, e.g. a tool with a bug or a model that misbehaves. Takes effect on the
      * next message. Pass {} to switch everything back on.
@@ -788,6 +918,9 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
       const rt = /\/runs\/([0-9a-f-]{36})\/rating$/i.exec(path)
       if (req.method === 'POST' && rt) return rate(req, rt[1]!.toLowerCase())
       if (req.method === 'GET' && path.endsWith('/policy')) return policy(req)
+      const rd = /\/read\/([\w-]{1,64})$/.exec(path)
+      if (req.method === 'POST' && rd) return readRoute(req, rd[1]!)
+      if (req.method === 'POST' && path.endsWith('/transcribe')) return transcribeRoute(req)
       if (req.method === 'GET' && path.endsWith('/allowance')) return allowanceRoute(req)
       if (req.method === 'GET' && path.endsWith('/completions')) return completionsRoute(req)
       if (req.method === 'GET' && path.endsWith('/audit')) return adminList(req, 'audit')

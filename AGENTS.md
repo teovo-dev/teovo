@@ -110,12 +110,17 @@ useAssistantContext({ path: '/orders/142', title: 'Order', record: { type: 'orde
 - **Outside text is marked.** Wrap text that came from customers, uploads or the web with `ctx.untrusted(text, 'source')`. That way the model treats it as data, not instructions.
 - **Personal data is hidden from the model.** Use `redact: { fields: [...], patterns: ['phone', 'email', 'upi'] }` to keep it out of the model's input and the run log.
 - **Read tools don't write.** A `read` tool never changes data.
+- **Every AI call goes through Teovo.** Don't call a model from the app's own code: use a reader (one input → one
+  checked answer, e.g. a WhatsApp order → an order draft) or voice. They share the chat's models, fallback, limits,
+  usage and untrusted-text rules. A reader only fills a form; the app saves after the user checks it.
 
 ### Optional features
 
 | Feature | Server option | React side |
 |---|---|---|
 | Pictures | `attachments: {}` with `files: { store, keepDays }` | `<AssistantPanel attach />` |
+| Fill a form from text, a picture or a recording (readers) | `readers: [defineReader({ name, accepts, schema, instructions, after })]`; webhooks: `teovo.read(name, input, { identity, db })` | `useReader(name).read(input)` |
+| Voice to text | `voice: { models, hint }` (Gemini hears audio; `workersAiWhisper(env.AI)` as backup) | `<VoiceButton onText />`; the chat's microphone uses it too |
 | Screen navigation | `screens: [{ path, title, description, filters }]` | `onAction` on the provider |
 | Changes the app applies in the browser | `cards: { kind: { inApp: true } }` | `onCard` on the provider |
 | Forms in chat | `forms: { submitKind: … }` | Works with the built-in views |
