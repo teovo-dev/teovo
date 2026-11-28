@@ -135,6 +135,13 @@ export interface AssistantConfig<DB = unknown> {
    * no balance: the app's own `reserve` and `settle` do. See SpendRules.
    */
   spend?: SpendRules<DB>
+  /**
+   * Roles a reply can hand over to partway, each on its own models, e.g. an analyst that reads the data and a writer
+   * on a stronger model that writes the report. The model gets a hand_over tool listing them; once it calls it, the
+   * rest of the reply runs as that role: its models (with fallback), its instructions, and only its tools. The run
+   * log records each hand-over, and usage is counted per model that answered.
+   */
+  roles?: Record<string, RoleSpec>
   /** Saved on each run, so a change in replies can be traced to a change in instructions. */
   promptVersion?: string
   /** Tool inputs and outputs longer than this are cut in the run log (the model still sees all of it). Default 8000 characters. */
@@ -180,6 +187,23 @@ export interface RunsConfig<DB = unknown> {
   flushMs?: number
   /** This server's name in the run log. Default a random one per process. */
   worker?: string
+}
+
+export interface RoleSpec {
+  /** What the role is for, for the model deciding when to hand over, e.g. 'writes the final report from what was found'. */
+  description: string
+  /** The models it runs on, in order (the next is tried if one fails). */
+  models: readonly LanguageModelV4[]
+  /** Said to the model once it is this role. Default: the description. */
+  instructions?: string
+  /** The only tools it may use (by name). Default: all of them. */
+  tools?: readonly string[]
+  /**
+   * The app's own plan, checked before each step: true makes this role take over from there, whether or not the
+   * model hands over, e.g. ({ text, toolCalls }) => /report/i.test(text) && toolCalls.length > 0. Each role takes
+   * over once per reply.
+   */
+  takesOver?: (ctx: { text: string; toolCalls: string[]; step: number }) => boolean
 }
 
 export interface SpendRules<DB = unknown> {
@@ -308,6 +332,18 @@ export const MISS_RULE = 'Try your tools before saying you cannot do something: 
   'reading it yourself (find a name in it, add the amounts up), even when no tool filters exactly that way. Only when your ' +
   'tools truly cannot answer or do what the user asks (no tool covers it, the data is not there, or it is not allowed), ' +
   'call cannot_help, then tell them plainly.'
+
+/**
+ * Said when the app has roles: small models gather the numbers and then write the report themselves unless told,
+ * plainly, that the writing is another role's job.
+ */
+function rolesRule(roles: Record<string, RoleSpec> | undefined): string {
+  const names = Object.entries(roles ?? {}).filter(([, r]) => r.models.length)
+  if (!names.length) return ''
+  return `\n\nOther roles carry on parts of a reply, each on its own model: ${names.map(([n, r]) => `the ${n} ${r.description}`).join('; ')}. ` +
+    'When the request is what a role is for, gather what it needs with your tools, then call hand_over with a note of what you found. ' +
+    'Do not write that part yourself.'
+}
 
 /** A UUID that is always the same for the same text (from its SHA-256). */
 async function stableId(text: string): Promise<string> {
@@ -554,7 +590,20 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
       if (auto) outOf ??= ok
       return false
     }
+    // What each model that answered used, for the usage ledger (a reply that hands over runs on several).
+    const byModel = new Map<string, { provider: string; model: string; input_tokens: number; output_tokens: number; neurons: number }>()
+    let answering: () => LanguageModelV4 = () => models[0]!
+    const calledTools: string[] = []   // every tool the reply called so far, for roles' takesOver
+    let steps = 0
     const counted = async (st: { usage?: { inputTokens?: number; outputTokens?: number }; providerMetadata?: Record<string, unknown> }) => {
+      const m = answering()
+      const row = byModel.get(`${m.provider}/${m.modelId}`) ?? { provider: m.provider, model: m.modelId, input_tokens: 0, output_tokens: 0, neurons: 0 }
+      row.input_tokens += st.usage?.inputTokens ?? 0
+      row.output_tokens += st.usage?.outputTokens ?? 0
+      row.neurons += Number((st.providerMetadata?.workersAi as { neurons?: number } | undefined)?.neurons) || 0
+      byModel.set(`${m.provider}/${m.modelId}`, row)
+      for (const c of (st as { toolCalls?: { toolName: string }[] }).toolCalls ?? []) calledTools.push(c.toolName)
+      steps++
       used.input_tokens = (used.input_tokens ?? 0) + (st.usage?.inputTokens ?? 0)
       used.output_tokens = (used.output_tokens ?? 0) + (st.usage?.outputTokens ?? 0)
       const n = Number((st.providerMetadata?.workersAi as { neurons?: number } | undefined)?.neurons) || 0
@@ -590,7 +639,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     // every message (the time, the screen).
     // Screens this person's role may open: the others are never mentioned, and open_screen refuses them.
     const myScreens = (config.screens ?? []).filter((x) => !x.roles || x.roles.includes(identity.role))
-    const shared = `${config.name?.trim() ? `Your name is ${config.name.trim()}; you are the assistant built into this app.\n\n` : ''}${instructions}${screensText(myScreens)}${config.views?.length ? `\n\n${VIEWS_RULE}${formsText(config.forms ?? {})}` : ''}${config.tools.some((t) => t.kind === 'propose') || config.views?.some((v) => v.name === 'form') ? `\n\n${CARDS_RULE}` : ''}\n\n${UNTRUSTED_RULE}`
+    const shared = `${config.name?.trim() ? `Your name is ${config.name.trim()}; you are the assistant built into this app.\n\n` : ''}${instructions}${screensText(myScreens)}${config.views?.length ? `\n\n${VIEWS_RULE}${formsText(config.forms ?? {})}` : ''}${config.tools.some((t) => t.kind === 'propose') || config.views?.some((v) => v.name === 'form') ? `\n\n${CARDS_RULE}` : ''}${rolesRule(config.roles)}\n\n${UNTRUSTED_RULE}`
     const tenantPart = `${formatsText(formats)}${settingsText(settings)}${rolesText}${config.misses !== false && !(settings.toolsOff ?? []).includes('cannot_help') ? `\n\n${MISS_RULE}` : ''}`
     const system = `${shared}${tenantPart}${todayText(formats, config.now?.() ?? new Date())}${screenText(page, shownSummary, fence)}`
 
@@ -723,6 +772,77 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
           usedModel = models[i + 1] ?? usedModel
           config.on?.modelSwitch?.(from, e)
         }, timeouts.firstChunkMs)
+        // Roles: which one the reply is now (none: its own models), the one it hands over to next, and each role's
+        // models behind one fallback, remembering which of them answered.
+        const roles = config.roles ?? {}
+        let role: string | undefined
+        let handOver: { to: string; note: string } | undefined
+        let handNote = ''
+        const roleModels = new Map<string, { model: LanguageModelV4; used: LanguageModelV4 }>()
+        const roleModel = (name: string) => {
+          let r = roleModels.get(name)
+          if (!r) {
+            const list = roles[name]!.models
+            const entry = { model: list[0]!, used: list[0]! }
+            entry.model = fallbackModel(list, () => true, (from, e) => {
+              entry.used = list[list.findIndex((m) => m.modelId === from) + 1] ?? entry.used
+              config.on?.modelSwitch?.(from, e)
+            }, timeouts.firstChunkMs)
+            roleModels.set(name, (r = entry))
+          }
+          return r
+        }
+        const current = () => (role ? roleModel(role).model : model)
+        answering = () => (role ? roleModel(role).used : usedModel)
+        const roleNames = Object.keys(roles).filter((n) => roles[n]!.models.length)
+        if (roleNames.length) {
+          tools.hand_over = tool({
+            description: `Hand the rest of this reply to another role, which carries on with its own model and sees everything so far. ` +
+              `Roles: ${roleNames.map((n) => `${n}: ${roles[n]!.description}`).join('; ')}. Hand over when the work turns into what a role is for.`,
+            inputSchema: z.object({
+              to: z.enum(roleNames as [string, ...string[]]).describe('The role that carries on'),
+              note: z.string().max(1000).describe('What it needs to know: what you found and what to make of it'),
+            }),
+            execute: async ({ to, note }, { toolCallId }) => {
+              if (to === role) return `You are already the ${to}. Carry on.`
+              handOver = { to, note }
+              const label = `Handed over to the ${to}`
+              writer.write({ type: 'data-step', id: toolCallId, data: { name: 'hand_over', kind: 'read', state: 'done', ms: 0, label } })
+              await storage.saveStep({ runId, seq: seq++, type: 'tool', toolCallId, name: 'hand_over', input: { from: role ?? null, to, note }, truncated: false, durationMs: 0 })
+              return `Handed over. From the next step you are the ${to}.`
+            },
+          })
+        }
+        const tookOver = new Set<string>()
+        /**
+         * Before each step: take up a role the last step handed over to, or one the app's plan says takes over now,
+         * with its model, instructions and tools.
+         */
+        const prepareStep = async () => {
+          if (!handOver && steps > 0) {
+            for (const name of roleNames) {
+              const plan = roles[name]!.takesOver
+              if (name === role || tookOver.has(name) || !plan) continue
+              let now = false
+              try { now = plan({ text, toolCalls: [...calledTools], step: steps }) } catch (e) { config.on?.error?.(e, { identity, threadId: thread.id }) }
+              if (!now) continue
+              handOver = { to: name, note: '' }
+              const id = `takes-over-${name}-${runId}`
+              writer.write({ type: 'data-step', id, data: { name: 'hand_over', kind: 'read', state: 'done', ms: 0, label: `Handed over to the ${name}` } })
+              await storage.saveStep({ runId, seq: seq++, type: 'tool', toolCallId: id, name: 'hand_over', input: { from: role ?? null, to: name, by: 'app' }, truncated: false, durationMs: 0 })
+              break
+            }
+          }
+          if (handOver) { role = handOver.to; handNote = handOver.note; handOver = undefined; tookOver.add(role) }
+          if (!role) return {}
+          const spec = roles[role]!
+          const active = spec.tools ? Object.keys(tools).filter((t) => spec.tools!.includes(t) || t === 'hand_over' || t === 'cannot_help') : undefined
+          return {
+            model: roleModel(role).model,
+            instructions: `${system}\n\nYou are now the ${role}: ${spec.instructions ?? spec.description}${handNote ? `\nNote from before the hand-over: ${handNote}` : ''}`,
+            ...(active ? { activeTools: active } : {}),
+          }
+        }
         let streamError: unknown
         let shown = false   // a card, view or button reached the user in this reply
         const links = new Map<string, RecordLink>()   // records the answer came from (read tools' links)
@@ -763,6 +883,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
             tools,
             stopWhen: [isStepCount(config.maxSteps ?? 8), () => Boolean(outOf)],
             onStepFinish: counted,
+            prepareStep,
             // First output is timed by fallbackModel (per model, so a stalled one hands over to the next); the SDK
             // keeps the gaps between chunks and the total.
             timeout: { chunkMs: timeouts.chunkMs, totalMs: timeouts.totalMs },
@@ -794,7 +915,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
           // once more, with tools off, for the answer in words. (Not after a view or card: those are the answer.)
           if (!(await said()) && !shown && !signal.aborted && !outOf) {
             const again = streamText({
-              model, system: `${system}\n\nYou have what you need from the tools above. Now answer the user in words; do not call tools.`,
+              model: current(), system: `${system}\n\nYou have what you need from the tools above. Now answer the user in words; do not call tools.`,
               messages: sofar, tools, toolChoice: 'none', maxRetries: 1, abortSignal: signal, onStepFinish: counted,
               timeout: { chunkMs: timeouts.chunkMs, totalMs: timeouts.totalMs },
             })
@@ -865,17 +986,16 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
         }
 
         async function finish(status: 'done' | 'failed' | 'stopped', error?: unknown) {
-          if (await (rc.owns?.() ?? true)) await rc.end({ status, model: usedModel.modelId, ...(error ? { error: error instanceof Error ? error.message : String(error) } : {}) })
-          const all = await Promise.all(results.map((r) => Promise.resolve(r.totalUsage).catch(() => undefined)))
-          const u = { inputTokens: all.reduce((n, x) => n + (x?.inputTokens ?? 0), 0), outputTokens: all.reduce((n, x) => n + (x?.outputTokens ?? 0), 0) }
-          const base = { tenantId: identity!.tenantId, userId: identity!.userId, runId, provider: usedModel.provider, model: usedModel.modelId }
+          if (await (rc.owns?.() ?? true)) await rc.end({ status, model: answering().modelId, ...(error ? { error: error instanceof Error ? error.message : String(error) } : {}) })
+          // Per model that answered (counted step by step); providers with their own cost unit report it per step
+          // (Workers AI: neurons).
           const rows: UsageRow[] = []
-          if (u?.inputTokens) rows.push({ ...base, unit: 'input_tokens', amount: u.inputTokens })
-          if (u?.outputTokens) rows.push({ ...base, unit: 'output_tokens', amount: u.outputTokens })
-          // Providers with their own cost unit report it per step (Workers AI: neurons).
-          const steps = (await Promise.all(results.map((r) => Promise.resolve(r.steps).catch(() => [])))).flat()
-          const neurons = steps.reduce((n, s) => n + (Number((s.providerMetadata?.workersAi as { neurons?: number } | undefined)?.neurons) || 0), 0)
-          if (neurons > 0) rows.push({ ...base, unit: 'neurons', amount: neurons })
+          for (const m of byModel.values()) {
+            const base = { tenantId: identity!.tenantId, userId: identity!.userId, runId, provider: m.provider, model: m.model }
+            if (m.input_tokens) rows.push({ ...base, unit: 'input_tokens', amount: m.input_tokens })
+            if (m.output_tokens) rows.push({ ...base, unit: 'output_tokens', amount: m.output_tokens })
+            if (m.neurons > 0) rows.push({ ...base, unit: 'neurons', amount: m.neurons })
+          }
           if (rows.length) { await storage.addUsage(rows); config.on?.usage?.(rows) }
           if (spend && (await (rc.owns?.() ?? true))) {
             await Promise.resolve().then(() => spend.settle({ identity, runId, threadId: thread.id, status, used, ...(spend.cost ? { cost: spend.cost(used) } : {}), held }))
