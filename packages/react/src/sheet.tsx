@@ -164,7 +164,9 @@ export function AssistantSheet(props: AssistantSheetProps) {
 
   return (
     <div className="tv-sheet-root" data-theme={props.theme?.mode} style={themeStyle(props.theme)}>
-      <button ref={button} type="button" className="tv-sheet-open" style={props.buttonOffset ? { '--tv-open-offset': props.buttonOffset } as CSSProperties : undefined} aria-expanded={open} aria-controls="tv-sheet" onClick={() => set(!open)}>
+      {/* Hidden while the chat is open: the header's × closes it, and the button would otherwise sit under (or, with an
+          app's own styles, over) the panel's corner and stay in the Tab order. The same element comes back on close. */}
+      <button ref={button} type="button" className="tv-sheet-open" hidden={open} style={props.buttonOffset ? { '--tv-open-offset': props.buttonOffset } as CSSProperties : undefined} aria-expanded={open} aria-controls="tv-sheet" onClick={() => set(!open)}>
         {props.icon === undefined ? SPARKLE : props.icon}
         {label}
       </button>

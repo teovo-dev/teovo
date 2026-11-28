@@ -39,7 +39,10 @@ export const stepRecord = (x: any): StepRecord => ({
 export const claimed = (r: any): ClaimedRun => ({ id: r.id, threadId: r.thread_id, tenantId: r.tenant_id, userId: r.user_id, attempts: r.attempts, job: r.job, stopRequested: Boolean(r.stop_requested_at) })
 export const runState = (r: any): RunState => ({ id: r.id, threadId: r.thread_id, tenantId: r.tenant_id, userId: r.user_id, status: r.status, attempts: r.attempts, ...(r.job ? { job: r.job } : {}) })
 
-const thread = (r: any): Thread => ({ id: r.id, tenantId: r.tenant_id, userId: r.user_id, title: r.title, createdAt: new Date(r.created_at).toISOString() })
+const thread = (r: any): Thread => ({
+  id: r.id, tenantId: r.tenant_id, userId: r.user_id, title: r.title, createdAt: new Date(r.created_at).toISOString(),
+  ...(r.summary && r.summary_upto ? { summary: { text: r.summary, upTo: r.summary_upto } } : {}),
+})
 
 /**
  * Storage on Postgres through any query function (node-postgres Pool, a Drizzle/pg client, a Cloudflare
@@ -73,6 +76,9 @@ export function postgresStorage(query: Query): Storage {
     },
     async setThreadTitle(id, title) {
       await query('update tv_threads set title = $2 where id = $1', [id, title])
+    },
+    async setThreadSummary(id, s) {
+      await query('update tv_threads set summary = $2, summary_upto = $3 where id = $1', [id, s.text, s.upTo])
     },
     async archiveThread(tenantId, userId, id) {
       if (!/^[0-9a-f-]{36}$/i.test(id)) return false

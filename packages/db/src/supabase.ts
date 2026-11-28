@@ -32,7 +32,10 @@ const card = (r: any): StoredCard => {
   return c
 }
 const COLUMN: Record<keyof CardPatch, string> = { status: 'status', decidedBy: 'decided_by', decidedAt: 'decided_at', reversible: 'reversible', undo: 'undo', undoneAt: 'undone_at', recordVersion: 'record_version' }
-const thread = (r: any): Thread => ({ id: r.id, tenantId: r.tenant_id, userId: r.user_id, title: r.title, createdAt: new Date(r.created_at).toISOString() })
+const thread = (r: any): Thread => ({
+  id: r.id, tenantId: r.tenant_id, userId: r.user_id, title: r.title, createdAt: new Date(r.created_at).toISOString(),
+  ...(r.summary && r.summary_upto ? { summary: { text: r.summary, upTo: r.summary_upto } } : {}),
+})
 
 /** Throws with the API's message; Teovo turns it into "could not finish" for the user and logs it. */
 async function ok<T = any>(q: PromiseLike<{ data: T; error: { message: string } | null }>): Promise<T> {
@@ -74,6 +77,9 @@ export function supabaseStorage(db: SupabaseLike): Storage {
     },
     async setThreadTitle(id, title) {
       await ok(db.from('tv_threads').update({ title }).eq('id', id))
+    },
+    async setThreadSummary(id, s) {
+      await ok(db.from('tv_threads').update({ summary: s.text, summary_upto: s.upTo }).eq('id', id))
     },
     async archiveThread(tenantId, userId, id) {
       if (!UUID.test(id)) return false

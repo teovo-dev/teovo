@@ -130,6 +130,7 @@ useAssistantContext({ path: '/orders/142', title: 'Order', record: { type: 'orde
 | Hosts that hold back streams (Firebase Hosting, some proxies) | Long runs (`runs`) | `<AssistantProvider transport="poll">` |
 | Replies nobody typed (a schedule, a heartbeat, a webhook) | `await teovo.start({ identity, text, label, db })` from the app's job; throws `StartError` when refused | Nothing: the panel labels the app's message |
 | A switch to another model partway through a reply (analyst → writer) | `roles: { writer: { description, models, takesOver } }`: the model's `hand_over` or the app's `takesOver` plan | Nothing: the steps show "Handed over to the writer" |
+| Long conversations keep early facts | `summary: true` (needs `npx teovo migrate` for tv_threads.summary) | Nothing needed |
 | Charging for replies (credits, a wallet) | `spend: { hold, reserve, settle, cost? }`: the app's wallet holds before a reply, `ctx.reserve(n)` in a tool raises it, `settle` charges at the end | Nothing: a refusal shows the app's sentence |
 | Done-checks (rules a reply must pass before the user sees it) | `checks: [noClaimedChanges, defineCheck({ name, check })]`, `checkRetries` | Nothing: the panel gets only the reply that passed |
 | Dates and money | `formats: { locale, currency, timeZone }` | Applied automatically |

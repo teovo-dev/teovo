@@ -86,6 +86,9 @@ const teovo = createAssistant({
   // Long runs: a reply goes on when the panel closes, Stop works from any server, and a reply this server was writing
   // when it stopped is carried on from its last finished step by the next server to start (startWorker below).
   runs: { asUser: (identity) => ({ role: identity.role }), leaseMs: 10_000 },
+  // For trying the summary by hand: DEMO_SUMMARY=1 npm run server keeps only 4 messages whole, so older ones are
+  // summarized after a couple of questions (normally 30 are kept).
+  ...(process.env.DEMO_SUMMARY ? { historyMessages: 4, summary: true } : {}),
   // For trying roles by hand: DEMO_ROLES=1 npm run server starts every reply on Flash-Lite to gather the numbers, and
   // lets it hand over to a writer on Flash for summaries and reports.
   ...(process.env.DEMO_ROLES ? {
