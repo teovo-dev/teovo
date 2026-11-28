@@ -17,7 +17,7 @@ on npmjs.com, so only people trusted to release may push `v*` tags.
 
 3. **Trusted publishing, for each of the four packages** on npmjs.com → the package → Settings → Trusted publishing →
    GitHub Actions: organization `teovo-dev`, repository `teovo`, workflow `publish.yml`, no environment, allowed
-   action: publish. Then Settings → Publishing access → "Require two-factor authentication and disallow tokens".
+   actions: tick "Allow npm publish" (stage publish is always allowed). Then Settings → Publishing access → "Require two-factor authentication and disallow tokens".
    A new trusted publisher must be used for a publish within 2 days, or it expires and has to be made again.
 
 ## Each release
