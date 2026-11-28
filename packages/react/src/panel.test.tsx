@@ -379,14 +379,24 @@ describe('AssistantPanel', () => {
     expect(screen.queryByRole('button', { name: 'Who owes for order 142?' })).toBeNull()
   })
 
-  it('Tab fills in the hint when the input is empty', async () => {
-    const s = server([say('ok')], true, {}, { suggestions: () => ({ suggestions: [], placeholder: 'Ask about this order' }) })
+  it('Tab takes the example question showing when the input is empty', async () => {
+    const s = server([say('ok')], true, {}, { suggestions: () => ({ suggestions: [], examples: ['Who owes for this order?'] }) })
     mount({ fetch: s.fetch })
     const box = screen.getByLabelText('Message') as HTMLTextAreaElement
-    await waitFor(() => expect(box.placeholder).toBe('Ask about this order  (Tab)'))
+    await waitFor(() => expect(box.placeholder).toBe('Who owes for this order?  (Tab)'))
     box.focus()
     await userEvent.keyboard('{Tab}')
-    expect(box.value).toBe('Ask about this order')
+    expect(box.value).toBe('Who owes for this order?')
+  })
+
+  it("shows the screen's placeholder as a plain prompt: no (Tab), and Tab doesn't type it", async () => {
+    const s = server([say('ok')], true, {}, { suggestions: () => ({ suggestions: [], placeholder: 'Ask or tell me what to do…' }) })
+    mount({ fetch: s.fetch })
+    const box = screen.getByLabelText('Message') as HTMLTextAreaElement
+    await waitFor(() => expect(box.placeholder).toBe('Ask or tell me what to do…'))
+    box.focus()
+    await userEvent.keyboard('{Tab}')
+    expect(box.value).toBe('')
   })
 
   it('fetches new chips when the screen changes', async () => {

@@ -87,7 +87,9 @@ export function AssistantPanel(props: AssistantPanelProps) {
     const t = setInterval(() => setExampleAt((i) => (i + 1) % examples.length), 3500)
     return () => clearInterval(t)
   }, [examples.join('|')])   // eslint-disable-line react-hooks/exhaustive-deps
-  const hint = examples.length ? examples[exampleAt % examples.length] : suggestions.placeholder
+  // Only an example question can be taken with Tab. The screen's placeholder is a plain prompt ("Ask about stock"),
+  // so it shows as the box's placeholder and Tab leaves it alone.
+  const hint = examples.length ? examples[exampleAt % examples.length] : undefined
   const [phrases, setPhrases] = useState<string[]>(() => { try { return JSON.parse(localStorage.getItem('teovo-phrases') ?? '[]') as string[] } catch { return [] } })
   const completion = complete(text, words, phrases)
   const [files, setFiles] = useState<PendingFile[]>([])
@@ -210,10 +212,10 @@ export function AssistantPanel(props: AssistantPanelProps) {
             ref={box}
             aria-label="Message"
             value={text}
-            placeholder={hint ? `${hint}  (Tab)` : (props.placeholder ?? 'Ask anything')}
+            placeholder={hint ? `${hint}  (Tab)` : (suggestions.placeholder ?? props.placeholder ?? 'Ask anything')}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Tab' && !text && hint) { e.preventDefault(); setText(hint) }   // accept the hint, like autocomplete
+              if (e.key === 'Tab' && !text && hint) { e.preventDefault(); setText(hint) }   // take the example question, like autocomplete
               else if (e.key === 'Tab' && completion) { e.preventDefault(); setText(completion.full) }
               else if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) send(e)
             }}

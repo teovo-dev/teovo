@@ -10,7 +10,7 @@ export interface Page {
   state?: Record<string, string | number | boolean | null>
 }
 
-/** Chips above the input, and the hint inside it. */
+/** Chips above the input; the box's placeholder for this screen; example questions it shows in turn (Tab takes one). */
 export interface Suggestions { suggestions: string[]; placeholder?: string; examples?: string[] }
 
 /** Links under an answer to the records it came from. */

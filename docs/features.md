@@ -52,7 +52,7 @@ cover it but nobody has tried it by hand. A feature counts as done only when thi
 | Per-task model choice: a cheap model for simple reads, a stronger one for hard questions | v1 | Built (#15) | Yes (#27: the example routes short look-ups to flash-lite) | scoops, chosen by hand | kit |
 | Local formats: dates, currency such as ₹, and the tenant's time zone in replies and views | v1 | Built (#16) | Yes | scoops, chosen by hand | kit |
 | Row-level rules on the tv\_ tables that match the app's own tenancy | v1 | Built (#4) | Yes, by hand in Postgres as a non-owner role; how-to in docs/architecture.md (#27) | scoops, scobly, parityai (their own tables) | kit tables |
-| Placeholder that cycles through examples for the screen | v1.1 | Built (#9, #37: examples rotate) | Yes | new | kit |
+| Placeholder that cycles through examples for the screen | v1.1 | Built (#9, #37: examples rotate; fixed #76: Tab and "(Tab)" only for example questions, the screen's `placeholder` stays a plain prompt) | Yes | new | kit |
 | Completion while typing: customer, product and phrase matches on the device, Tab or tap to accept, no model call | v1.1 | Built (#37) | Yes: "chand b" → Chand Bakers | new | kit |
 | Remaining allowance shown in the panel | v1.1 | Built (#36) | Yes: counted down 3 → 1 | bricks, scobly | kit |
 | Audit trail of proposed, confirmed, skipped and undone changes | v1.1 | Built (#35) | Yes: example Admin page | new | kit tables |

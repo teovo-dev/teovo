@@ -104,9 +104,10 @@ export function screensText(screens: readonly ScreenInfo[]): string {
  */
 export type ScreenFn<DB> = (page: Page, ctx: ToolContext<DB>) => Promise<string | null> | string | null
 
-/** Questions shown as chips above the input, and the grey hint inside it (Tab accepts it). */
+/** Questions shown as chips above the input, and what the empty message box shows. */
 export interface Suggestions {
   suggestions: string[]
+  /** The empty box's text on this screen, e.g. "Ask about stock". A prompt, not a question: Tab doesn't take it. Default: the panel's own placeholder. */
   placeholder?: string
   /** Example questions the empty message box shows in turn (Tab takes the one showing). Up to 6. */
   examples?: string[]
