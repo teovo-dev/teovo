@@ -49,6 +49,9 @@ queryTool({
 })
 ```
 
+For "how do I…" questions, `helpTool({ docs, embeddings? })` searches the app's own Markdown guide by section, so the
+model answers from it instead of guessing, without the whole guide in every prompt.
+
 - `@teovo/server/workers-ai`: Cloudflare Workers AI as a model (`workersAi`) and Whisper voice-to-text (`workersAiWhisper`).
 - `@teovo/server/testing`: record real conversations and replay them in tests (`recordingModel`, `replayModel`, `chat`), or
   keep them as files: `recordChat` / `replayChat`, `recordRead` / `replayRead`, `idNames`, `saveRecording`, `loadRecordings`.

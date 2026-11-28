@@ -134,6 +134,7 @@ useAssistantContext({ path: '/orders/142', title: 'Order', record: { type: 'orde
 | Charging for replies (credits, a wallet) | `spend: { hold, reserve, settle, cost? }`: the app's wallet holds before a reply, `ctx.reserve(n)` in a tool raises it, `settle` charges at the end | Nothing: a refusal shows the app's sentence |
 | Done-checks (rules a reply must pass before the user sees it) | `checks: [noClaimedChanges, defineCheck({ name, check })]`, `checkRetries` | Nothing: the panel gets only the reply that passed |
 | Questions the app's read tools don't cover (a guarded query) | `tools: [queryTool({ tables: { name: { description, columns, rows \| from, scope } }, sql? })]`: the model fills in a checked query, never SQL | Nothing needed |
+| Answers from the app's own help | `tools: [helpTool({ docs: [{ title, text (Markdown), path?, roles? }], embeddings? })]` | Nothing: the help page shows as a link under the answer |
 | Dates and money | `formats: { locale, currency, timeZone }` | Applied automatically |
 | Cheap model for simple questions | `route: (ctx) => models \| undefined` | Nothing needed |
 | Monitoring | `on: { error, usage, miss, rating, … }`, `promptVersion` | Nothing needed |
