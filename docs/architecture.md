@@ -87,8 +87,15 @@ Mounted under one path in the app's server, e.g. `app.all('/api/assistant/*', te
 | `GET /settings`, `PUT /settings` | A tenant's own settings (owner and admin) |
 | `GET /threads`, `GET /threads/:id`, `POST /threads/:id/archive` | List, reopen and remove conversations |
 | `POST /threads/:id/views/:viewId/submit` | Send a form the assistant showed; it becomes a card |
+| `GET /threads/:id/stream` | Long runs: the reply this conversation is waiting for, from its start (204 when none) |
+| `POST /threads/:id/stop`, `POST /runs/:id/stop` | Long runs: stop a reply from any server |
 
-Planned: ratings, data wipe, run events for long runs.
+Long runs keep their queue in `tv_runs` (status `queued`, the job, the server holding it and until when, tries, a stop
+flag) and each reply's stream in `tv_run_events`, in batches per try. A claim succeeds only on the tries it read, so
+exactly one server wins without locks, which also works through Supabase's API. A server renews its lease every 2 s
+and hears Stop then; one that misses its lease is taken over, and the new try first sends again everything up to the
+last finished tool step. A panel reading a reply that is taken over gets a transient `data-resumed` part and reads it
+afresh.
 
 ## Stream parts
 

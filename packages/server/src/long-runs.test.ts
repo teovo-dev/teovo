@@ -116,6 +116,23 @@ describe('long runs', () => {
     slow.open()
   })
 
+  it('after a reply stopped in the middle of a tool, the conversation goes on', async () => {
+    const storage = memoryStorage()
+    const slow = gate()
+    const a = server(storage, [callTool('add_up', {}), say('All fine.')], { slow: slow.p })
+    const res = await send(a.teovo, 'add it up')
+    const threadId = res.headers.get('x-teovo-thread')!
+    const r = reader(res)
+    await until(() => r.chunks.some((c) => c.type === 'data-step'))
+    await get(a.teovo, `/threads/${threadId}/stop`, 'POST')
+    await r.done
+    expect(runOf(storage).status).toBe('stopped')
+    slow.open()
+    // The saved reply has a tool call with no result; the next message must not trip over it.
+    expect((await chat(a.teovo, 'anything else?', { threadId, url: 'https://a.test/api/assistant/chat' })).text).toBe('All fine.')
+    expect(JSON.stringify(a.model.doStreamCalls[1]!.prompt)).not.toContain('add_up')
+  })
+
   it('a server that stops answering is taken over from its last finished step', async () => {
     const storage = memoryStorage()
     const stuck = gate()

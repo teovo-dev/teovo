@@ -264,7 +264,7 @@ function clip(v: unknown, max: number): { value: unknown; truncated: boolean } {
  */
 function trimToolResults(messages: UIMessage[], max: number): UIMessage[] {
   const lastAssistant = messages.map((m) => m.role).lastIndexOf('assistant')
-  return messages.map((m, i) => {
+  return messages.map((m) => (m.role === 'assistant' ? { ...m, parts: m.parts.filter(finishedTool) } : m)).map((m, i) => {
     if (m.role !== 'assistant' || i === lastAssistant) return m
     return { ...m, parts: m.parts.map((p) => {
       if (!p.type.startsWith('tool-') || !('output' in p) || p.output === undefined) return p
@@ -272,6 +272,16 @@ function trimToolResults(messages: UIMessage[], max: number): UIMessage[] {
       return text.length <= max ? p : { ...p, output: `${text.slice(0, max)}… [cut: an earlier result; call the tool again for all of it]` }
     }) as UIMessage['parts'] }
   })
+}
+
+/**
+ * A tool call the reply was stopped in the middle of has no result, and models refuse a history with one ("Tool
+ * result is missing"): such calls are left out of what the model sees.
+ */
+function finishedTool(p: UIMessage['parts'][number]): boolean {
+  if (!(p.type.startsWith('tool-') || p.type === 'dynamic-tool')) return true
+  const state = (p as { state?: string }).state
+  return state === 'output-available' || state === 'output-error'
 }
 
 /** A conversation's title until something better exists: the start of its first question. */
