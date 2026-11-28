@@ -1,5 +1,6 @@
 /** @teovo/server: the assistant's handler, tool loop, cards, limits and logs. */
 export { CARDS_RULE, createAssistant, INTERRUPTED, NO_SPEND, StartError, type AssistantConfig, type RoleSpec, type RunsConfig, type SpendRules, type StartOptions, type StartResult, type WaitUntil } from './assistant.js'
+export { alertWatch, postAlert, type Alert, type AlertRules, type ReplyOutcome } from './alerts.js'
 export { helpTool, rankByWords, splitHelp, words, type HelpDoc, type HelpSection, type HelpToolOptions } from './help.js'
 export { checkQuery, queryTool, QueryError, runRows, toSql, type CheckedQuery, type DataQuery, type QueryColumn, type QueryColumnType, type QueryStatement, type QueryTable, type QueryToolOptions } from './query.js'
 export { runTrace, type OtlpTrace } from './trace.js'
