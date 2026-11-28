@@ -335,6 +335,28 @@ const threadSummary: Migration = {
 alter table tv_threads add column if not exists summary_upto text;`,
 }
 
+/** Search over a person's conversations (History's search box), for apps on Supabase's API. */
+const threadSearch: Migration = {
+  id: '0017_thread_search',
+  sql: `create or replace function tv_search_threads(p_tenant text, p_user text, p_query text, p_limit int)
+returns table (id uuid, tenant_id text, user_id text, title text, created_at timestamptz, updated_at timestamptz)
+language sql stable security invoker as $$
+  select t.id, t.tenant_id, t.user_id, t.title, t.created_at,
+         coalesce((select max(m.created_at) from tv_messages m where m.thread_id = t.id), t.created_at) as updated_at
+  from tv_threads t
+  where t.tenant_id = p_tenant and t.user_id = p_user and t.archived_at is null
+    and (t.title ilike '%' || replace(replace(replace(p_query, '\\', '\\\\'), '%', '\\%'), '_', '\\_') || '%'
+      or exists (select 1 from tv_messages m, jsonb_array_elements(m.parts) p where m.thread_id = t.id and p->>'type' = 'text'
+        and p->>'text' ilike '%' || replace(replace(replace(p_query, '\\', '\\\\'), '%', '\\%'), '_', '\\_') || '%'))
+  order by 6 desc limit p_limit
+$$;
+revoke all on function tv_search_threads(text, text, text, int) from public;
+do $$ begin
+  if exists (select 1 from pg_roles where rolname = 'service_role') then grant execute on function tv_search_threads(text, text, text, int) to service_role; end if;
+  if exists (select 1 from pg_roles where rolname = 'anon') then revoke all on function tv_search_threads(text, text, text, int) from anon, authenticated; end if;
+end $$;`,
+}
+
 /** The migrations for these options, in order. */
 export function migrations(options: SchemaOptions = {}): Migration[] {
   const list: Migration[] = [core]
@@ -358,7 +380,7 @@ export function migrations(options: SchemaOptions = {}): Migration[] {
   list.push(longRuns)
   if (options.rls === 'server-only') list.push({ ...serverOnlyMigration(['tv_run_events']), id: '0115_server_only_run_events' })
   else if (options.rls) list.push({ ...rlsMigration(['tv_run_events'], options.rls), id: '0115_rls_run_events' })
-  list.push(threadSummary)
+  list.push(threadSummary, threadSearch)
   return list
 }
 

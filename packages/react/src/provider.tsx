@@ -464,20 +464,26 @@ export function useAssistant(): AssistantState {
 }
 
 /** This person's earlier conversations, newest first. Refreshes when a new conversation starts. */
-export function useThreads(limit = 30) {
+export function useThreads(limit = 30, query = '') {
   const { request, threadId } = useAssistant()
   const [threads, setThreads] = useState<ThreadSummary[]>([])
   const [error, setError] = useState<string>()
+  const q = query.trim()
   const refresh = useCallback(async () => {
     try {
-      const res = await request(`/threads?limit=${limit}`)
+      const res = await request(`/threads?limit=${limit}${q ? `&q=${encodeURIComponent(q)}` : ''}`)
       const body = (await res.json()) as { threads?: ThreadSummary[]; error?: string }
       if (!res.ok) throw new Error(body.error ?? 'Could not load conversations.')
       setThreads(body.threads ?? [])
       setError(undefined)
     } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
-  }, [request, limit])
-  useEffect(() => { void refresh() }, [refresh, threadId])
+  }, [request, limit, q])
+  // A search waits for a pause in typing; the plain list loads at once.
+  useEffect(() => {
+    if (!q) { void refresh(); return }
+    const t = setTimeout(() => void refresh(), 250)
+    return () => clearTimeout(t)
+  }, [refresh, threadId, q])
   const archive = useCallback(async (id: string) => {
     const res = await request(`/threads/${encodeURIComponent(id)}/archive`, { method: 'POST' })
     if (!res.ok) throw new Error(((await res.json().catch(() => ({}))) as { error?: string }).error ?? 'Could not remove it.')

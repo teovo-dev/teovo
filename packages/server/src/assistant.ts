@@ -51,6 +51,12 @@ export interface AssistantConfig<DB = unknown> {
    * Written after a reply, so nobody waits for it; on `model` (default the reply's first model). Off unless given.
    */
   summary?: boolean | { model?: LanguageModelV4 }
+  /**
+   * Name each conversation in a few words after its first reply ("Unpaid orders this week"), for History, instead of
+   * its first words. Written after the reply, so nobody waits for it; on `model` (default the reply's first model). Off
+   * unless given: the first words stay the title.
+   */
+  titles?: boolean | { model?: LanguageModelV4 }
   /** Earlier messages the model sees. Default 30. */
   historyMessages?: number
   /**
@@ -698,6 +704,24 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     const system = `${shared}${tenantPart}${olderText}${todayText(formats, config.now?.() ?? new Date())}${screenText(page, shownSummary, fence)}`
 
     /** Fold the messages that fell out of view into the thread's summary, for the next message (summary). */
+    async function nameThread(answer: UIMessage) {
+      const m = (typeof config.titles === 'object' ? config.titles.model : undefined) ?? models[0]!
+      const said = (x: UIMessage) => x.parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join(' ').replace(/\s+/g, ' ').trim()
+      const r = await generateText({
+        model: m, maxRetries: 1,
+        system: 'Name this conversation from a business app in 2 to 6 plain words, like a note title, in the language the user wrote in. ' +
+          'Say what it is about (e.g. "Unpaid orders this week", "Refund for order 142"). No quotes, no full stop, nothing else.',
+        prompt: `User: ${text.slice(0, 1500)}\nAssistant: ${said(answer).slice(0, 1500)}`,
+      })
+      const title = r.text.trim().split('\n')[0]!.replace(/^\W*(title|name)\s*:\s*/i, '').replace(/^["'“”‘’*#\s]+|["'“”‘’*.\s]+$/g, '').trim()
+      if (title && title.length <= 80) await storage.setThreadTitle(thread.id, title)
+      const base = { tenantId: identity.tenantId, userId: identity.userId, runId, provider: m.provider, model: m.modelId }
+      const rows: UsageRow[] = []
+      if (r.usage.inputTokens) rows.push({ ...base, unit: 'input_tokens', amount: r.usage.inputTokens })
+      if (r.usage.outputTokens) rows.push({ ...base, unit: 'output_tokens', amount: r.usage.outputTokens })
+      if (rows.length) { await storage.addUsage(rows); config.on?.usage?.(rows) }
+    }
+
     async function summarize(before: string | undefined, pending: UIMessage[]) {
       const opts = typeof config.summary === 'object' ? config.summary : {}
       const m = opts.model ?? models[0]!
@@ -1120,6 +1144,10 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
         // A reply the user stopped keeps what was written so far, marked, so a reload shows it was cut short.
         if (reply && reply.role === 'assistant') {
           await storage.saveMessages(thread.id, [signal.aborted ? { ...reply, metadata: { ...(reply.metadata as object | undefined), stopped: true } } : reply])
+          // The first reply of a conversation: name it.
+          if (config.titles && !signal.aborted && (await storage.listMessages(thread.id)).filter((m) => m.role === 'user').length === 1) {
+            await nameThread(reply).catch((e) => config.on?.error?.(e, { identity, threadId: thread.id }))
+          }
         }
       },
     })
@@ -1442,8 +1470,13 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     if (!identity) return json(401, { error: 'Sign in to use the assistant.' })
     const { storage } = config
     if (!id) {
-      const limit = Math.min(Math.max(Number(new URL(req.url).searchParams.get('limit')) || 30, 1), 100)
-      const list = await storage.listThreads(identity.tenantId, identity.userId, limit)
+      const params = new URL(req.url).searchParams
+      const limit = Math.min(Math.max(Number(params.get('limit')) || 30, 1), 100)
+      // ?q= searches titles and words; a store without search matches titles only.
+      const q = (params.get('q') ?? '').replace(/\s+/g, ' ').trim().slice(0, 100)
+      const list = !q ? await storage.listThreads(identity.tenantId, identity.userId, limit)
+        : storage.searchThreads ? await storage.searchThreads(identity.tenantId, identity.userId, q, limit)
+        : (await storage.listThreads(identity.tenantId, identity.userId, 100)).filter((t) => t.title?.toLowerCase().includes(q.toLowerCase())).slice(0, limit)
       return json(200, { threads: list.map(({ id, title, createdAt, updatedAt }) => ({ id, title, createdAt, updatedAt: updatedAt ?? createdAt })) })
     }
     if (archive) {

@@ -74,6 +74,8 @@ const teovo = createAssistant({
   models: [process.env.DEMO_MAIN_DOWN ? google('gemini-main-down-demo') : flash, google('gemini-2.5-flash-lite')],
   // When a quarter of replies fall back to Flash-Lite, or a tenth fail: one alert, and one when it's over. Printed
   // here; set ALERT_WEBHOOK to a Slack or Google Chat webhook to post it there.
+  // Each conversation is named after its first reply ("Unpaid orders this week"), for History and its search.
+  titles: true,
   alerts: {
     send: process.env.ALERT_WEBHOOK ? postAlert(process.env.ALERT_WEBHOOK) : (a) => console.log(`[alert] ${a.text}`),
     ...(process.env.DEMO_MAIN_DOWN ? { minReplies: 2 } : {}),

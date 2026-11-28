@@ -74,6 +74,17 @@ export function postgresStorage(query: Query): Storage {
          order by updated_at desc limit $3`, [tenantId, userId, limit])
       return r.rows.map((row) => ({ ...thread(row), updatedAt: new Date(row.updated_at).toISOString() }))
     },
+    async searchThreads(tenantId, userId, q, limit) {
+      // Words only: text parts of the messages, not their JSON keys or tool data.
+      const like = `%${q.replace(/[\\%_]/g, (m) => `\\${m}`)}%`
+      const r = await query(
+        `select t.*, coalesce((select max(m.created_at) from tv_messages m where m.thread_id = t.id), t.created_at) as updated_at
+         from tv_threads t where t.tenant_id = $1 and t.user_id = $2 and t.archived_at is null
+           and (t.title ilike $3 or exists (select 1 from tv_messages m, jsonb_array_elements(m.parts) p
+                where m.thread_id = t.id and p->>'type' = 'text' and p->>'text' ilike $3))
+         order by updated_at desc limit $4`, [tenantId, userId, like, limit])
+      return r.rows.map((row) => ({ ...thread(row), updatedAt: new Date(row.updated_at).toISOString() }))
+    },
     async setThreadTitle(id, title) {
       await query('update tv_threads set title = $2 where id = $1', [id, title])
     },
