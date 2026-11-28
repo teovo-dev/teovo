@@ -216,5 +216,12 @@ export function supabaseFileIndex(db: SupabaseLike) {
       const rows = await ok(q)
       return rows.map((r: any) => ({ id: r.id, tenantId: r.tenant_id, userId: r.user_id, threadId: r.thread_id, mediaType: r.media_type }))
     },
+    async olderThan(before: Date, limit: number): Promise<Omit<StoredFile, 'bytes'>[]> {
+      const rows = await ok(db.from('tv_files').select('id, tenant_id, user_id, thread_id, media_type').lt('created_at', before.toISOString()).order('created_at').limit(limit))
+      return rows.map((r: any) => ({ id: r.id, tenantId: r.tenant_id, userId: r.user_id, threadId: r.thread_id, mediaType: r.media_type }))
+    },
+    async forget(ids: string[]): Promise<void> {
+      if (ids.length) await ok(db.from('tv_files').delete().in('id', ids))
+    },
   }
 }

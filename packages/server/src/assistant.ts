@@ -11,7 +11,7 @@ import { makeUntrusted, UNTRUSTED_RULE } from './untrusted.js'
 import { makeRedactor, type RedactOptions } from './redact.js'
 import { checkForm, formHandler, formsText, missingFields, VIEWS_RULE, type FormData, type FormHandler, type FormSpec, type TeovoView } from './views.js'
 import { checkMessage, type AttachmentRules } from './attachments.js'
-import { picturesOnce, storeFiles, type FileRules } from './files.js'
+import { FILE_SCHEME, picturesOnce, storeFiles, type FileRules } from './files.js'
 import { checkFormats, DEFAULT_FORMATS, formatsText, todayText, type Formats } from './formats.js'
 import { DEFAULT_SETTINGS, noticeId, SettingsError, settingsText, validateSettings, type TenantSettings } from './settings.js'
 import { findScreen, readPage, screenPath, screensText, screenText, tidy, type Page, type ScreenFn, type ScreenInfo, type SuggestionsFn } from './screens.js'
@@ -293,7 +293,13 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     // Which outside text this run has read: the user's pictures, and whatever tools fenced as untrusted.
     const seen = new Set<string>(message.parts.some((p) => p.type === 'file') ? ['picture'] : [])
     const fence = makeUntrusted(nonce)
-    const ctx: ToolContext<DB> = { identity, db, untrusted: (text, source) => { seen.add(source.replace(/[^\w .-]/g, '').slice(0, 40) || 'outside text'); return fence(text, source) } }
+    // The pictures on this message, as stored: a card can keep one (e.g. the bill an expense came from).
+    const files = saved.parts.flatMap((p) => (p.type === 'file' && p.url.startsWith(FILE_SCHEME)
+      ? [{ id: p.url.slice(FILE_SCHEME.length), mediaType: p.mediaType, ...(p.filename ? { filename: p.filename } : {}) }] : []))
+    const ctx: ToolContext<DB> = {
+      identity, db, untrusted: (text, source) => { seen.add(source.replace(/[^\w .-]/g, '').slice(0, 40) || 'outside text'); return fence(text, source) },
+      ...(files.length ? { files } : {}), ...withFile(fileOf(identity)),
+    }
     const instructions = typeof config.instructions === 'function' ? await config.instructions({ identity, page }) : config.instructions
     const summary = page && config.screen ? await Promise.resolve().then(() => config.screen!(page, ctx)).catch((e) => { config.on?.error?.(e, { identity, threadId: thread.id }); return null }) : null
     const shownSummary = summary === null ? null : String(redact(summary))
@@ -322,7 +328,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
             description: t.description,
             inputSchema: t.input,
             execute: async (input: unknown, { toolCallId }: { toolCallId: string }) => {
-              writer.write({ type: 'data-step', id: toolCallId, data: { name: t.name, kind: t.kind, state: 'running' } })
+              writer.write({ type: 'data-step', id: toolCallId, data: { name: t.name, kind: t.kind, state: 'running', ...(t.label ? { label: t.label } : {}) } })
               const started = Date.now()
               const step = { runId, seq: seq++, type: 'tool' as const, toolCallId, name: t.name }
               const max = config.logLimit ?? 8000
@@ -366,7 +372,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
                 throw e
               } finally {
                 // How long it took and whether it failed, for the steps list under the reply.
-                writer.write({ type: 'data-step', id: toolCallId, data: { name: t.name, kind: t.kind, state: 'done', ms: Date.now() - started, ...(failed ? { error: failed.slice(0, 300) } : {}) } })
+                writer.write({ type: 'data-step', id: toolCallId, data: { name: t.name, kind: t.kind, state: 'done', ...(t.label ? { label: t.label } : {}), ms: Date.now() - started, ...(failed ? { error: failed.slice(0, 300) } : {}) } })
               }
             },
           })
@@ -850,6 +856,16 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     return json(400, { error: 'Send scope "me", "user" with a userId, or "tenant".' })
   }
 
+  /** Read a picture this person shared (their own, in this tenant), for a tool or a card being applied. */
+  function fileOf(identity: Identity): ToolContext<DB>['file'] {
+    const files = config.files
+    if (!files) return undefined
+    return async (id) => {
+      const f = await files.store.get(identity.tenantId, id)
+      return f && f.userId === identity.userId ? f : null
+    }
+  }
+
   async function card(req: Request, id: string, decision: Decision): Promise<Response> {
     const identity = await config.identify(req)
     if (!identity) return json(401, { error: 'Sign in to use the assistant.' })
@@ -858,7 +874,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
       const body = (await req.json().catch(() => ({}))) as { reversible?: unknown }
       const done = await decide({
         storage: config.storage, appliers: config.cards ?? {}, rules, identity, id, decision, reversible: body.reversible === true,
-        ctx: async () => ({ identity, db: await config.asUser(identity, req), untrusted: makeUntrusted(crypto.randomUUID().slice(0, 8)) }),
+        ctx: async () => ({ identity, db: await config.asUser(identity, req), untrusted: makeUntrusted(crypto.randomUUID().slice(0, 8)), ...withFile(fileOf(identity)) }),
       })
       await logEvent(done, ({ confirm: 'confirmed', skip: 'skipped', undo: 'undone' } as const)[decision], identity)
       config.on?.decision?.(done, decision, identity)
@@ -931,4 +947,9 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
       return json(404, { error: 'Not found.' })
     },
   }
+}
+
+/** Spread into a ToolContext: adds `file` only when the assistant keeps files. */
+function withFile<DB>(file: ToolContext<DB>['file']): Pick<ToolContext<DB>, 'file'> {
+  return file ? { file } : {}
 }

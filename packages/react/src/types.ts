@@ -58,6 +58,8 @@ export interface Step {
   state: 'running' | 'done'
   /** read (looked something up), propose (prepared a change), action (offered a button). */
   kind?: 'read' | 'propose' | 'action'
+  /** The tool's own label from the server (defineTool's `label`), e.g. "Looked at the order". */
+  label?: string
   /** How long it took, once done. */
   ms?: number
   /** Why it failed, if it did (the model saw this too). */

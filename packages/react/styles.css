@@ -278,9 +278,10 @@
 .tv-thread-remove:hover { background: var(--tv-border); color: var(--tv-fg); }
 @media (hover: none) { .tv-thread-remove { opacity: 1; } }
 
-/* ---------- Sheet: a drawer on the right on wide screens, a bottom sheet on phones ---------- */
+/* ---------- Sheet: a drawer on the right on wide screens, a bottom sheet on phones ----------
+   --tv-open-offset: extra room under the open button (e.g. above the app's bottom navigation), set by the app. */
 .tv-sheet-open {
-  position: fixed; right: 20px; bottom: 20px; z-index: 1000; display: inline-flex; align-items: center; gap: 8px;
+  position: fixed; right: 20px; bottom: calc(20px + var(--tv-open-offset, 0px)); z-index: 1000; display: inline-flex; align-items: center; gap: 8px;
   background: var(--tv-accent); color: var(--tv-accent-text); border: 0; border-radius: 999px; padding: 12px 18px 12px 14px;
   font: inherit; font-weight: 600; cursor: pointer; box-shadow: 0 6px 20px rgb(0 0 0 / 0.18), 0 2px 4px rgb(0 0 0 / 0.08);
   transition: transform 0.15s, box-shadow 0.15s;
@@ -322,7 +323,7 @@
   }
   .tv-sheet-header { position: relative; padding-top: 14px; }
   .tv-sheet-header::before { content: ''; position: absolute; top: 6px; left: 50%; width: 36px; height: 4px; margin-left: -18px; border-radius: 2px; background: var(--tv-border); }
-  .tv-sheet-open { right: 16px; bottom: calc(16px + env(safe-area-inset-bottom)); }
+  .tv-sheet-open { right: 16px; bottom: calc(16px + var(--tv-open-offset, 0px) + env(safe-area-inset-bottom)); }
   .tv-sheet-floating { right: 0; bottom: 0; border-width: 1px 0 0; border-radius: 18px 18px 0 0; }
   /* 16px stops iOS zooming in when the message box gets focus. */
   .tv-composer textarea, .tv-form input, .tv-form select { font-size: 16px; }
@@ -378,3 +379,16 @@
 .tv-voice-buttons .tv-voice-done:hover { background: #f87171; }
 .tv-voice-busy { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 14px 0; font-size: 14px; }
 @media (prefers-reduced-motion: reduce) { .tv-voice-dot { animation: none; } }
+
+/* ---------- AllowanceMeter: usage against the limits, for a settings screen (sits on the app's own page) ---------- */
+.tv-meter { --tv-meter-ok: var(--tv-accent, #4f46e5); font-family: inherit; }
+.tv-meter-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.tv-meter-title { font-weight: 700; }
+.tv-meter-pct { font-size: 0.875em; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--tv-muted, #6b7280); }
+.tv-meter-bar { margin-top: 8px; height: 8px; border-radius: 999px; background: var(--tv-subtle, #f1f2f4); overflow: hidden; }
+.tv-meter-bar > div { height: 100%; border-radius: 999px; background: var(--tv-meter-ok); }
+.tv-meter-mid .tv-meter-pct { color: #b45309; }
+.tv-meter-mid .tv-meter-bar > div { background: #f59e0b; }
+.tv-meter-high .tv-meter-pct { color: var(--tv-error, #b91c1c); }
+.tv-meter-high .tv-meter-bar > div { background: #ef4444; }
+.tv-meter-lines { margin: 8px 0 0; font-size: 0.75em; color: var(--tv-muted, #6b7280); }
