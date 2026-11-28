@@ -86,6 +86,22 @@ const teovo = createAssistant({
   // Long runs: a reply goes on when the panel closes, Stop works from any server, and a reply this server was writing
   // when it stopped is carried on from its last finished step by the next server to start (startWorker below).
   runs: { asUser: (identity) => ({ role: identity.role }), leaseMs: 10_000 },
+  // For trying roles by hand: DEMO_ROLES=1 npm run server starts every reply on Flash-Lite to gather the numbers, and
+  // lets it hand over to a writer on Flash for summaries and reports.
+  ...(process.env.DEMO_ROLES ? {
+    models: [google('gemini-2.5-flash-lite'), flash],
+    route: undefined,
+    roles: {
+      writer: {
+        description: 'writes summaries, reports and advice for the owner once the numbers are gathered',
+        instructions: 'Write the summary for the owner from what was found: short, warm, with the numbers that matter. Use a table only if it helps.',
+        models: [flash, google('gemini-2.5-flash-lite')],
+        // The shop's plan: a request for a report or summary goes to the writer once the first numbers are in.
+        // (Flash-Lite, left to hand over by itself, wrote the report itself in by-hand checks.)
+        takesOver: ({ text, toolCalls }) => /\b(report|summary|summari[sz]e|overview)\b/i.test(text) && toolCalls.length > 0,
+      },
+    },
+  } : {}),
   // For trying the spend hold by hand: DEMO_CREDITS=3 npm run server gives the shop 3 credits. A reply holds 1, costs
   // 1 per 5,000 tokens it uses (raised as it goes), and is charged when it finishes; a stopped or failed one costs nothing.
   ...(demoWallet ? { spend: demoWallet } : {}),
