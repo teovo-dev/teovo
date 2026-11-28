@@ -3,7 +3,7 @@
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import { defaultSettingsMiddleware, wrapLanguageModel } from 'ai'
 import { migrate, postgresFiles, postgresStorage } from '@teovo/db'
-import { builtinViews, createAssistant, defineCheck, defineReader, defineTool, helpTool, noClaimedChanges, queryTool, type Identity, type SpendRules } from '@teovo/server'
+import { builtinViews, createAssistant, defineCheck, defineReader, defineTool, helpTool, noClaimedChanges, postAlert, queryTool, type Identity, type SpendRules } from '@teovo/server'
 import { readFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import pg from 'pg'
@@ -70,7 +70,14 @@ const teovo = createAssistant({
     return { tenantId: 'demo-shop', userId: `demo-${who}`, role: who }
   },
   asUser: (identity) => ({ role: identity.role }),
-  models: [flash, google('gemini-2.5-flash-lite')],
+  // DEMO_MAIN_DOWN=1: the main model always fails (a made-up model id), so replies fall back and the alert below goes off.
+  models: [process.env.DEMO_MAIN_DOWN ? google('gemini-main-down-demo') : flash, google('gemini-2.5-flash-lite')],
+  // When a quarter of replies fall back to Flash-Lite, or a tenth fail: one alert, and one when it's over. Printed
+  // here; set ALERT_WEBHOOK to a Slack or Google Chat webhook to post it there.
+  alerts: {
+    send: process.env.ALERT_WEBHOOK ? postAlert(process.env.ALERT_WEBHOOK) : (a) => console.log(`[alert] ${a.text}`),
+    ...(process.env.DEMO_MAIN_DOWN ? { minReplies: 2 } : {}),
+  },
   // Short "who…?" look-ups ("who owes money?") go to the cheaper flash-lite first. Not "show…" or amounts: flash-lite
   // misread "how much does X owe?" and went silent after reading the customer note on Riya Sharma's order in by-hand
   // checks. Anything longer, with a picture, or deep in a conversation keeps Flash. Each list still falls back.

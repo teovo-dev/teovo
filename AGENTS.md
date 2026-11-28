@@ -137,6 +137,7 @@ useAssistantContext({ path: '/orders/142', title: 'Order', record: { type: 'orde
 | Answers from the app's own help | `tools: [helpTool({ docs: [{ title, text (Markdown), path?, roles? }], embeddings? })]` | Nothing: the help page shows as a link under the answer |
 | Dates and money | `formats: { locale, currency, timeZone }` | Applied automatically |
 | Cheap model for simple questions | `route: (ctx) => models \| undefined` | Nothing needed |
+| Alerts when the backup model takes over or replies fail | `alerts: { send: postAlert(webhookUrl) }` (or your own `send`) | Nothing needed |
 | Monitoring | `on: { error, usage, miss, rating, … }`, `promptVersion` | Nothing needed |
 
 Delete old conversations with:
