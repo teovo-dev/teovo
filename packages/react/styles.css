@@ -289,6 +289,8 @@
   font: inherit; font-weight: 600; cursor: pointer; box-shadow: 0 6px 20px rgb(0 0 0 / 0.18), 0 2px 4px rgb(0 0 0 / 0.08);
   transition: transform 0.15s, box-shadow 0.15s;
 }
+/* Hidden while the chat is open (the display above would otherwise win over the hidden attribute). */
+.tv-sheet-open[hidden] { display: none; }
 .tv-sheet-open:hover { transform: translateY(-1px); box-shadow: 0 10px 28px rgb(0 0 0 / 0.22), 0 2px 4px rgb(0 0 0 / 0.08); }
 .tv-sheet-open svg { width: 18px; height: 18px; }
 .tv-sheet-backdrop { position: fixed; inset: 0; z-index: 1000; background: rgb(15 18 25 / 0.35); animation: tv-fade 0.2s ease-out; }

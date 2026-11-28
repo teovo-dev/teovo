@@ -79,6 +79,8 @@ describe('AssistantSheet', () => {
     expect(panel.getAttribute('aria-modal')).toBe('false')
     expect(document.querySelector('.tv-sheet-backdrop')).toBeNull()
     expect(document.documentElement.dataset.tvSheet).toBe('docked')
+    // The open button doesn't sit on the panel's corner (or in the Tab order) while the chat is open.
+    expect((document.querySelector('.tv-sheet-open') as HTMLButtonElement).hidden).toBe(true)
     expect(document.documentElement.style.getPropertyValue('--tv-sheet-width')).toBe('440px')
     // The keyboard can leave the panel for the page.
     await userEvent.click(screen.getByRole('button', { name: 'On the page' }))
@@ -86,6 +88,7 @@ describe('AssistantSheet', () => {
     expect(screen.getByRole('dialog')).toBeTruthy()
     await userEvent.click(screen.getByRole('button', { name: 'Close assistant' }))
     expect(document.documentElement.dataset.tvSheet).toBeUndefined()
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Ask' }))
   })
 
   it('floats as a window over the page when asked, still without a backdrop', async () => {
@@ -96,9 +99,11 @@ describe('AssistantSheet', () => {
     expect(panel.getAttribute('aria-modal')).toBe('false')
     expect(document.querySelector('.tv-sheet-backdrop')).toBeNull()
     expect(document.documentElement.dataset.tvSheet).toBe('floating')
+    expect(screen.queryByRole('button', { name: 'Ask' })).toBeNull()
     // The page needn't make room for a floating window.
     expect(document.documentElement.style.getPropertyValue('--tv-sheet-width')).toBe('')
     await userEvent.keyboard('{Escape}')
     expect(screen.queryByRole('dialog')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Ask' })).toBeTruthy()
   })
 })

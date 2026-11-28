@@ -328,6 +328,13 @@ create table if not exists tv_run_events (
 );`,
 }
 
+/** A conversation's summary of its older messages, once they no longer fit in what the model sees. */
+const threadSummary: Migration = {
+  id: '0016_thread_summary',
+  sql: `alter table tv_threads add column if not exists summary text;
+alter table tv_threads add column if not exists summary_upto text;`,
+}
+
 /** The migrations for these options, in order. */
 export function migrations(options: SchemaOptions = {}): Migration[] {
   const list: Migration[] = [core]
@@ -351,6 +358,7 @@ export function migrations(options: SchemaOptions = {}): Migration[] {
   list.push(longRuns)
   if (options.rls === 'server-only') list.push({ ...serverOnlyMigration(['tv_run_events']), id: '0115_server_only_run_events' })
   else if (options.rls) list.push({ ...rlsMigration(['tv_run_events'], options.rls), id: '0115_rls_run_events' })
+  list.push(threadSummary)
   return list
 }
 

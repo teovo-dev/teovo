@@ -1,12 +1,12 @@
 import type { LanguageModelV4 } from '@ai-sdk/provider'
-import { convertToModelMessages, createUIMessageStream, createUIMessageStreamResponse, isStepCount, readUIMessageStream, streamText, tool, toUIMessageStream, type ModelMessage, type ToolSet, type InferUIMessageChunk, type UIMessage } from 'ai'
+import { convertToModelMessages, createUIMessageStream, createUIMessageStreamResponse, generateText, isStepCount, readUIMessageStream, streamText, tool, toUIMessageStream, type ModelMessage, type ToolSet, type InferUIMessageChunk, type UIMessage } from 'ai'
 import { CHECK_FAILED, firstProblem, refusedNote, type DoneCheck } from './checks.js'
 import { runTrace } from './trace.js'
 import { fallbackModel } from './fallback.js'
 import { CardError, cardForModel, decide, publicCard, type CardHandler, type CardRules, type Decision, fingerprint } from './cards.js'
 import type { CardEventKind, Miss } from './storage.js'
 import { allowance, checkLimits, limitMessage, type LimitHit, type Limits } from './limits.js'
-import type { ClaimedRun, Storage, StoredCard, Thread, Totals, UsageRow } from './storage.js'
+import type { ClaimedRun, Storage, StoredCard, Thread, ThreadSummary, Totals, UsageRow } from './storage.js'
 import { toolsFor, type Action, type Identity, type RecordLink, type Proposal, type TeovoTool, type ToolContext } from './tools.js'
 import { makeUntrusted, UNTRUSTED_RULE } from './untrusted.js'
 
@@ -44,6 +44,12 @@ export interface AssistantConfig<DB = unknown> {
   storage: Storage
   /** Model calls per message, tool calls included. Default 8. */
   maxSteps?: number
+  /**
+   * Keep a summary of what a long conversation said once its oldest messages no longer fit in `historyMessages`, and
+   * give it to the model with every message, so facts from early on aren't lost (a name, a preference, a decision).
+   * Written after a reply, so nobody waits for it; on `model` (default the reply's first model). Off unless given.
+   */
+  summary?: boolean | { model?: LanguageModelV4 }
   /** Earlier messages the model sees. Default 30. */
   historyMessages?: number
   /**
@@ -241,6 +247,8 @@ interface ReplyCtx<DB> {
   models: readonly LanguageModelV4[]; settings: TenantSettings; db: DB; attempt: number; signal: AbortSignal
   /** What is set aside for this reply (spend). */
   held: number
+  /** The conversation's older messages: the summary the model gets, and those not summarized yet (summary). */
+  older?: { text?: string; pending: UIMessage[] }
   end: (e: { status: 'done' | 'failed' | 'stopped'; model?: string; error?: string }) => Promise<void>
   /** A resumed run: what its last try finished, sent again first, and the same as a message for the model. */
   replay?: Chunk[]; partial?: UIMessage
@@ -405,6 +413,34 @@ function finishedTool(p: UIMessage['parts'][number]): boolean {
   return state === 'output-available' || state === 'output-error'
 }
 
+/**
+ * Which part of a conversation the model sees whole (the last `keep` messages), what the thread's summary says about
+ * the rest (only while it covers messages that are still there and out of view), and which messages it doesn't cover
+ * yet: those are summarized after the reply.
+ */
+function summaryPlan(all: UIMessage[], keep: number, summary: ThreadSummary | undefined): { window: UIMessage[]; text?: string; pending: UIMessage[] } {
+  let cut = Math.max(0, all.length - keep)
+  // What the model sees starts at a user message: models refuse a history that opens with the assistant calling a
+  // tool (Gemini: "function call turn comes immediately after a user turn").
+  while (cut > 0 && cut < all.length - 1 && all[cut]!.role !== 'user') cut++
+  const out = all.slice(0, cut)
+  const at = summary ? out.findIndex((m) => m.id === summary.upTo) : -1
+  return { window: all.slice(cut), ...(at >= 0 ? { text: summary!.text } : {}), pending: out.slice(at + 1) }
+}
+
+/** A message as plain lines for the summary: who said what, which tools ran, which cards were shown. */
+function transcript(m: UIMessage): string {
+  const who = m.role === 'user' ? ((m.metadata as { from?: string } | undefined)?.from === 'app' ? 'App' : 'User') : 'Assistant'
+  const bits = m.parts.flatMap((p) => {
+    if (p.type === 'text') return [(p as { text: string }).text]
+    if (p.type === 'file') return ['[a picture]']
+    if (p.type === 'data-card') return [`[card: ${(p as { data: { title?: string; status?: string } }).data.title ?? ''}]`]
+    if (p.type.startsWith('tool-')) return [`[looked up ${p.type.slice(5).replace(/_/g, ' ')}]`]
+    return []
+  })
+  return `${who}: ${bits.join(' ').replace(/\s+/g, ' ').trim().slice(0, 1500)}`
+}
+
 /** A conversation's title until something better exists: the start of its first question. */
 function titleFrom(m: UIMessage): string {
   const text = m.parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join(' ').replace(/\s+/g, ' ').trim()
@@ -479,8 +515,8 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     await queue!.enqueue(rc.runId, { identity: rc.identity, messageId: rc.message.id, ...(rc.page ? { page: rc.page } : {}), models: rc.models.map((m) => m.modelId) })
     if (config.runs?.inline === false) return null
     const claimed = await queue!.claim(rc.runId, worker, leaseMs)
-    const { thread, message, saved, history, models, settings, db, held } = rc
-    return claimed ? { done: drive(claimed, { thread, message, saved, history, models, settings, db, held }) } : null
+    const { thread, message, saved, history, models, settings, db, held, older } = rc
+    return claimed ? { done: drive(claimed, { thread, message, saved, history, models, settings, db, held, older }) } : null
   }
 
   /**
@@ -562,11 +598,12 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     // Pictures go to the file store; the saved message keeps a reference. The model still reads this message's
     // pictures in full, and earlier ones only as a note.
     const saved = config.files ? await storeFiles(message, config.files, { tenantId: identity.tenantId, userId: identity.userId, threadId: thread.id }) : message
-    const history = trimToolResults(picturesOnce([...earlier, message].slice(-(config.historyMessages ?? 30)), message), config.historyToolChars ?? 1500)
+    const plan = summaryPlan([...earlier, message], config.historyMessages ?? 30, thread.summary)
+    const history = trimToolResults(picturesOnce(plan.window, message), config.historyToolChars ?? 1500)
     await storage.saveMessages(thread.id, [saved])
 
     await storage.addUsage([{ tenantId: identity.tenantId, userId: identity.userId, runId, provider: first.provider, model: first.modelId, unit: 'messages', amount: 1 }])
-    return { rc: { identity, thread, runId, message, saved, history, page, models, settings, db, held, attempt: 1 } }
+    return { rc: { identity, thread, runId, message, saved, history, page, models, settings, db, held, attempt: 1, older: plan } }
   }
 
   /** One reply, as the panel's stream: from the screen and instructions to the checked, saved answer. */
@@ -641,7 +678,29 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     const myScreens = (config.screens ?? []).filter((x) => !x.roles || x.roles.includes(identity.role))
     const shared = `${config.name?.trim() ? `Your name is ${config.name.trim()}; you are the assistant built into this app.\n\n` : ''}${instructions}${screensText(myScreens)}${config.views?.length ? `\n\n${VIEWS_RULE}${formsText(config.forms ?? {})}` : ''}${config.tools.some((t) => t.kind === 'propose') || config.views?.some((v) => v.name === 'form') ? `\n\n${CARDS_RULE}` : ''}${rolesRule(config.roles)}\n\n${UNTRUSTED_RULE}`
     const tenantPart = `${formatsText(formats)}${settingsText(settings)}${rolesText}${config.misses !== false && !(settings.toolsOff ?? []).includes('cannot_help') ? `\n\n${MISS_RULE}` : ''}`
-    const system = `${shared}${tenantPart}${todayText(formats, config.now?.() ?? new Date())}${screenText(page, shownSummary, fence)}`
+    const olderText = config.summary && rc.older?.text ? `\n\nEarlier in this conversation (a summary; those messages are no longer shown): ${rc.older.text}` : ''
+    const system = `${shared}${tenantPart}${olderText}${todayText(formats, config.now?.() ?? new Date())}${screenText(page, shownSummary, fence)}`
+
+    /** Fold the messages that fell out of view into the thread's summary, for the next message (summary). */
+    async function summarize(before: string | undefined, pending: UIMessage[]) {
+      const opts = typeof config.summary === 'object' ? config.summary : {}
+      const m = opts.model ?? models[0]!
+      const r = await generateText({
+        model: m, maxRetries: 1,
+        system: 'You keep the memory of a conversation between a user and an assistant in a business app. Write what the assistant must ' +
+          'remember from it: facts the user gave (names, numbers, preferences), what was decided, done or confirmed, and questions still open. ' +
+          'Plain sentences, at most 150 words. Keep everything from the earlier summary that still matters.',
+        prompt: `${before ? `Earlier summary: ${before}\n\n` : ''}Messages since:\n${pending.map(transcript).join('\n').slice(0, 12_000)}`,
+      })
+      const text = r.text.trim()
+      if (!text) return
+      await storage.setThreadSummary!(thread.id, { text: text.slice(0, 2000), upTo: pending.at(-1)!.id })
+      const base = { tenantId: identity.tenantId, userId: identity.userId, runId, provider: m.provider, model: m.modelId }
+      const rows: UsageRow[] = []
+      if (r.usage.inputTokens) rows.push({ ...base, unit: 'input_tokens', amount: r.usage.inputTokens })
+      if (r.usage.outputTokens) rows.push({ ...base, unit: 'output_tokens', amount: r.usage.outputTokens })
+      if (rows.length) { await storage.addUsage(rows); config.on?.usage?.(rows) }
+    }
 
     return createUIMessageStream<UIMessage<{ runId: string; threadId: string; formats: Formats }>>({
       originalMessages: history as UIMessage<{ runId: string; threadId: string; formats: Formats }>[],
@@ -997,6 +1056,9 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
             if (m.neurons > 0) rows.push({ ...base, unit: 'neurons', amount: m.neurons })
           }
           if (rows.length) { await storage.addUsage(rows); config.on?.usage?.(rows) }
+          if (status === 'done' && config.summary && rc.older?.pending.length && storage.setThreadSummary && (await (rc.owns?.() ?? true))) {
+            await summarize(rc.older.text, rc.older.pending).catch((e) => config.on?.error?.(e, { identity, threadId: thread.id }))
+          }
           if (spend && (await (rc.owns?.() ?? true))) {
             await Promise.resolve().then(() => spend.settle({ identity, runId, threadId: thread.id, status, used, ...(spend.cost ? { cost: spend.cost(used) } : {}), held }))
               .catch((e) => config.on?.error?.(e, { identity, threadId: thread.id }))
@@ -1069,7 +1131,8 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     if (at < 0) return { error: 'The message was removed' }
     const message = config.files ? await loadFiles(list[at]!, config.files.store, identity.tenantId) : list[at]!
     const earlier = list.slice(0, at)
-    const history = trimToolResults(picturesOnce([...earlier, message].slice(-(config.historyMessages ?? 30)), message), config.historyToolChars ?? 1500)
+    const plan = summaryPlan([...earlier, message], config.historyMessages ?? 30, thread.summary)
+    const history = trimToolResults(picturesOnce(plan.window, message), config.historyToolChars ?? 1500)
     const { settings, switches } = await settingsOf(identity.tenantId)
     const off = new Set(switches?.modelsOff ?? [])
     const text = message.parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join(' ')
@@ -1079,14 +1142,14 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     if (!models.length) models = config.models.filter((m) => !off.has(m.modelId))
     if (!models.length) return { error: 'Every model is switched off' }
     const db = await config.runs.asUser(identity)
-    return { identity, thread, runId: claim.id, message, saved: list[at]!, history, page, models, settings, db, held: config.spend ? await holdFor(identity, text, db) : 0 }
+    return { identity, thread, runId: claim.id, message, saved: list[at]!, history, page, models, settings, db, older: plan, held: config.spend ? await holdFor(identity, text, db) : 0 }
   }
 
   /**
    * Run a claimed reply to the end on this server: the stream goes to the log in batches (and straight to anyone this
    * server is sending it to), a heartbeat keeps the lease and listens for Stop, and the run is finished last.
    */
-  async function drive(claim: ClaimedRun, pre?: Pick<ReplyCtx<DB>, 'thread' | 'message' | 'saved' | 'history' | 'models' | 'settings' | 'db' | 'held'>): Promise<void> {
+  async function drive(claim: ClaimedRun, pre?: Pick<ReplyCtx<DB>, 'thread' | 'message' | 'saved' | 'history' | 'models' | 'settings' | 'db' | 'held' | 'older'>): Promise<void> {
     const q = queue!
     const { identity } = claim.job
     const report = (e: unknown) => config.on?.error?.(e, { identity, threadId: claim.threadId })

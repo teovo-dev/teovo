@@ -677,7 +677,9 @@ describe('the name and the credit line', () => {
   it('lets the app hide the credit line and use its own label and icon', async () => {
     const s = server([say('hi')])
     render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch}><AssistantSheet label="Help" icon={null} open><AssistantPanel poweredBy={false} /></AssistantSheet></AssistantProvider>)
-    const open = screen.getByRole('button', { name: 'Help' })
+    // Rendered open, so the open button is hidden (and has no accessible name); check it directly.
+    const open = document.querySelector('.tv-sheet-open') as HTMLButtonElement
+    expect(open.textContent).toBe('Help')
     expect(open.querySelector('svg')).toBeNull()
     expect(document.querySelector('.tv-powered')).toBeNull()
   })

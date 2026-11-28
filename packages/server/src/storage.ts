@@ -3,7 +3,12 @@ import type { TenantSettings } from './settings.js'
 import type { Identity, Proposal } from './tools.js'
 import type { Page } from './screens.js'
 
-export interface Thread { id: string; tenantId: string; userId: string; title: string | null; createdAt: string; updatedAt?: string }
+export interface Thread {
+  id: string; tenantId: string; userId: string; title: string | null; createdAt: string; updatedAt?: string
+  /** What the messages that no longer fit in the model's history said (createAssistant summary), up to message `upTo`. */
+  summary?: ThreadSummary
+}
+export interface ThreadSummary { text: string; upTo: string }
 
 export interface StoredCard extends Proposal {
   id: string
@@ -50,6 +55,8 @@ export interface Storage {
   /** This person's conversations, most recently active first, archived ones left out. */
   listThreads(tenantId: string, userId: string, limit: number): Promise<Thread[]>
   setThreadTitle(threadId: string, title: string): Promise<void>
+  /** Keep a summary of the conversation's older messages (createAssistant summary). Optional: without it, none is kept. */
+  setThreadSummary?(threadId: string, summary: ThreadSummary): Promise<void>
   /** Hide a conversation from the list; it can no longer be continued. Returns false if it isn't theirs. */
   archiveThread(tenantId: string, userId: string, threadId: string): Promise<boolean>
   listMessages(threadId: string): Promise<UIMessage[]>
@@ -262,6 +269,7 @@ export function memoryStorage() {
         .sort((a, b) => (b.updatedAt ?? b.createdAt).localeCompare(a.updatedAt ?? a.createdAt)).slice(0, limit).map(strip)
     },
     async setThreadTitle(id, title) { const t = threads.get(id); if (t) t.title = title },
+    async setThreadSummary(id, summary) { const t = threads.get(id); if (t) t.summary = { ...summary } },
     async archiveThread(tenantId, userId, id) {
       const t = threads.get(id)
       if (!t || t.tenantId !== tenantId || t.userId !== userId || t.archived) return false
