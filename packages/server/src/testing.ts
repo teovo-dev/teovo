@@ -70,7 +70,11 @@ export function recordingModel(real: LanguageModelV4, into: Cassette): LanguageM
       into.steps.push(step)
       const tap = new TransformStream<LanguageModelV4StreamPart, LanguageModelV4StreamPart>({
         transform(part, c) {
-          if (KEEP.has(part.type)) step.parts.push(part.type === 'finish' ? { ...part, usage } as LanguageModelV4StreamPart : structuredClone(part))
+          const last = step.parts.at(-1) as { type: string; id?: string; delta?: string } | undefined
+          // One text chunk per block: a model may stream an id in two pieces ('9006f96' + '2-5bda-…'), and swapIds
+          // only finds ids it can see whole. Played back, one chunk reads the same as many.
+          if ((part.type === 'text-delta' || part.type === 'reasoning-delta') && last?.type === part.type && last.id === part.id) last.delta += part.delta
+          else if (KEEP.has(part.type)) step.parts.push(part.type === 'finish' ? { ...part, usage } as LanguageModelV4StreamPart : structuredClone(part))
           c.enqueue(part)
         },
       })
