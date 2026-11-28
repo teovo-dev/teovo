@@ -5,3 +5,6 @@ dist
 .env.*
 .wrangler
 .dev.vars
+
+# Copied into each package when it is packed (scripts/prepack.mjs)
+packages/*/LICENSE

@@ -10,9 +10,9 @@
   },
   "dependencies": {
     "@ai-sdk/google": "4.0.128",
-    "@teovo/db": "0.0.0",
-    "@teovo/react": "0.0.0",
-    "@teovo/server": "0.0.0",
+    "@teovo/db": "^0.1.0",
+    "@teovo/react": "^0.1.0",
+    "@teovo/server": "^0.1.0",
     "ai": "7.0.183",
     "pg": "^8.23.1",
     "react": "^19.3.1",
