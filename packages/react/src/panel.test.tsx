@@ -893,3 +893,18 @@ describe('long-poll transport', () => {
     await screen.findByText('Sales today: ₹950')
   })
 })
+
+describe('replies the app started', () => {
+  it('shows the app\'s message with its label, not as the person\'s, with no Edit', async () => {
+    const storage = memoryStorage()
+    const s = server([say('Good morning! Two orders need baking.')], true, {}, { storage })
+    const teovo = createAssistant({ identify: () => ({ tenantId: 'shop-1', userId: 'u1', role: 'owner' }), asUser: () => null, tools, instructions: 'Help.', storage, models: [new MockLanguageModelV4({ doStream: [say('Good morning! Two orders need baking.')] as never })] })
+    const out = await teovo.start({ identity: { tenantId: 'shop-1', userId: 'u1', role: 'owner' }, text: 'Morning check: what needs doing today?', label: 'Morning check', db: null })
+    render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch} threadId={out.threadId}><AssistantPanel /></AssistantProvider>)
+    await screen.findByText('Good morning! Two orders need baking.')
+    const asked = screen.getByText('Morning check: what needs doing today?').closest('.tv-message')!
+    expect(asked.className).toContain('tv-from-app')
+    expect(asked.querySelector('.tv-from-app-label')?.textContent).toBe('Morning check')
+    expect(asked.querySelector('[aria-label="Edit and send again"]')).toBeNull()
+  })
+})

@@ -72,6 +72,9 @@
 /* ---------- Actions under a message ---------- */
 .tv-msg-actions { display: flex; align-items: center; gap: 2px; opacity: 0; transition: opacity 0.15s; }
 .tv-user { position: relative; }
+.tv-from-app { align-self: stretch; align-items: flex-start; }
+.tv-from-app .tv-text { background: var(--tv-subtle); border: 1px dashed var(--tv-border); color: var(--tv-muted); border-radius: var(--tv-radius); font-size: 0.9em; }
+.tv-from-app-label { font-size: 0.75em; font-weight: 600; color: var(--tv-muted); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 2px; }
 /* Beside the bubble, not under it, so it takes no room. */
 .tv-user .tv-msg-actions { position: absolute; right: 100%; top: 2px; margin-right: 4px; }
 .tv-message:hover .tv-msg-actions, .tv-msg-actions:focus-within, .tv-message:last-child .tv-msg-actions { opacity: 1; }

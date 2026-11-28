@@ -339,6 +339,16 @@ const port = Number(process.env.PORT ?? 8788)
 createServer(async (req, res) => {
   try {
     if (req.url?.startsWith('/api/assistant/')) return await send(res, await teovo.fetch(await toRequest(req, res)))
+    if (req.url === '/api/shop/morning-check' && req.method === 'POST') {
+      // What a scheduled job would run each morning: a reply nobody typed, in the owner's conversations. Its cards
+      // wait there for her to confirm. Try it: curl -X POST localhost:8790/api/shop/morning-check
+      const out = await teovo.start({
+        identity: { tenantId: 'demo-shop', userId: 'demo-owner', role: 'owner' }, label: 'Morning check',
+        text: 'Morning check: what needs doing today? Look at open orders, money to collect and low stock, and say the three most important things.',
+      })
+      res.writeHead(200, { 'content-type': 'application/json' })
+      return res.end(JSON.stringify(out))
+    }
     if (req.url === '/api/shop/expenses' && req.method === 'POST') {
       // The Quick add form's Save: what the person checked and saved (the reader only filled the form).
       const chunks: Buffer[] = []

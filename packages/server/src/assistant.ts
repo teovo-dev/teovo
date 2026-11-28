@@ -227,6 +227,43 @@ interface ReplyCtx<DB> {
 /** Something that keeps a Worker alive after its response (Cloudflare's ExecutionContext). */
 export interface WaitUntil { waitUntil?(promise: Promise<unknown>): void }
 
+/** What teovo.start() takes: a reply the app starts, with no person at the screen (a schedule, a heartbeat, a webhook). */
+export interface StartOptions<DB = unknown> {
+  /** Whose reply it is: it goes in their conversations, runs with their role's tools, and counts against their limits. */
+  identity: Identity
+  /** What the app asks, in words, e.g. 'Morning check: what needs doing today?'. Saved as the app's message, not theirs. */
+  text: string
+  /** Shown above the app's message in the panel, e.g. 'Morning check'. */
+  label?: string
+  /** Add to this conversation (theirs). Default: a new one. */
+  threadId?: string
+  /** The screen to tell the model about, if any. */
+  page?: Page
+  /** The database as this person. Default: runs.asUser(identity). */
+  db?: DB
+  /** Long runs: wait until the reply ends (default true), or return once it is running or queued. */
+  wait?: boolean
+  /** On Workers, the ExecutionContext, so a reply not waited for goes on after the handler returns. */
+  ctx?: WaitUntil
+  signal?: AbortSignal
+}
+
+export interface StartResult {
+  threadId: string
+  runId: string
+  /** 'queued' or 'running' when not waited for (or left to workers). */
+  status: 'queued' | 'running' | 'done' | 'failed' | 'stopped'
+  /** The reply's words, once it has ended. */
+  text?: string
+  /** Cards it prepared: they wait in the conversation for the person to confirm. */
+  cards: { id: string; kind: string; title: string }[]
+}
+
+/** teovo.start() refused before anything was saved: a limit, the assistant switched off, not enough to spend. */
+export class StartError extends Error {
+  constructor(readonly status: number, message: string) { super(message); this.name = 'StartError' }
+}
+
 /** Said when a reply can't be finished after its server stopped. */
 export const INTERRUPTED = 'This reply was cut off when the server restarted. Try again.'
 
@@ -301,7 +338,7 @@ function clip(v: unknown, max: number): { value: unknown; truncated: boolean } {
  */
 function trimToolResults(messages: UIMessage[], max: number): UIMessage[] {
   const lastAssistant = messages.map((m) => m.role).lastIndexOf('assistant')
-  return messages.map((m) => (m.role === 'assistant' ? { ...m, parts: m.parts.filter(finishedTool) } : m)).map((m, i) => {
+  return messages.map((m) => (m.role === 'assistant' ? { ...m, parts: m.parts.filter(finishedTool) } : fromApp(m))).map((m, i) => {
     if (m.role !== 'assistant' || i === lastAssistant) return m
     return { ...m, parts: m.parts.map((p) => {
       if (!p.type.startsWith('tool-') || !('output' in p) || p.output === undefined) return p
@@ -309,6 +346,17 @@ function trimToolResults(messages: UIMessage[], max: number): UIMessage[] {
       return text.length <= max ? p : { ...p, output: `${text.slice(0, max)}… [cut: an earlier result; call the tool again for all of it]` }
     }) as UIMessage['parts'] }
   })
+}
+
+/**
+ * A message the app started a reply with (teovo.start): the model is told it came from the app, not the person, so
+ * the reply speaks to them ("Good morning: three orders need baking") instead of answering them.
+ */
+function fromApp(m: UIMessage): UIMessage {
+  const meta = m.metadata as { from?: string; label?: string } | undefined
+  if (m.role !== 'user' || meta?.from !== 'app') return m
+  const note = `[Started by the app${meta.label ? ` (${meta.label})` : ''}, not typed by the user, who is not at the screen now. Write to them.]`
+  return { ...m, parts: [{ type: 'text', text: note }, ...m.parts] }
 }
 
 /**
@@ -363,71 +411,109 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     const problem = checkMessage(message, config.attachments)
     if (problem) return json(400, { error: problem })
     if (body.transport === 'poll' && !queue) return json(400, { error: 'Polling for replies needs long runs (createAssistant runs).' })
+    // Not marked as the app's: only teovo.start() writes those.
+    if ((message.metadata as { from?: unknown } | undefined)?.from === 'app') return json(400, { error: 'Send one user message with some text.' })
 
+    const b = await begin({ identity, message, threadId: body.threadId, page: readPage(body.page), consent: body.consent, db: () => config.asUser(identity, req) })
+    if ('refused' in b) return json(b.refused.status, b.refused.body)
+    const { rc } = b
+    const { storage } = config
+    const runId = rc.runId
+    const headers = { 'x-teovo-thread': rc.thread.id }
+    if (!queue) return createUIMessageStreamResponse({ stream: await reply({ ...rc, signal: req.signal, end: (e) => storage.finishRun(runId, e) }), headers })
+    // A long run: queued in the run log, then run here (unless a worker takes them), and sent from the log, so it goes
+    // on when this request ends and any server can send it, stop it or pick it up again.
+    const running = await launch(rc)
+    if (running) keepAlive(running.done, ctx)
+    // For hosts that hold back streamed responses: a plain answer now, the reply through short polls.
+    if (body.transport === 'poll') return new Response(JSON.stringify({ threadId: rc.thread.id, runId }), { status: 202, headers: { ...headers, 'content-type': 'application/json' } })
+    return createUIMessageStreamResponse({ stream: tail(runId), headers })
+  }
+
+  /**
+   * Long runs: queue a reply that has begun, and run it here unless workers take replies (inline: false). The run
+   * comes back in an object: an async function returning the promise itself would wait for the whole reply.
+   */
+  async function launch(rc: Omit<ReplyCtx<DB>, 'signal' | 'end'>): Promise<{ done: Promise<void> } | null> {
+    await queue!.enqueue(rc.runId, { identity: rc.identity, messageId: rc.message.id, ...(rc.page ? { page: rc.page } : {}), models: rc.models.map((m) => m.modelId) })
+    if (config.runs?.inline === false) return null
+    const claimed = await queue!.claim(rc.runId, worker, leaseMs)
+    const { thread, message, saved, history, models, settings, db, held } = rc
+    return claimed ? { done: drive(claimed, { thread, message, saved, history, models, settings, db, held }) } : null
+  }
+
+  /**
+   * Everything before a reply, for a person's message (chat) and the app's own (teovo.start): the tenant's settings,
+   * limits, the conversation, the run, the spend hold, and the message saved. A refusal leaves nothing behind.
+   */
+  async function begin(p: { identity: Identity; message: UIMessage; threadId?: string; page?: Page; consent?: string; fromApp?: boolean; db: () => Promise<DB> | DB }):
+    Promise<{ rc: Omit<ReplyCtx<DB>, 'signal' | 'end'> } | { refused: { status: number; body: Record<string, unknown> } }> {
+    const { identity, message, page } = p
+    const no = (status: number, body: Record<string, unknown>) => ({ refused: { status, body } })
     const { storage } = config
     const { settings, switches } = await settingsOf(identity.tenantId)
-    if (switches && !switches.enabled) return json(503, { error: 'The assistant is paused for everyone at the moment. Try again later.' })
-    if (!settings.enabled) return json(403, { error: 'The assistant is turned off for your team. An admin can turn it on in settings.' })
-    // The tenant's notice must have been accepted, in its current words; and pictures only if the tenant allows them.
-    if (settings.privacy?.notice && body.consent !== (await noticeId(settings.privacy.notice))) {
-      return json(428, { error: 'Read and accept the notice about the assistant first.', notice: settings.privacy.notice })
+    if (switches && !switches.enabled) return no(503, { error: 'The assistant is paused for everyone at the moment. Try again later.' })
+    if (!settings.enabled) return no(403, { error: 'The assistant is turned off for your team. An admin can turn it on in settings.' })
+    // The tenant's notice must have been accepted, in its current words (by a person: the app's own runs need no
+    // consent); and pictures only if the tenant allows them.
+    if (!p.fromApp && settings.privacy?.notice && p.consent !== (await noticeId(settings.privacy.notice))) {
+      return no(428, { error: 'Read and accept the notice about the assistant first.', notice: settings.privacy.notice })
     }
-    if (settings.privacy?.pictures === false && message.parts.some((p) => p.type === 'file')) {
-      return json(400, { error: 'Pictures are turned off for your team. Describe it in words instead.' })
+    if (settings.privacy?.pictures === false && message.parts.some((x) => x.type === 'file')) {
+      return no(400, { error: 'Pictures are turned off for your team. Describe it in words instead.' })
     }
     // Before anything is saved, so a refused message leaves no empty thread behind.
     const timeouts = { ...DEFAULT_TIMEOUTS, ...config.timeouts }
     const hit = await checkLimits(storage, identity, config.limits, timeouts.totalMs * 2)
     if (hit) {
       config.on?.limit?.(hit, identity)
-      return json(429, { error: limitMessage(hit), limit: hit })
+      return no(429, { error: limitMessage(hit), limit: hit })
     }
 
-    const thread = body.threadId
-      ? await storage.getThread(identity.tenantId, identity.userId, body.threadId)
+    const thread = p.threadId
+      ? await storage.getThread(identity.tenantId, identity.userId, p.threadId)
       : await storage.createThread(identity.tenantId, identity.userId)
-    if (!thread) return json(404, { error: 'That conversation was not found.' })   // also when it is someone else's
+    if (!thread) return no(404, { error: 'That conversation was not found.' })   // also when it is someone else's
 
     let earlier = await storage.listMessages(thread.id)
     // A message the thread already has: the user edited it, or asked for the reply again (same id). Everything from
     // it on is replaced. Only the user's own messages can be sent again.
     const again = earlier.findIndex((m) => m.id === message.id)
     if (again >= 0) {
-      if (earlier[again]!.role !== 'user') return json(400, { error: 'Only your own messages can be sent again.' })
+      if (earlier[again]!.role !== 'user') return no(400, { error: 'Only your own messages can be sent again.' })
       await storage.removeMessagesFrom(thread.id, message.id)
       earlier = earlier.slice(0, again)
     }
     const runId = crypto.randomUUID()
-    const page = readPage(body.page)
-    const text = message.parts.filter((p) => p.type === 'text').map((p) => (p as { text: string }).text).join(' ')
+    const text = message.parts.filter((x) => x.type === 'text').map((x) => (x as { text: string }).text).join(' ')
     const routed = config.route ? await Promise.resolve().then(() => config.route!({ identity, page, text, history: earlier.length })).catch((e) => { config.on?.error?.(e, { identity, threadId: thread.id }); return undefined }) : undefined
     const offModels = new Set(switches?.modelsOff ?? [])
     const models = (routed?.length ? routed : config.models).filter((m) => !offModels.has(m.modelId))
-    if (!models.length) return json(503, { error: 'The assistant is paused for everyone at the moment. Try again later.' })
+    if (!models.length) return no(503, { error: 'The assistant is paused for everyone at the moment. Try again later.' })
     const first = models[0]!
-    await storage.startRun({ id: runId, threadId: thread.id, tenantId: identity.tenantId, userId: identity.userId, model: first.modelId, promptVersion: config.promptVersion, ...(queue ? { status: 'queued' as const } : {}), question: (text.replace(/\s+/g, ' ').trim() || (message.parts.some((p) => p.type === 'file') ? 'Picture' : '')).slice(0, 300) })
+    await storage.startRun({ id: runId, threadId: thread.id, tenantId: identity.tenantId, userId: identity.userId, model: first.modelId, promptVersion: config.promptVersion, ...(queue ? { status: 'queued' as const } : {}), question: (text.replace(/\s+/g, ' ').trim() || (message.parts.some((x) => x.type === 'file') ? 'Picture' : '')).slice(0, 300) })
     // Count again now that this reply is registered: two messages sent at the same moment both passed the check
     // above, and only now can one see the other. Nothing is saved or paid for yet, so backing off costs nothing.
     const maxRunning = config.limits?.maxRunning ?? 2
     const running = await storage.runningRuns(identity.tenantId, identity.userId, new Date(Date.now() - timeouts.totalMs * 2))
     if (running > maxRunning) {
       await storage.finishRun(runId, { status: 'failed', error: 'Too many replies at once' })
-      if (!body.threadId && !earlier.length) await storage.archiveThread(identity.tenantId, identity.userId, thread.id)   // the empty one just made
+      if (!p.threadId && !earlier.length) await storage.archiveThread(identity.tenantId, identity.userId, thread.id)   // the empty one just made
       const raced: LimitHit = { scope: 'running', limit: maxRunning, used: running }
       config.on?.limit?.(raced, identity)
-      return json(429, { error: limitMessage(raced), limit: raced })
+      return no(429, { error: limitMessage(raced), limit: raced })
     }
 
     // The price set aside before anything is saved or paid for, so a refusal leaves nothing behind.
-    const db = await config.asUser(identity, req)
+    const db = await p.db()
     let held = 0
     if (config.spend) {
       held = await holdFor(identity, text, db)
       const ok = await reserveFor({ identity, runId, threadId: thread.id, amount: held, first: true })
       if (ok !== true) {
         await storage.finishRun(runId, { status: 'failed', error: 'Not enough to spend' })
-        if (!body.threadId && !earlier.length) await storage.archiveThread(identity.tenantId, identity.userId, thread.id)
-        return json(402, { error: ok })
+        if (!p.threadId && !earlier.length) await storage.archiveThread(identity.tenantId, identity.userId, thread.id)
+        return no(402, { error: ok })
       }
     }
 
@@ -439,19 +525,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     await storage.saveMessages(thread.id, [saved])
 
     await storage.addUsage([{ tenantId: identity.tenantId, userId: identity.userId, runId, provider: first.provider, model: first.modelId, unit: 'messages', amount: 1 }])
-    const rc = { identity, thread, runId, message, saved, history, page, models, settings, db, held, attempt: 1 }
-    const headers = { 'x-teovo-thread': thread.id }
-    if (!queue) return createUIMessageStreamResponse({ stream: await reply({ ...rc, signal: req.signal, end: (e) => storage.finishRun(runId, e) }), headers })
-    // A long run: queued in the run log, then run here (unless a worker takes them), and sent from the log, so it goes
-    // on when this request ends and any server can send it, stop it or pick it up again.
-    await queue.enqueue(runId, { identity, messageId: message.id, ...(page ? { page } : {}), models: models.map((m) => m.modelId) })
-    if (config.runs?.inline !== false) {
-      const claimed = await queue.claim(runId, worker, leaseMs)
-      if (claimed) keepAlive(drive(claimed, { thread, message, saved, history, models, settings, db, held }), ctx)
-    }
-    // For hosts that hold back streamed responses: a plain answer now, the reply through short polls.
-    if (body.transport === 'poll') return new Response(JSON.stringify({ threadId: thread.id, runId }), { status: 202, headers: { ...headers, 'content-type': 'application/json' } })
-    return createUIMessageStreamResponse({ stream: tail(runId), headers })
+    return { rc: { identity, thread, runId, message, saved, history, page, models, settings, db, held, attempt: 1 } }
   }
 
   /** One reply, as the panel's stream: from the screen and instructions to the checked, saved answer. */
@@ -1549,6 +1623,46 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
           await Promise.all(active)
         },
       }
+    },
+    /**
+     * Start a reply with no person at the screen: a scheduled or heartbeat run, a webhook, a nightly check. The
+     * app's message is saved in the person's conversation, marked as the app's (the panel labels it), and the reply
+     * runs with their tools, limits and spend. Cards it prepares wait there for them to confirm. Throws StartError
+     * when refused before anything was saved.
+     */
+    async start(o: StartOptions<DB>): Promise<StartResult> {
+      if (!o.text?.trim()) throw new StartError(400, 'teovo.start needs some text.')
+      const asUser = config.runs?.asUser
+      const db = o.db !== undefined ? () => o.db as DB : asUser ? () => asUser(o.identity) : undefined
+      if (!db) throw new Error('teovo.start needs db, or runs.asUser')
+      const message: UIMessage = {
+        id: crypto.randomUUID(), role: 'user', parts: [{ type: 'text', text: o.text.trim() }],
+        metadata: { from: 'app', ...(o.label?.trim() ? { label: o.label.trim().slice(0, 60) } : {}) },
+      }
+      const b = await begin({ identity: o.identity, message, threadId: o.threadId, page: o.page, fromApp: true, db })
+      if ('refused' in b) throw new StartError(b.refused.status, String(b.refused.body.error))
+      const { rc } = b
+      const { storage } = config
+      let status: StartResult['status']
+      if (!queue) {
+        let ended: StartResult['status'] = 'failed'
+        const stream = await reply({ ...rc, signal: o.signal ?? new AbortController().signal, end: async (e) => { ended = e.status; await storage.finishRun(rc.runId, e) } })
+        await stream.pipeTo(new WritableStream())
+        status = ended
+      } else {
+        const running = await launch(rc)
+        if (running && o.wait !== false) {
+          await running.done
+          status = ((await queue.state(rc.runId))?.status ?? 'failed') as StartResult['status']
+        } else {
+          if (running) keepAlive(running.done, o.ctx)
+          status = running ? 'running' : 'queued'
+        }
+      }
+      const answer = (await storage.listMessages(rc.thread.id)).find((m) => m.role === 'assistant' && (m.metadata as { runId?: string } | undefined)?.runId === rc.runId)
+      const text = answer?.parts.filter((x) => x.type === 'text').map((x) => (x as { text: string }).text).join('\n').trim()
+      const cards = (await storage.listCards(rc.thread.id)).filter((c) => c.runId === rc.runId).map((c) => ({ id: c.id, kind: c.kind, title: c.title }))
+      return { threadId: rc.thread.id, runId: rc.runId, status, ...(answer ? { text } : {}), cards }
     },
     /** Mount under any path, e.g. app.all('/api/assistant/*', teovo.fetch). Handles POST …/chat (a message sent again replaces it and what came after), POST …/runs/:id/rating, GET …/threads, GET …/threads/:id, POST …/threads/:id/archive, GET …/suggestions, GET/PUT …/settings and POST …/cards/:id/(confirm|skip|undo). */
     async fetch(req: Request, ctx?: WaitUntil): Promise<Response> {

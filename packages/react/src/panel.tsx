@@ -269,8 +269,11 @@ function Message({ message, ask, stopped, last, busy, ...props }: { message: Teo
   }
   const steps = message.parts.filter((p) => p.type === 'data-step')
   const running = steps.filter((p) => (p.data as Step).state === 'running')
+  // A reply the app started (a schedule, a heartbeat): its message is the app's, labelled, and can't be edited.
+  const fromApp = message.role === 'user' && message.metadata?.from === 'app'
   return (
-    <div className={`tv-message tv-${message.role}`} data-role={message.role}>
+    <div className={`tv-message tv-${message.role}${fromApp ? ' tv-from-app' : ''}`} data-role={message.role}>
+      {fromApp ? <div className="tv-from-app-label">{message.metadata?.label ?? 'From the app'}</div> : null}
       {message.role === 'assistant' && props.showSteps !== false
         ? <StepsList message={message} live={busy && last} open={props.showSteps === 'open'} labels={props.stepLabels} details={props.stepDetails !== false} />
         : null}
@@ -322,7 +325,7 @@ function Message({ message, ask, stopped, last, busy, ...props }: { message: Teo
         return <div key={p.id} className="tv-step">{props.stepLabels?.[name] ?? label ?? `Using ${name.replace(/_/g, ' ')}`}…</div>
       }) : null}
       {stopped ? <div className="tv-stopped">Stopped</div> : null}
-      {!busy && message.role === 'user' && ownText ? (
+      {!busy && message.role === 'user' && ownText && !fromApp ? (
         <div className="tv-msg-actions">
           <button type="button" className="tv-icon tv-icon-sm" aria-label="Edit and send again" title="Edit and send again" onClick={() => setEditing(ownText)}>{icons.edit}</button>
         </div>
