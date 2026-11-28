@@ -1,5 +1,5 @@
 /** @teovo/server: the assistant's handler, tool loop, cards, limits and logs. */
-export { CARDS_RULE, createAssistant, INTERRUPTED, NO_SPEND, type AssistantConfig, type RunsConfig, type SpendRules, type WaitUntil } from './assistant.js'
+export { CARDS_RULE, createAssistant, INTERRUPTED, NO_SPEND, StartError, type AssistantConfig, type RunsConfig, type SpendRules, type StartOptions, type StartResult, type WaitUntil } from './assistant.js'
 export { runTrace, type OtlpTrace } from './trace.js'
 export { CHECK_FAILED, defineCheck, noClaimedChanges, type DoneCheck, type ReplyToCheck } from './checks.js'
 export { findScreen, readPage, screenPath, tidy, type Page, type ScreenFn, type ScreenInfo, type Suggestions, type SuggestionsFn } from './screens.js'

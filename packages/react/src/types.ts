@@ -75,7 +75,7 @@ export type TeovoData = { card: Card; step: Step; action: Action; suggestions: S
 /** How the tenant writes dates and money, sent by the server with each reply. */
 export interface Formats { locale: string; currency: string; timeZone: string }
 
-export type TeovoMessage = UIMessage<{ runId?: string; threadId?: string; formats?: Formats; stopped?: boolean }, TeovoData>
+export type TeovoMessage = UIMessage<{ runId?: string; threadId?: string; formats?: Formats; stopped?: boolean; /** 'app': the app started this reply (teovo.start), not the person. */ from?: 'app'; label?: string }, TeovoData>
 
 /** What the tenant asks of people before they chat (GET …/policy). */
 export interface Policy { /** The assistant's name from the server's config. */ name?: string; /** The server's formats locale, e.g. 'en-IN'. */ locale?: string; notice?: string; noticeId?: string; pictures: boolean; /** Voice to text is set up on the server. */ voice?: boolean; /** Readers this person may use. */ readers?: string[]; /** Replies are long runs: Stop goes to the server, and a reply still being written is read again on reload. */ longRuns?: boolean }
