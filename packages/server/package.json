@@ -1,6 +1,6 @@
 {
   "name": "@teovo/server",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Teovo server handler: the assistant's tool loop, cards, limits and logs",
   "license": "MIT",
   "type": "module",

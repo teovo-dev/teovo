@@ -24,6 +24,8 @@ jobs:
       # Node 24 ships npm 11 (trusted publishing needs npm 11.5.1+). No cache in a release build.
       - uses: actions/setup-node@v4
         with: { node-version: 24, registry-url: 'https://registry.npmjs.org' }
+      # The newest npm 11: staged publishing and trusted publishing both need a recent one.
+      - run: npm install -g npm@11
       - run: npm ci
       - name: The tag matches every package's version
         run: |
@@ -37,4 +39,4 @@ jobs:
       # Staged: each package waits on npmjs.com until a maintainer approves it with 2FA, then it goes public.
       # In order, because db needs server and the CLI needs db. Provenance is added automatically.
       - run: |
-          for p in server db react cli; do npm stage publish -w packages/$p; done
+          for p in server db react cli; do (cd packages/$p && npm stage publish .); done
