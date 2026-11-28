@@ -1,6 +1,7 @@
 import type { UIMessage } from 'ai'
 import type { TenantSettings } from './settings.js'
-import type { Proposal } from './tools.js'
+import type { Identity, Proposal } from './tools.js'
+import type { Page } from './screens.js'
 
 export interface Thread { id: string; tenantId: string; userId: string; title: string | null; createdAt: string; updatedAt?: string }
 
@@ -99,6 +100,45 @@ export interface Storage {
    * pictures kept in its own tables (tv_files) went with them.
    */
   wipe(tenantId: string, userId?: string): Promise<{ threads: number; files?: number }>
+
+  /** Long runs (createAssistant's `runs`): a queue on the run log, so a reply outlives its request. Optional. */
+  queue?: RunQueue
+}
+
+/** What a queued run carries, so any server can run it: who asked, which message, from which screen, on which models. */
+export interface RunJob { identity: Identity; messageId: string; page?: Page; models: string[] }
+export interface ClaimedRun { id: string; threadId: string; tenantId: string; userId: string; attempts: number; job: RunJob; stopRequested: boolean }
+export interface RunState { id: string; threadId: string; tenantId: string; userId: string; status: RunStatus; attempts: number }
+/** A batch of a reply's stream, as the panel reads it; seq counts batches from 0 within one try. */
+export interface RunEvents { seq: number; chunks: unknown[] }
+
+/**
+ * The queue behind long runs, kept in tv_runs (status, lease, attempts, stop flag) and tv_run_events (the reply's
+ * stream, so any server can send it). No locks are needed: every claim raises `attempts`, and a claim only succeeds
+ * on the attempts it saw, so exactly one server wins.
+ */
+export interface RunQueue {
+  /** Make a queued run ready to take, with what any server needs to run it. */
+  enqueue(id: string, job: RunJob): Promise<void>
+  /** Runs waiting for a server: queued, or running on one whose lease ran out (it stopped or crashed). Oldest first. */
+  waiting(limit: number): Promise<string[]>
+  /** Take a run if it is still waiting; attempts go up by one. Null when another server got it first, or it ended. */
+  claim(id: string, worker: string, leaseMs: number): Promise<ClaimedRun | null>
+  /** Keep holding a run. Null when this worker no longer holds it (its lease ran out and another server took it). */
+  renew(id: string, worker: string, leaseMs: number): Promise<{ stop: boolean } | null>
+  /** Give a run back unfinished (a server shutting down): another server can take it at once, and the try doesn't count. */
+  release(id: string, worker: string): Promise<void>
+  /**
+   * Ask a run to stop, from any server; one still queued is stopped at once. False when it isn't this tenant's (and
+   * person's, when given) or already ended.
+   */
+  requestStop(tenantId: string, runId: string, userId?: string): Promise<boolean>
+  state(id: string): Promise<RunState | null>
+  /** This thread's queued or running run, if any. */
+  active(threadId: string): Promise<string | null>
+  addEvents(runId: string, attempt: number, seq: number, chunks: unknown[]): Promise<void>
+  /** A try's batches after `afterSeq` (-1 for all), in order. */
+  events(runId: string, attempt: number, afterSeq: number): Promise<RunEvents[]>
 }
 
 export type CardEventKind = 'proposed' | 'confirmed' | 'skipped' | 'undone' | 'expired'
@@ -110,7 +150,13 @@ export type Unit = 'messages' | 'input_tokens' | 'output_tokens' | 'neurons'
 export type Period = 'day' | 'month'
 export type Totals = Partial<Record<Unit, number>>
 export interface Budget { userId: string; unit: Unit; period: Period; limit: number }
-export interface RunRecord { id: string; threadId: string; tenantId: string; userId: string; model?: string; promptVersion?: string; /** The message it answers, cut to 300 characters. */ question?: string }
+export interface RunRecord {
+  id: string; threadId: string; tenantId: string; userId: string; model?: string; promptVersion?: string
+  /** The message it answers, cut to 300 characters. */
+  question?: string
+  /** A long run starts queued; queue.enqueue gives it its job, and only then can a server take it. */
+  status?: 'queued'
+}
 /**
  * One step of a run in the log: a tool call, or a reply a done-check refused (type 'check': name is the check,
  * input holds the refused words, error the problem).
@@ -121,7 +167,7 @@ export interface StepRecord {
   /** When the step ended (set by the storage). */
   at?: string
 }
-export type RunStatus = 'running' | 'done' | 'failed' | 'stopped'
+export type RunStatus = 'queued' | 'running' | 'done' | 'failed' | 'stopped'
 export interface RunFilter { limit: number; before?: string; userId?: string; status?: RunStatus; rating?: 1 | -1 }
 /** A run as the run viewer lists it. */
 export interface RunSummary {
@@ -141,7 +187,10 @@ export interface UsageRow { tenantId: string; userId: string; runId?: string; pr
 /** The UTC day or month a moment falls in, as the key usage is summed under ('2026-11-27' / '2026-11'). */
 export const periodKey = (period: Period, at = new Date()) => at.toISOString().slice(0, period === 'day' ? 10 : 7)
 
-export interface MemoryRun extends RunRecord { status: RunStatus; startedAt: Date; finishedAt?: Date; error?: string; rating?: 1 | -1 | null; ratingNote?: string }
+export interface MemoryRun extends Omit<RunRecord, 'status'> {
+  status: RunStatus; startedAt: Date; finishedAt?: Date; error?: string; rating?: 1 | -1 | null; ratingNote?: string
+  job?: RunJob; worker?: string; leaseUntil?: number; attempts?: number; stopRequested?: boolean
+}
 
 const strip = ({ archived: _, ...t }: Thread & { archived?: boolean }): Thread => ({ ...t })
 
@@ -156,6 +205,7 @@ export function memoryStorage() {
   const settings = new Map<string, TenantSettings>()
   const cardEvents: CardEvent[] = []
   const misses: Miss[] = []
+  const events = new Map<string, RunEvents[]>()   // `${runId}:${attempt}`
   const sum = (rows: typeof usageRows) => {
     const t: Totals = {}
     for (const r of rows) t[r.unit] = (t[r.unit] ?? 0) + r.amount
@@ -169,8 +219,8 @@ export function memoryStorage() {
     title: threads.get(r.threadId)?.title ?? null,
     usage: sum(usageRows.filter((u) => u.runId === r.id)),
   })
-  const storage: Storage & { threads: typeof threads; messages: typeof messages; cards: typeof cards; runs: typeof runs; steps: typeof steps; usageRows: typeof usageRows; budgetRows: typeof budgetRows; settings: typeof settings; cardEvents: typeof cardEvents; misses: typeof misses } = {
-    threads, messages, cards, runs, steps, usageRows, budgetRows, settings, cardEvents, misses,
+  const storage: Storage & { queue: RunQueue; events: typeof events; threads: typeof threads; messages: typeof messages; cards: typeof cards; runs: typeof runs; steps: typeof steps; usageRows: typeof usageRows; budgetRows: typeof budgetRows; settings: typeof settings; cardEvents: typeof cardEvents; misses: typeof misses } = {
+    events, threads, messages, cards, runs, steps, usageRows, budgetRows, settings, cardEvents, misses,
     async addCardEvent(e) { cardEvents.push({ ...e, at: e.at ?? new Date().toISOString() }) },
     async listCardEvents(tenantId, o) {
       // Newest first; events in the same millisecond keep the order they happened in (as Postgres does by id).
@@ -190,7 +240,7 @@ export function memoryStorage() {
         threads.delete(id); messages.delete(id); n++
         for (const [cid, c] of cards) if (c.threadId === id) cards.delete(cid)
       }
-      for (const [id, r] of runs) if (mine(r)) { runs.delete(id); for (let i = steps.length - 1; i >= 0; i--) if (steps[i]!.runId === id) steps.splice(i, 1) }
+      for (const [id, r] of runs) if (mine(r)) { runs.delete(id); for (const k of events.keys()) if (k.startsWith(`${id}:`)) events.delete(k); for (let i = steps.length - 1; i >= 0; i--) if (steps[i]!.runId === id) steps.splice(i, 1) }
       // Usage rows are this store's daily totals too, so they stay (limits keep counting), as in Postgres.
       for (let i = cardEvents.length - 1; i >= 0; i--) if (mine(cardEvents[i]!)) cardEvents.splice(i, 1)
       for (let i = misses.length - 1; i >= 0; i--) if (mine(misses[i]!)) misses.splice(i, 1)
@@ -244,7 +294,7 @@ export function memoryStorage() {
       Object.assign(c, structuredClone(patch))
       return structuredClone(c)
     },
-    async startRun(run) { runs.set(run.id, { ...run, status: 'running', startedAt: new Date() }) },
+    async startRun(run) { runs.set(run.id, { ...structuredClone(run), status: run.status ?? 'running', startedAt: new Date(), attempts: 0 }) },
     async finishRun(id, end) {
       const r = runs.get(id)
       if (r) Object.assign(r, { status: end.status, error: end.error, finishedAt: new Date(), ...(end.model ? { model: end.model } : {}) })
@@ -268,7 +318,56 @@ export function memoryStorage() {
       return true
     },
     async runningRuns(tenantId, userId, since) {
-      return [...runs.values()].filter((r) => r.tenantId === tenantId && r.userId === userId && r.status === 'running' && r.startedAt > since).length
+      return [...runs.values()].filter((r) => r.tenantId === tenantId && r.userId === userId && (r.status === 'running' || r.status === 'queued') && r.startedAt > since).length
+    },
+    queue: {
+      async enqueue(id, job) { const r = runs.get(id); if (r) r.job = structuredClone(job) },
+      async waiting(limit) {
+        const now = Date.now()
+        return [...runs.values()].filter((r) => r.job && (r.status === 'queued' || (r.status === 'running' && (r.leaseUntil ?? 0) < now)))
+          .sort((a, b) => a.startedAt.getTime() - b.startedAt.getTime()).slice(0, limit).map((r) => r.id)
+      },
+      async claim(id, worker, leaseMs) {
+        const r = runs.get(id)
+        const now = Date.now()
+        if (!r?.job || !(r.status === 'queued' || (r.status === 'running' && (r.leaseUntil ?? 0) < now))) return null
+        Object.assign(r, { status: 'running', worker, leaseUntil: now + leaseMs, attempts: (r.attempts ?? 0) + 1 })
+        return { id, threadId: r.threadId, tenantId: r.tenantId, userId: r.userId, attempts: r.attempts!, job: structuredClone(r.job), stopRequested: Boolean(r.stopRequested) }
+      },
+      async renew(id, worker, leaseMs) {
+        const r = runs.get(id)
+        if (!r || r.status !== 'running' || r.worker !== worker) return null
+        r.leaseUntil = Date.now() + leaseMs
+        return { stop: Boolean(r.stopRequested) }
+      },
+      async release(id, worker) {
+        const r = runs.get(id)
+        if (r && r.status === 'running' && r.worker === worker) Object.assign(r, { leaseUntil: 0, worker: undefined, attempts: Math.max(0, (r.attempts ?? 1) - 1) })
+      },
+      async requestStop(tenantId, id, userId) {
+        const r = runs.get(id)
+        if (!r || r.tenantId !== tenantId || (userId !== undefined && r.userId !== userId) || !(r.status === 'queued' || r.status === 'running')) return false
+        r.stopRequested = true
+        if (r.status === 'queued') Object.assign(r, { status: 'stopped', finishedAt: new Date() })
+        return true
+      },
+      async state(id) {
+        const r = runs.get(id)
+        return r ? { id, threadId: r.threadId, tenantId: r.tenantId, userId: r.userId, status: r.status, attempts: r.attempts ?? 0 } : null
+      },
+      async active(threadId) {
+        return [...runs.values()].filter((r) => r.threadId === threadId && (r.status === 'queued' || r.status === 'running'))
+          .sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime())[0]?.id ?? null
+      },
+      async addEvents(runId, attempt, seq, chunks) {
+        const k = `${runId}:${attempt}`
+        const list = events.get(k) ?? []
+        if (!list.some((e) => e.seq === seq)) list.push({ seq, chunks: structuredClone(chunks) })
+        events.set(k, list.sort((a, b) => a.seq - b.seq))
+      },
+      async events(runId, attempt, after) {
+        return (events.get(`${runId}:${attempt}`) ?? []).filter((e) => e.seq > after).map((e) => structuredClone(e))
+      },
     },
     async addUsage(rows) { for (const r of rows) usageRows.push({ ...r, at: new Date() }) },
     async usage(tenantId, userId, period) {

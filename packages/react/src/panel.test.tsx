@@ -821,3 +821,38 @@ describe('app-drawn buttons', () => {
     expect(onAction).toHaveBeenCalledWith(expect.objectContaining({ action: 'navigate' }))
   })
 })
+
+describe('long runs', () => {
+  const runs = { heartbeatMs: 10, pollMs: 10, flushMs: 5, asUser: () => null }
+
+  it('Stop stops the reply on the server, not only the stream', async () => {
+    let open!: () => void
+    gate = { open: () => open(), wait: new Promise<void>((r) => { open = r }) }
+    const storage = memoryStorage()
+    const s = server([call('get_sales', {}), say('₹950')], true, {}, { storage, runs })
+    mount({ fetch: s.fetch })
+    await ask('sales?')
+    await screen.findByText('Looked up get sales…')
+    await userEvent.click(screen.getByRole('button', { name: 'Stop' }))
+    await waitFor(() => expect([...storage.runs.values()][0]!.status).toBe('stopped'))
+    await act(async () => gate!.open())
+  })
+
+  it('a reload carries on showing a reply that is still being written', async () => {
+    let open!: () => void
+    gate = { open: () => open(), wait: new Promise<void>((r) => { open = r }) }
+    const storage = memoryStorage()
+    const s = server([call('get_sales', {}), say('Sales today: ₹950')], true, {}, { storage, runs })
+    const first = mount({ fetch: s.fetch })
+    await ask('sales?')
+    await screen.findByText('Looked up get sales…')
+    const id = [...storage.threads.keys()][0]!
+    first.unmount()   // the page is reloaded mid-reply
+    render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch} threadId={id}><AssistantPanel /></AssistantProvider>)
+    await screen.findByText('sales?')
+    await screen.findByText('Looked up get sales…')   // the reply so far, read from the log
+    await act(async () => gate!.open())
+    await screen.findByText('Sales today: ₹950')
+    expect(screen.getAllByText('Sales today: ₹950')).toHaveLength(1)
+  })
+})

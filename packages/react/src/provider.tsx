@@ -48,6 +48,8 @@ const store = {
 
 interface AssistantState {
   chat: ReturnType<typeof useChat<TeovoMessage>>
+  /** Stop the reply being written (use this, not chat.stop: with long runs it also stops it on the server). */
+  stop: () => void
   threadId: string | undefined
   /** Start a fresh conversation: clears the messages; the next message creates a new thread. */
   newChat: () => void
@@ -152,6 +154,8 @@ export function AssistantProvider(props: AssistantProviderProps) {
       const pg = page.current && page.current.path === leftOutRef.current ? undefined : page.current
       return { body: { threadId: thread.current, message: messages.at(-1), page: pg, ...(consent.current ? { consent: consent.current } : {}) } }
     },
+    // Long runs: the reply this conversation is still waiting for, from its start.
+    prepareReconnectToStreamRequest: () => ({ api: `${props.endpoint.replace(/\/$/, '')}/threads/${thread.current}/stream` }),
     fetch: async (input, init) => {
       const res = await (latest.current.fetch ?? fetch)(input, init)
       const id = res.headers.get('x-teovo-thread')
@@ -166,10 +170,19 @@ export function AssistantProvider(props: AssistantProviderProps) {
   }), [props.endpoint])
 
   const afterReply = useRef<() => void>(() => {})
+  // Long runs: a reply picked up again by another server is read afresh, from its start.
+  const readAgain = useRef(false)
+  const reread = useRef<() => void>(() => {})
   const chat = useChat<TeovoMessage>({
     transport,
-    onData: (part) => { if (part.type === 'data-suggestions') setSuggestions(part.data as Suggestions) },
-    onFinish: () => afterReply.current(),
+    onData: (part) => {
+      if (part.type === 'data-suggestions') setSuggestions(part.data as Suggestions)
+      if ((part as { type: string }).type === 'data-resumed') readAgain.current = true
+    },
+    onFinish: () => {
+      if (readAgain.current) { readAgain.current = false; reread.current(); return }
+      afterReply.current()
+    },
     onError: () => afterReply.current(),   // a refused message (a limit) changes what is left too
   })
 
@@ -206,12 +219,14 @@ export function AssistantProvider(props: AssistantProviderProps) {
 
   const openThread = useCallback(async (id: string) => {
     const res = await request(`/threads/${encodeURIComponent(id)}`)
-    const body = (await res.json().catch(() => ({}))) as { messages?: TeovoMessage[]; error?: string }
+    const body = (await res.json().catch(() => ({}))) as { messages?: TeovoMessage[]; running?: string; error?: string }
     if (!res.ok || !body.messages) throw new Error(body.error ?? 'That conversation could not be opened.')
     chat.stop()
     thread.current = id
     setThreadId(id)
     chat.setMessages(body.messages)
+    // A reply still being written (long runs): carry on showing it.
+    if (body.running) void chat.resumeStream()
     remember(id)
     latest.current.onThread?.(id)   // so the app can remember it, and a reload continues this conversation
   }, [chat, request, remember])
@@ -240,6 +255,17 @@ export function AssistantProvider(props: AssistantProviderProps) {
     // A remembered conversation that is gone (removed, or another person's on a shared browser): start fresh.
     if (id) openThread(id).catch(() => { if (thread.current === id) { thread.current = undefined; setThreadId(undefined) } remember(null) })
   }, [openThread, remember])
+
+  reread.current = () => {
+    chat.setMessages((list) => (list.at(-1)?.role === 'assistant' ? list.slice(0, -1) : list))
+    void chat.resumeStream()
+  }
+
+  /** Stop the reply being written. With long runs the server is told, since closing the stream doesn't stop it. */
+  const stop = useCallback(() => {
+    if (policy.longRuns && thread.current) void request(`/threads/${thread.current}/stop`, { method: 'POST' }).catch(() => {})
+    void chat.stop()
+  }, [chat, policy.longRuns, request])
 
   const newChat = useCallback(() => {
     chat.stop()
@@ -378,9 +404,9 @@ export function AssistantProvider(props: AssistantProviderProps) {
     return ((await res.json()) as { result: T }).result
   }, [request])
 
-  const value = useMemo<AssistantState>(() => ({ chat, threadId, newChat, openThread, submitForm, request, setPage, registerPage, page: currentPage, suggestions, clearSuggestions, decideCard, rate, policy, noticeAccepted: accepted, acceptNotice, allowance: allowanceItems, words, onAction: props.onAction,
+  const value = useMemo<AssistantState>(() => ({ chat, stop, threadId, newChat, openThread, submitForm, request, setPage, registerPage, page: currentPage, suggestions, clearSuggestions, decideCard, rate, policy, noticeAccepted: accepted, acceptNotice, allowance: allowanceItems, words, onAction: props.onAction,
     runAction, open, setOpen, view, setView, ask, leaveOutPage, pageLeftOut, setCovering, transcribe, read }),
-    [chat, threadId, newChat, openThread, submitForm, request, setPage, registerPage, currentPage, suggestions, clearSuggestions, decideCard, rate, policy, accepted, acceptNotice, allowanceItems, words, props.onAction,
+    [chat, stop, threadId, newChat, openThread, submitForm, request, setPage, registerPage, currentPage, suggestions, clearSuggestions, decideCard, rate, policy, accepted, acceptNotice, allowanceItems, words, props.onAction,
       runAction, open, setOpen, view, ask, leaveOutPage, pageLeftOut, setCovering, transcribe, read])
   return <Ctx.Provider value={value}>{props.children}</Ctx.Provider>
 }

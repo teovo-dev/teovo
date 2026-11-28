@@ -1,5 +1,5 @@
 import { periodKey, type CardEvent, type CardPatch, type Miss, type Storage, type StoredCard, type StoredFile, type Thread, type Totals, type Unit } from '@teovo/server'
-import { runSummary, stepRecord } from './postgres.js'
+import { claimed, runState, runSummary, stepRecord } from './postgres.js'
 import type { UIMessage } from 'ai'
 
 /**
@@ -138,7 +138,7 @@ export function supabaseStorage(db: SupabaseLike): Storage {
       }, { onConflict: 'tenant_id' }))
     },
     async startRun(r) {
-      await ok(db.from('tv_runs').insert({ id: r.id, thread_id: r.threadId, tenant_id: r.tenantId, user_id: r.userId, model: r.model ?? null, prompt_version: r.promptVersion ?? null, ...(r.question ? { question: r.question } : {}) }))
+      await ok(db.from('tv_runs').insert({ id: r.id, thread_id: r.threadId, tenant_id: r.tenantId, user_id: r.userId, model: r.model ?? null, prompt_version: r.promptVersion ?? null, ...(r.question ? { question: r.question } : {}), ...(r.status ? { status: r.status } : {}) }))
     },
     async finishRun(id, end) {
       await ok(db.from('tv_runs').update({ status: end.status, ...(end.model ? { model: end.model } : {}), error: end.error ?? null, finished_at: new Date().toISOString() }).eq('id', id))
@@ -172,9 +172,61 @@ export function supabaseStorage(db: SupabaseLike): Storage {
       const steps = await ok(db.from('tv_run_steps').select('*').eq('run_id', id).order('seq', { ascending: true }).order('id', { ascending: true }))
       return { ...runSummary({ ...rows[0], title: rows[0].thread?.title }, (await usageOf([id])).get(id) ?? {}), steps: steps.map(stepRecord) }
     },
+    queue: {
+      async enqueue(id, job) { await ok(db.from('tv_runs').update({ job }).eq('id', id)) },
+      async waiting(limit) {
+        const rows = await ok(db.from('tv_runs').select('id').not('job', 'is', null)
+          .or(`status.eq.queued,and(status.eq.running,lease_until.lt.${new Date().toISOString()})`).order('started_at', { ascending: true }).limit(limit))
+        return (rows as any[]).map((x) => x.id as string)
+      },
+      async claim(id, worker, leaseMs) {
+        // The API has no row locks: read the run, then change it only if its tries are still what was read. Every
+        // claim raises them, so of many servers claiming at once exactly one matches.
+        const now = new Date()
+        const seen = (await ok(db.from('tv_runs').select('status, attempts, lease_until, job').eq('id', id).limit(1)))[0]
+        if (!seen?.job || !(seen.status === 'queued' || (seen.status === 'running' && seen.lease_until && new Date(seen.lease_until) < now))) return null
+        const rows = await ok(db.from('tv_runs').update({ status: 'running', worker, lease_until: new Date(now.getTime() + leaseMs).toISOString(), attempts: seen.attempts + 1 })
+          .eq('id', id).eq('attempts', seen.attempts).in('status', ['queued', 'running']).select('*'))
+        return rows[0] ? claimed(rows[0]) : null
+      },
+      async renew(id, worker, leaseMs) {
+        const rows = await ok(db.from('tv_runs').update({ lease_until: new Date(Date.now() + leaseMs).toISOString() })
+          .eq('id', id).eq('worker', worker).eq('status', 'running').select('stop_requested_at'))
+        return rows[0] ? { stop: Boolean(rows[0].stop_requested_at) } : null
+      },
+      async release(id, worker) {
+        await ok(db.from('tv_runs').update({ lease_until: new Date(Date.now() - 1000).toISOString(), worker: null }).eq('id', id).eq('worker', worker).eq('status', 'running'))
+      },
+      async requestStop(tenantId, id, userId) {
+        if (!UUID.test(id)) return false
+        const at = new Date().toISOString()
+        const scope = (q: any) => (userId === undefined ? q : q.eq('user_id', userId)).eq('id', id).eq('tenant_id', tenantId)
+        // One still queued stops at once; one running is told to, and stops at its next heartbeat.
+        const queued = await ok(scope(db.from('tv_runs').update({ stop_requested_at: at, status: 'stopped', finished_at: at })).eq('status', 'queued').select('id'))
+        if (queued.length) return true
+        const running = await ok(scope(db.from('tv_runs').update({ stop_requested_at: at })).eq('status', 'running').select('id'))
+        return running.length > 0
+      },
+      async state(id) {
+        if (!UUID.test(id)) return null
+        const rows = await ok(db.from('tv_runs').select('id, thread_id, tenant_id, user_id, status, attempts').eq('id', id).limit(1))
+        return rows[0] ? runState(rows[0]) : null
+      },
+      async active(threadId) {
+        const rows = await ok(db.from('tv_runs').select('id').eq('thread_id', threadId).in('status', ['queued', 'running']).order('started_at', { ascending: false }).limit(1))
+        return (rows[0]?.id as string | undefined) ?? null
+      },
+      async addEvents(runId, attempt, seq, chunks) {
+        await ok(db.from('tv_run_events').upsert({ run_id: runId, attempt, seq, chunks }, { onConflict: 'run_id,attempt,seq', ignoreDuplicates: true }))
+      },
+      async events(runId, attempt, after) {
+        const rows = await ok(db.from('tv_run_events').select('seq, chunks').eq('run_id', runId).eq('attempt', attempt).gt('seq', after).order('seq', { ascending: true }))
+        return (rows as any[]).map((x) => ({ seq: x.seq as number, chunks: x.chunks as unknown[] }))
+      },
+    },
     async runningRuns(tenantId, userId, since) {
       const { count, error } = await db.from('tv_runs').select('id', { count: 'exact', head: true })
-        .eq('tenant_id', tenantId).eq('user_id', userId).eq('status', 'running').gt('started_at', since.toISOString())
+        .eq('tenant_id', tenantId).eq('user_id', userId).in('status', ['queued', 'running']).gt('started_at', since.toISOString())
       if (error) throw new Error(`Teovo storage: ${error.message}`)
       return count ?? 0
     },

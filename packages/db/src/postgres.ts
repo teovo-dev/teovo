@@ -1,4 +1,4 @@
-import { periodKey, type CardEvent, type CardPatch, type Miss, type RunSummary, type StepRecord, type Storage, type StoredCard, type Thread, type Totals, type Unit } from '@teovo/server'
+import { periodKey, type ClaimedRun, type RunState, type CardEvent, type CardPatch, type Miss, type RunSummary, type StepRecord, type Storage, type StoredCard, type Thread, type Totals, type Unit } from '@teovo/server'
 import type { UIMessage } from 'ai'
 import type { Query } from './migrate.js'
 
@@ -34,6 +34,9 @@ export const stepRecord = (x: any): StepRecord => ({
   ...(x.tool_call_id ? { toolCallId: x.tool_call_id } : {}), ...(x.input !== null ? { input: x.input } : {}),
   ...(x.output !== null ? { output: x.output } : {}), ...(x.error ? { error: x.error } : {}),
 })
+
+export const claimed = (r: any): ClaimedRun => ({ id: r.id, threadId: r.thread_id, tenantId: r.tenant_id, userId: r.user_id, attempts: r.attempts, job: r.job, stopRequested: Boolean(r.stop_requested_at) })
+export const runState = (r: any): RunState => ({ id: r.id, threadId: r.thread_id, tenantId: r.tenant_id, userId: r.user_id, status: r.status, attempts: r.attempts })
 
 const thread = (r: any): Thread => ({ id: r.id, tenantId: r.tenant_id, userId: r.user_id, title: r.title, createdAt: new Date(r.created_at).toISOString() })
 
@@ -135,8 +138,8 @@ export function postgresStorage(query: Query): Storage {
         [tenantId, s.enabled, s.instructions ?? null, json(s.glossary), json(s.toolsOff), json(s.formats), json(s.privacy), json(s.modelsOff)])
     },
     async startRun(r) {
-      await query('insert into tv_runs (id, thread_id, tenant_id, user_id, model, prompt_version, question) values ($1, $2, $3, $4, $5, $6, $7)',
-        [r.id, r.threadId, r.tenantId, r.userId, r.model ?? null, r.promptVersion ?? null, r.question ?? null])
+      await query('insert into tv_runs (id, thread_id, tenant_id, user_id, model, prompt_version, question, status) values ($1, $2, $3, $4, $5, $6, $7, $8)',
+        [r.id, r.threadId, r.tenantId, r.userId, r.model ?? null, r.promptVersion ?? null, r.question ?? null, r.status ?? 'running'])
     },
     async finishRun(id, end) {
       await query('update tv_runs set status = $2, model = coalesce($3, model), error = $4, finished_at = now() where id = $1', [id, end.status, end.model ?? null, end.error ?? null])
@@ -169,7 +172,7 @@ export function postgresStorage(query: Query): Storage {
       return { ...runSummary(r.rows[0], (await usageOf([id])).get(id) ?? {}), steps: steps.rows.map(stepRecord) }
     },
     async runningRuns(tenantId, userId, since) {
-      const r = await query(`select count(*)::int as n from tv_runs where tenant_id = $1 and user_id = $2 and status = 'running' and started_at > $3`, [tenantId, userId, since.toISOString()])
+      const r = await query(`select count(*)::int as n from tv_runs where tenant_id = $1 and user_id = $2 and status in ('queued', 'running') and started_at > $3`, [tenantId, userId, since.toISOString()])
       return r.rows[0].n as number
     },
     async addUsage(rows) {
@@ -223,6 +226,51 @@ export function postgresStorage(query: Query): Storage {
       await query(`delete from tv_card_events where ${who}`, args)
       await query(`delete from tv_misses where ${who}`, args)
       return { threads: t.rows.length, files }
+    },
+    queue: {
+      async enqueue(id, job) { await query('update tv_runs set job = $2 where id = $1', [id, json(job)]) },
+      async waiting(limit) {
+        const r = await query(`select id from tv_runs where job is not null and (status = 'queued' or (status = 'running' and lease_until < now())) order by started_at limit $1`, [limit])
+        return r.rows.map((x) => x.id as string)
+      },
+      async claim(id, worker, leaseMs) {
+        // One statement, so of many servers claiming at once exactly one changes the row.
+        const r = await query(
+          `update tv_runs set status = 'running', worker = $2, lease_until = now() + $3 * interval '1 millisecond', attempts = attempts + 1
+           where id = $1 and job is not null and (status = 'queued' or (status = 'running' and lease_until < now())) returning *`, [id, worker, leaseMs])
+        return r.rows[0] ? claimed(r.rows[0]) : null
+      },
+      async renew(id, worker, leaseMs) {
+        const r = await query(`update tv_runs set lease_until = now() + $3 * interval '1 millisecond' where id = $1 and worker = $2 and status = 'running' returning stop_requested_at`, [id, worker, leaseMs])
+        return r.rows[0] ? { stop: Boolean(r.rows[0].stop_requested_at) } : null
+      },
+      async release(id, worker) {
+        await query(`update tv_runs set lease_until = now() - interval '1 second', worker = null where id = $1 and worker = $2 and status = 'running'`, [id, worker])
+      },
+      async requestStop(tenantId, id, userId) {
+        if (!/^[0-9a-f-]{36}$/i.test(id)) return false
+        const r = await query(
+          `update tv_runs set stop_requested_at = now(),
+             status = case when status = 'queued' then 'stopped' else status end, finished_at = case when status = 'queued' then now() else finished_at end
+           where id = $1 and tenant_id = $2 and ($3::text is null or user_id = $3) and status in ('queued', 'running') returning id`, [id, tenantId, userId ?? null])
+        return r.rows.length > 0
+      },
+      async state(id) {
+        if (!/^[0-9a-f-]{36}$/i.test(id)) return null
+        const r = await query('select id, thread_id, tenant_id, user_id, status, attempts from tv_runs where id = $1', [id])
+        return r.rows[0] ? runState(r.rows[0]) : null
+      },
+      async active(threadId) {
+        const r = await query(`select id from tv_runs where thread_id = $1 and status in ('queued', 'running') order by started_at desc limit 1`, [threadId])
+        return (r.rows[0]?.id as string | undefined) ?? null
+      },
+      async addEvents(runId, attempt, seq, chunks) {
+        await query('insert into tv_run_events (run_id, attempt, seq, chunks) values ($1, $2, $3, $4) on conflict do nothing', [runId, attempt, seq, JSON.stringify(chunks)])
+      },
+      async events(runId, attempt, after) {
+        const r = await query('select seq, chunks from tv_run_events where run_id = $1 and attempt = $2 and seq > $3 order by seq', [runId, attempt, after])
+        return r.rows.map((x) => ({ seq: x.seq as number, chunks: x.chunks as unknown[] }))
+      },
     },
     async budgets(tenantId, userId) {
       const r = await query(`select user_id, unit, period, "limit"::float8 as "limit" from tv_budgets where tenant_id = $1 and user_id in ($2, '')`, [tenantId, userId])

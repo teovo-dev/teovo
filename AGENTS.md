@@ -126,6 +126,7 @@ useAssistantContext({ path: '/orders/142', title: 'Order', record: { type: 'orde
 | Forms in chat | `forms: { submitKind: … }` | Works with the built-in views |
 | Limits | `limits: { user: { messages: 200 } }` | The panel shows how many messages are left |
 | Run viewer (every reply, its tools and a trace to download) | Nothing: needs `postgresStorage` or `supabaseStorage` (admins only) | `<RunViewer />` on the app's admin screen |
+| Long runs (a reply goes on when the panel closes, Stop works from any server, a reply whose server stopped is carried on by another) | `runs: { asUser }`; then `teovo.startWorker()` in Node, or `teovo.work()` from a cron on Workers (and `teovo.fetch(req, ctx)`); `inline: false` to leave replies to workers | Nothing: Stop and reload just work |
 | Done-checks (rules a reply must pass before the user sees it) | `checks: [noClaimedChanges, defineCheck({ name, check })]`, `checkRetries` | Nothing: the panel gets only the reply that passed |
 | Dates and money | `formats: { locale, currency, timeZone }` | Applied automatically |
 | Cheap model for simple questions | `route: (ctx) => models \| undefined` | Nothing needed |

@@ -32,6 +32,12 @@ const google = createGoogleGenerativeAI({ apiKey: key })
 // answers right; turning thinking off cut blanks further but got "who owes the most?" wrong.
 const flash = wrapLanguageModel({ model: google('gemini-2.5-flash'), middleware: defaultSettingsMiddleware({ settings: { providerOptions: { google: { thinkingConfig: { thinkingBudget: 1024 } } } } }) })
 
+/** For trying long runs by hand: DEMO_SLOW_TOOLS_MS=8000 npm run server makes every tool take that long. */
+function slowly<T extends { run: (...a: any[]) => unknown }>(tools: T[]): T[] {
+  const ms = Number(process.env.DEMO_SLOW_TOOLS_MS ?? 0)
+  return ms ? tools.map((t) => ({ ...t, run: async (...a: unknown[]) => { await new Promise((r) => setTimeout(r, ms)); return t.run(...a) } })) : tools
+}
+
 const teovo = createAssistant({
   // The demo picks the user from a header the page sends; a real app reads its session here.
   identify: (req): Identity => {
@@ -53,6 +59,9 @@ const teovo = createAssistant({
     'the user confirms it on a card. Show lists of orders, customers or products as a table. "This week" means the last 7 days. ' +
     '"Who owes money" means customers with money due: answer it straight from list_customers, without asking which list.',
   storage: postgresStorage(query),
+  // Long runs: a reply goes on when the panel closes, Stop works from any server, and a reply this server was writing
+  // when it stopped is carried on from its last finished step by the next server to start (startWorker below).
+  runs: { asUser: (identity) => ({ role: identity.role }), leaseMs: 10_000 },
   formats: { locale: 'en-IN', currency: 'INR', timeZone: 'Asia/Kolkata' },
   limits: { user: { messages: 200 } },
   // Done-checks: a reply is held until it passes these. Teovo's own catches "Payment recorded" next to a card that
@@ -100,7 +109,7 @@ const teovo = createAssistant({
   ],
   // Voice to text for the chat's microphone and the Quick add microphone: Gemini hears it, in English.
   voice: { hint: 'expenses and orders of a small bakery: milk, butter, flour, croissants, cakes; paid by UPI or cash' },
-  tools: [
+  tools: slowly([
     defineTool({
       name: 'list_orders', kind: 'read',
       description: 'Orders with customer, status, items, total, paid, due and the customer note. Filters: unpaidOnly (money due), status, customer (part of a name), from (YYYY-MM-DD, placed on or after).',
@@ -191,7 +200,7 @@ const teovo = createAssistant({
       input: z.object({ no: z.number(), total: z.number().positive() }),
       run: ({ no, total }) => ({ kind: 'change_total', title: `Order #${no} total ₹${order(no).total} → ₹${total}`, before: { total: order(no).total }, after: { total }, payload: { no, total }, fields: [{ key: 'total', label: 'Total', format: 'money' as const }] }),
     }),
-  ],
+  ]),
   forms: {
     expense: {
       fields: ['amount', 'vendor', 'category', 'date', 'method'],
@@ -331,3 +340,7 @@ createServer(async (req, res) => {
     res.end()
   }
 }).listen(port, () => console.log(`Teovo example shop API on http://localhost:${port}`))
+
+// Picks up replies a stopped or crashed server left (and on shutdown hands this one's back for the next).
+const worker = teovo.startWorker()
+for (const signal of ['SIGINT', 'SIGTERM'] as const) process.once(signal, () => { void worker.stop({ waitMs: 3000 }).then(() => process.exit(0)) })

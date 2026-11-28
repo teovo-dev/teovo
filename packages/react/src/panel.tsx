@@ -66,7 +66,7 @@ export type CardState = {
 
 /** A ready-made chat panel. Unstyled apart from `tv-` class names; import '@teovo/react/styles.css' for defaults. */
 export function AssistantPanel(props: AssistantPanelProps) {
-  const { chat, newChat, suggestions, clearSuggestions, page, policy, noticeAccepted, acceptNotice, allowance, words, view, setView, leaveOutPage, transcribe: transcribeAudio } = useAssistant()
+  const { chat, stop: stopReply, newChat, suggestions, clearSuggestions, page, policy, noticeAccepted, acceptNotice, allowance, words, view, setView, leaveOutPage, transcribe: transcribeAudio } = useAssistant()
   const [text, setText] = useState('')
   const busy = chat.status === 'submitted' || chat.status === 'streaming'
   const log = useRef<HTMLDivElement>(null)
@@ -95,7 +95,7 @@ export function AssistantPanel(props: AssistantPanelProps) {
   function stop() {
     const last = chat.messages.at(-1)
     if (last?.role === 'assistant') setStopped((s) => new Set(s).add(last.id))
-    void chat.stop()
+    stopReply()
   }
   const [fileError, setFileError] = useState<string>()
   const picker = useRef<HTMLInputElement>(null)
