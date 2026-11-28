@@ -18,6 +18,9 @@ const NAV = [
 ] as const
 
 /** The app inside the provider, so its buttons can open the assistant and send a question (useAssistant().ask). */
+// Open the shop with ?transport=poll to try the long-poll transport (for hosts that hold back streams).
+const pollMode = new URLSearchParams(location.search).get('transport') === 'poll'
+
 function Shell({ user, setUser }: { user: User; setUser: (u: User) => void }) {
   const shop = useShop()
   const [route, query] = useRoute()
@@ -100,7 +103,7 @@ function App() {
   const [user, setUser] = useState<User>('owner')
   return (
     // One conversation remembered per demo user, so switching user and reloading each continue their own.
-    <AssistantProvider key={user} endpoint="/api/assistant" headers={{ 'x-demo-user': user }} rememberThread={`teovo-thread-${user}`}
+    <AssistantProvider key={user} endpoint="/api/assistant" headers={{ 'x-demo-user': user }} transport={pollMode ? 'poll' : 'stream'} rememberThread={`teovo-thread-${user}`}
       // A button under a reply opens that screen; on a phone Teovo then closes the chat so the screen shows.
       onAction={(a) => { if (a.action === 'navigate' && typeof a.args?.to === 'string') location.hash = a.args.to }}>
       <Shell user={user} setUser={setUser} />

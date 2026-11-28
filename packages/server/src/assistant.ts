@@ -333,7 +333,11 @@ const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
 
 /** The request body the panel sends: only the new message; the history stays on the server. */
-interface ChatBody { threadId?: string; message?: UIMessage; page?: unknown; consent?: string }
+interface ChatBody {
+  threadId?: string; message?: UIMessage; page?: unknown; consent?: string
+  /** 'poll' (long runs only): answer at once with the run's id; the panel then reads the reply with GET …/runs/:id/poll. */
+  transport?: 'poll'
+}
 
 export function createAssistant<DB>(config: AssistantConfig<DB>) {
   if (!config.models.length) throw new Error('createAssistant: at least one model is required')
@@ -356,6 +360,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     if (!message || message.role !== 'user' || !Array.isArray(message.parts)) return json(400, { error: 'Send one user message with some text.' })
     const problem = checkMessage(message, config.attachments)
     if (problem) return json(400, { error: problem })
+    if (body.transport === 'poll' && !queue) return json(400, { error: 'Polling for replies needs long runs (createAssistant runs).' })
 
     const { storage } = config
     const { settings, switches } = await settingsOf(identity.tenantId)
@@ -442,6 +447,8 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
       const claimed = await queue.claim(runId, worker, leaseMs)
       if (claimed) keepAlive(drive(claimed, { thread, message, history, models, settings, db, held }), ctx)
     }
+    // For hosts that hold back streamed responses: a plain answer now, the reply through short polls.
+    if (body.transport === 'poll') return new Response(JSON.stringify({ threadId: thread.id, runId }), { status: 202, headers: { ...headers, 'content-type': 'application/json' } })
     return createUIMessageStreamResponse({ stream: tail(runId), headers })
   }
 
@@ -1041,6 +1048,32 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     return json(200, { stopping: true })
   }
 
+  /**
+   * GET …/runs/:id/poll?attempt=&after=&wait=: the long-poll transport, for hosts that hold back streams. Answers with
+   * the reply's next batches as soon as there are any (or after `wait` ms, at most 25 s, with none), `done` once the
+   * reply has ended and everything was sent, and `reset` when another server picked it up again (read it afresh).
+   */
+  async function pollRoute(req: Request, runId: string): Promise<Response> {
+    const identity = await config.identify(req)
+    if (!identity) return json(401, { error: 'Sign in to use the assistant.' })
+    if (!queue) return json(501, { error: 'Polling for replies needs long runs.' })
+    const q = new URL(req.url).searchParams
+    const asked = q.has('attempt') ? Number(q.get('attempt')) : undefined
+    const after = Number(q.get('after') ?? -1)
+    const deadline = Date.now() + Math.min(Math.max(Number(q.get('wait') ?? 20_000) || 0, 0), 25_000)
+    for (;;) {
+      const st = await queue.state(runId)
+      if (!st || st.tenantId !== identity.tenantId || (st.userId !== identity.userId && !isAdmin(identity))) return json(404, { error: 'That reply was not found.' })
+      if (asked !== undefined && asked > 0 && st.attempts !== asked) return json(200, { attempt: st.attempts, reset: true, events: [], done: false })
+      const attempt = st.attempts
+      const ended = ENDED.has(st.status)
+      const events = attempt > 0 ? await queue.events(runId, attempt, attempt === asked ? after : -1) : []
+      // `ended` was read first, so once it shows, these are the last batches.
+      if (events.length || ended || Date.now() >= deadline) return json(200, { attempt, events, done: ended })
+      await sleep(Math.min(pollMs, Math.max(0, deadline - Date.now())))
+    }
+  }
+
   /** GET …/threads/:id/stream: the reply this conversation is waiting for, from its start; 204 when there is none. */
   async function streamRoute(req: Request, threadId: string): Promise<Response> {
     const identity = await config.identify(req)
@@ -1505,6 +1538,8 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
       if (req.method === 'POST' && path.endsWith('/chat')) return chat(req, ctx)
       const ts = /\/threads\/([0-9a-f-]{36})\/stream$/i.exec(path)
       if (req.method === 'GET' && ts) return streamRoute(req, ts[1]!.toLowerCase())
+      const rp = /\/runs\/([0-9a-f-]{36})\/poll$/i.exec(path)
+      if (req.method === 'GET' && rp) return pollRoute(req, rp[1]!.toLowerCase())
       const rs = /\/(runs|threads)\/([0-9a-f-]{36})\/stop$/i.exec(path)
       if (req.method === 'POST' && rs) return stopRoute(req, rs[2]!.toLowerCase(), rs[1] === 'threads' ? 'thread' : 'run')
       if (req.method === 'GET' && path.endsWith('/suggestions')) return suggestions(req)

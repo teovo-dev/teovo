@@ -1,5 +1,6 @@
 import { useChat } from '@ai-sdk/react'
 import { DefaultChatTransport } from 'ai'
+import { pollTransport } from './poll.js'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { readFile } from './input.js'
 import type { Action, AllowanceItem, Card, CardDecision, Page, Policy, Suggestions, TeovoMessage, ThreadSummary } from './types.js'
@@ -23,6 +24,11 @@ export interface AssistantProviderProps {
   onAction?: (action: Action) => void
   /** Replace fetch, e.g. in tests or to call the handler in-process. */
   fetch?: typeof fetch
+  /**
+   * How replies reach the panel. 'stream' (default): one streamed response. 'poll': short requests, for hosts that
+   * hold back streamed responses (Firebase Hosting, some proxies); needs long runs (createAssistant runs) on the server.
+   */
+  transport?: 'stream' | 'poll'
   /**
    * Remember the open conversation in this browser, so a reload continues it: the localStorage key, e.g. one per
    * business ('shop.chat.' + businessId). Default 'teovo:thread'. false: don't. A threadId passed in wins.
@@ -136,31 +142,38 @@ export function AssistantProvider(props: AssistantProviderProps) {
   const [allowanceItems, setAllowance] = useState<AllowanceItem[]>([])
   const [words, setWords] = useState<string[]>([])
 
-  const transport = useMemo(() => new DefaultChatTransport<TeovoMessage>({
+  // Only the new message goes up: the server keeps the history and checks it belongs to this person.
+  const bodyFor = (messages: TeovoMessage[]) => {
+    const pg = page.current && page.current.path === leftOutRef.current ? undefined : page.current
+    return { threadId: thread.current, message: messages.at(-1), page: pg, ...(consent.current ? { consent: consent.current } : {}) }
+  }
+  const headersNow = async () => {
+    const h = latest.current.headers
+    return typeof h === 'function' ? await h() : (h ?? {})
+  }
+  const seen = (res: Response) => {
+    const id = res.headers.get('x-teovo-thread')
+    if (id && id !== thread.current) {
+      thread.current = id
+      setThreadId(id)
+      remember(id)
+      latest.current.onThread?.(id)
+    }
+  }
+  const transport = useMemo(() => props.transport === 'poll' ? pollTransport<TeovoMessage>({
+    endpoint: props.endpoint, fetch: () => latest.current.fetch ?? fetch, headers: headersNow, body: bodyFor, seen, threadId: () => thread.current,
+  }) : new DefaultChatTransport<TeovoMessage>({
     api: `${props.endpoint.replace(/\/$/, '')}/chat`,
-    headers: async () => {
-      const h = latest.current.headers
-      return typeof h === 'function' ? await h() : (h ?? {})
-    },
-    // Only the new message goes up: the server keeps the history and checks it belongs to this person.
-    prepareSendMessagesRequest: ({ messages }) => {
-      const pg = page.current && page.current.path === leftOutRef.current ? undefined : page.current
-      return { body: { threadId: thread.current, message: messages.at(-1), page: pg, ...(consent.current ? { consent: consent.current } : {}) } }
-    },
+    headers: headersNow,
+    prepareSendMessagesRequest: ({ messages }) => ({ body: bodyFor(messages) }),
     // Long runs: the reply this conversation is still waiting for, from its start.
     prepareReconnectToStreamRequest: () => ({ api: `${props.endpoint.replace(/\/$/, '')}/threads/${thread.current}/stream` }),
     fetch: async (input, init) => {
       const res = await (latest.current.fetch ?? fetch)(input, init)
-      const id = res.headers.get('x-teovo-thread')
-      if (id && id !== thread.current) {
-        thread.current = id
-        setThreadId(id)
-        remember(id)
-        latest.current.onThread?.(id)
-      }
+      seen(res)
       return res
     },
-  }), [props.endpoint])
+  }), [props.endpoint, props.transport])   // eslint-disable-line react-hooks/exhaustive-deps
 
   const afterReply = useRef<() => void>(() => {})
   // Long runs: a reply picked up again by another server is read afresh, from its start.

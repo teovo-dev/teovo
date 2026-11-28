@@ -854,3 +854,40 @@ describe('long runs', () => {
     expect(screen.getAllByText('Sales today: ₹950')).toHaveLength(1)
   })
 })
+
+describe('long-poll transport', () => {
+  const runs = { heartbeatMs: 10, pollMs: 10, flushMs: 5, asUser: () => null }
+
+  it('sends with a plain request and reads the reply through short polls, never a stream', async () => {
+    const s = server([call('get_sales', {}), say('Sales today: ₹950')], true, {}, { storage: memoryStorage(), runs })
+    const urls: string[] = []
+    const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      urls.push(String(input))
+      const res = await s.fetch(input, init)
+      expect(res.headers.get('content-type') ?? '').not.toContain('text/event-stream')
+      return res
+    }) as typeof globalThis.fetch
+    render(<AssistantProvider endpoint="/api/assistant" fetch={fetch} transport="poll"><AssistantPanel /></AssistantProvider>)
+    await ask('sales?')
+    await screen.findByText('Sales today: ₹950')
+    expect(screen.getAllByText('Sales today: ₹950')).toHaveLength(1)
+    expect(urls.some((u) => /\/runs\/[0-9a-f-]+\/poll\?/.test(u))).toBe(true)
+    expect(s.bodies.find((b) => b.message)).toMatchObject({ transport: 'poll' })
+  })
+
+  it('a reload carries on reading a reply still being written', async () => {
+    let open!: () => void
+    gate = { open: () => open(), wait: new Promise<void>((r) => { open = r }) }
+    const storage = memoryStorage()
+    const s = server([call('get_sales', {}), say('Sales today: ₹950')], true, {}, { storage, runs })
+    const first = render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch} transport="poll"><AssistantPanel /></AssistantProvider>)
+    await ask('sales?')
+    await screen.findByText('Looked up get sales…')
+    const id = [...storage.threads.keys()][0]!
+    first.unmount()
+    render(<AssistantProvider endpoint="/api/assistant" fetch={s.fetch} transport="poll" threadId={id}><AssistantPanel /></AssistantProvider>)
+    await screen.findByText('Looked up get sales…')
+    await act(async () => gate!.open())
+    await screen.findByText('Sales today: ₹950')
+  })
+})
