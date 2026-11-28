@@ -256,3 +256,74 @@ describe('long runs', () => {
     void _typed
   })
 })
+
+describe('long-poll transport', () => {
+  type Poll = { attempt: number; events: { seq: number; chunks: { type: string; delta?: string }[] }[]; done: boolean; reset?: boolean }
+  const sendPoll = (teovo: { fetch: (r: Request) => Promise<Response> }, text: string) => teovo.fetch(new Request('https://a.test/api/assistant/chat', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ transport: 'poll', message: { id: crypto.randomUUID(), role: 'user', parts: [{ type: 'text', text }] } }),
+  }))
+  const poll = async (teovo: { fetch: (r: Request) => Promise<Response> }, runId: string, q: string) => (await get(teovo, `/runs/${runId}/poll?${q}`)).json() as Promise<Poll>
+
+  it('answers the message at once with the run, then hands out the reply in batches until done', async () => {
+    const storage = memoryStorage()
+    const { teovo } = server(storage, [callTool('list_orders', {}), say('Order 4 owes 250.')])
+    const res = await sendPoll(teovo, 'who owes money?')
+    expect(res.status).toBe(202)
+    const { runId, threadId } = (await res.json()) as { runId: string; threadId: string }
+    expect(res.headers.get('x-teovo-thread')).toBe(threadId)
+    const chunks: { type: string; delta?: string }[] = []
+    let attempt: number | undefined
+    let after = -1
+    for (let i = 0; i < 50; i++) {
+      const b = await poll(teovo, runId, `after=${after}&wait=2000${attempt !== undefined ? `&attempt=${attempt}` : ''}`)
+      attempt = b.attempt
+      for (const e of b.events) { chunks.push(...e.chunks); after = e.seq }
+      if (b.done) break
+    }
+    expect(chunks.filter((c) => c.type === 'text-delta').map((c) => c.delta).join('')).toBe('Order 4 owes 250.')
+    expect(chunks.filter((c) => c.type === 'start')).toHaveLength(1)   // each batch handed out once
+    expect(chunks.at(-1)!.type).toBe('finish')
+    // Polled again after the end: nothing more, done.
+    expect(await poll(teovo, runId, `after=${after}&attempt=${attempt}`)).toMatchObject({ events: [], done: true })
+  })
+
+  it('waits for more instead of answering empty at once, up to the wait asked for', async () => {
+    const storage = memoryStorage()
+    const slow = gate()
+    const { teovo } = server(storage, [callTool('add_up', {}), say('It comes to 250.')], { slow: slow.p })
+    const { runId } = (await (await sendPoll(teovo, 'add it up')).json()) as { runId: string }
+    await until(async () => (await storage.queue.events(runId, 1, -1)).some((e) => (e.chunks as { type: string }[]).some((c) => c.type === 'data-step')))
+    const first = await poll(teovo, runId, 'after=-1')
+    const t = Date.now()
+    const empty = await poll(teovo, runId, `after=${first.events.at(-1)!.seq}&attempt=1&wait=120`)
+    expect(empty).toMatchObject({ events: [], done: false })
+    expect(Date.now() - t).toBeGreaterThanOrEqual(100)
+    slow.open()
+  })
+
+  it('says reset when another server picked the reply up, and is only for its owner (or an admin)', async () => {
+    const storage = memoryStorage()
+    const stuck = gate()
+    const a = server(storage, [callTool('list_orders', {}), callTool('add_up', {}), say('late')], { slow: stuck.p, runs: { heartbeatMs: 60_000, leaseMs: 30 } })
+    const b = server(storage, [say('Order 4 owes 250.')])
+    const { runId } = (await (await sendPoll(a.teovo, 'who owes money?')).json()) as { runId: string }
+    await until(async () => (await storage.queue.waiting(5)).length === 1)
+    const before = await poll(b.teovo, runId, 'after=-1')
+    expect(before.attempt).toBe(1)
+    b.who.current = ravi
+    expect((await get(b.teovo, `/runs/${runId}/poll`)).status).toBe(404)
+    b.who.current = nisha
+    expect(await b.teovo.work()).toBe(1)
+    expect(await poll(b.teovo, runId, `after=${before.events.at(-1)!.seq}&attempt=1`)).toMatchObject({ reset: true, attempt: 2 })
+    const fresh = await poll(b.teovo, runId, 'after=-1&attempt=2')
+    expect(fresh.done).toBe(true)
+    expect(fresh.events.flatMap((e) => e.chunks).filter((c) => c.type === 'text-delta').map((c) => c.delta).join('')).toBe('Order 4 owes 250.')
+    stuck.open()
+  })
+
+  it('needs long runs', async () => {
+    const teovo = createAssistant({ identify: () => nisha, asUser: () => null, instructions: '', storage: memoryStorage(), tools: [], models: [scriptedModel([])] })
+    expect((await sendPoll(teovo, 'hi')).status).toBe(400)
+  })
+})

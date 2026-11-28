@@ -89,6 +89,7 @@ Mounted under one path in the app's server, e.g. `app.all('/api/assistant/*', te
 | `POST /threads/:id/views/:viewId/submit` | Send a form the assistant showed; it becomes a card |
 | `GET /threads/:id/stream` | Long runs: the reply this conversation is waiting for, from its start (204 when none) |
 | `POST /threads/:id/stop`, `POST /runs/:id/stop` | Long runs: stop a reply from any server |
+| `POST /chat` with `transport: 'poll'`, then `GET /runs/:id/poll?attempt&after&wait` | Long-poll transport: 202 with the run id, then the reply's batches as they come (`done`, or `reset` when another server picked it up) |
 
 Long runs keep their queue in `tv_runs` (status `queued`, the job, the server holding it and until when, tries, a stop
 flag) and each reply's stream in `tv_run_events`, in batches per try. A claim succeeds only on the tries it read, so
