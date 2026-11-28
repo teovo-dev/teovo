@@ -3,7 +3,7 @@
 import { createGoogleGenerativeAI } from '@ai-sdk/google'
 import { defaultSettingsMiddleware, wrapLanguageModel } from 'ai'
 import { migrate, postgresFiles, postgresStorage } from '@teovo/db'
-import { builtinViews, createAssistant, defineReader, defineTool, type Identity } from '@teovo/server'
+import { builtinViews, createAssistant, defineCheck, defineReader, defineTool, noClaimedChanges, type Identity } from '@teovo/server'
 import { readFileSync } from 'node:fs'
 import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 import pg from 'pg'
@@ -55,6 +55,19 @@ const teovo = createAssistant({
   storage: postgresStorage(query),
   formats: { locale: 'en-IN', currency: 'INR', timeZone: 'Asia/Kolkata' },
   limits: { user: { messages: 200 } },
+  // Done-checks: a reply is held until it passes these. Teovo's own catches "Payment recorded" next to a card that
+  // still waits for Confirm; the shop's own refuses an amount in rupees when no tool was asked for one.
+  checks: [
+    noClaimedChanges,
+    defineCheck({
+      name: 'amounts-from-tools',
+      check: (r) => (/₹\s?\d/.test(r.text) && !r.toolCalls.length && !r.cards.length
+        ? 'It gives an amount in rupees without looking anything up. Use the tools for every number, then answer.'
+        : null),
+    }),
+    // For seeing a refusal by hand: DEMO_REFUSE_FIRST=1 npm run server refuses every first reply once.
+    ...(process.env.DEMO_REFUSE_FIRST ? [defineCheck({ name: 'demo-refuse-first', check: (r) => (r.attempt === 0 ? 'Start the reply with "Checked:".' : null) })] : []),
+  ],
   // For trying the stalled-reply timeout by hand: DEMO_FIRST_CHUNK_MS=300 npm run server. Default: Teovo's (30 s).
   ...(process.env.DEMO_FIRST_CHUNK_MS ? { timeouts: { firstChunkMs: Number(process.env.DEMO_FIRST_CHUNK_MS) } } : {}),
   attachments: {},
@@ -259,6 +272,7 @@ const teovo = createAssistant({
   on: {
     error: (e) => console.error('[teovo error]', e instanceof Error ? e.message : e),
     modelSwitch: (from, e) => console.warn(`[teovo] ${from} failed (${e instanceof Error ? e.message : e}); trying the backup`),
+    check: (c) => console.warn(`[teovo] check ${c.name} refused a reply (try ${c.attempt + 1}${c.final ? ', last' : ''}): ${c.problem}`),
   },
 })
 

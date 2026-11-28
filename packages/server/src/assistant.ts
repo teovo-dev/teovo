@@ -1,5 +1,6 @@
 import type { LanguageModelV4 } from '@ai-sdk/provider'
-import { convertToModelMessages, createUIMessageStream, createUIMessageStreamResponse, isStepCount, streamText, tool, toUIMessageStream, type ModelMessage, type ToolSet, type UIMessage } from 'ai'
+import { convertToModelMessages, createUIMessageStream, createUIMessageStreamResponse, isStepCount, streamText, tool, toUIMessageStream, type ModelMessage, type ToolSet, type InferUIMessageChunk, type UIMessage } from 'ai'
+import { CHECK_FAILED, firstProblem, refusedNote, type DoneCheck } from './checks.js'
 import { fallbackModel } from './fallback.js'
 import { CardError, cardForModel, decide, publicCard, type CardHandler, type CardRules, type Decision } from './cards.js'
 import type { CardEventKind, Miss } from './storage.js'
@@ -112,6 +113,14 @@ export interface AssistantConfig<DB = unknown> {
   completions?: (ctx: { identity: Identity; db: DB }) => Promise<string[]> | string[]
   /** The cannot_help tool, which logs what people asked for and couldn't get (GET …/misses). Default on; false to leave it out. */
   misses?: boolean
+  /**
+   * Done-checks: rules every reply must pass before the user sees it. With any set, the reply's words are held until
+   * the checks pass (steps, cards and buttons still show as they happen). A refused reply is written again with the
+   * problem explained, up to `checkRetries` times; if every try is refused, the user gets a plain sentence instead.
+   */
+  checks?: readonly DoneCheck<DB>[]
+  /** How many times a refused reply is written again. Default 1. */
+  checkRetries?: number
   /** Saved on each run, so a change in replies can be traced to a change in instructions. */
   promptVersion?: string
   /** Tool inputs and outputs longer than this are cut in the run log (the model still sees all of it). Default 8000 characters. */
@@ -129,6 +138,8 @@ export interface AssistantConfig<DB = unknown> {
     miss?: (miss: Miss) => void
     /** A reader answered (or failed: error set). */
     read?: (r: { name: string; ok: boolean; error?: string; ms: number }, identity: Identity) => void
+    /** A done-check refused a reply (attempt 0 is the first try). `final` when no try is left and the user got CHECK_FAILED. */
+    check?: (c: { runId: string; name: string; problem: string; attempt: number; final: boolean }, identity: Identity) => void
   }
 }
 
@@ -193,6 +204,9 @@ function titleFrom(m: UIMessage): string {
   if (!text) return 'Picture'
   return text.length > 60 ? `${text.slice(0, 57).trimEnd()}…` : text
 }
+
+/** One piece of a reply's stream, as the panel reads it. */
+type Chunk = InferUIMessageChunk<UIMessage<{ runId: string; threadId: string; formats: Formats }>>
 
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
@@ -346,6 +360,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
                   const p = out as Proposal
                   const card: StoredCard = { ...p, ...(t.version ? { version: t.version } : {}), id: crypto.randomUUID(), threadId: thread.id, runId, status: 'shown', ...(seen.size ? { untrustedSources: [...seen] } : {}) }
                   await storage.saveCard(card)
+                  runCards.push({ kind: card.kind, title: card.title })
                   await logEvent(card, 'proposed', identity!)
                   config.on?.card?.(card)
                   shown = true
@@ -438,6 +453,21 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
         let streamError: unknown
         let shown = false   // a card, view or button reached the user in this reply
         const links = new Map<string, RecordLink>()   // records the answer came from (read tools' links)
+        const runCards: { kind: string; title: string }[] = []
+        // With done-checks, the reply's words wait here until they pass; everything else goes out as it happens.
+        const checks = config.checks ?? []
+        let held: Chunk[] = []
+        const reading: Promise<void>[] = []
+        const send = (from: ReadableStream<InferUIMessageChunk<UIMessage>>) => {
+          const s = from as ReadableStream<Chunk>
+          if (!checks.length) { writer.merge(s); return }
+          let ended!: () => void
+          reading.push(new Promise<void>((r) => { ended = r }))
+          writer.merge(s.pipeThrough(new TransformStream<Chunk, Chunk>({
+            transform(c, out) { if (c.type === 'text-start' || c.type === 'text-delta' || c.type === 'text-end') held.push(c); else out.enqueue(c) },
+            flush() { ended() },
+          })))
+        }
         const modelMessages = await convertToModelMessages(history, {
             // Earlier cards reach the model with their status now, so it knows what the user confirmed or skipped.
             convertDataPart: (p) => {
@@ -466,9 +496,10 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
             abortSignal: req.signal,
           })
           // Our sentence for the user, not the SDK's "An error occurred."; tool errors still reach the model as they are.
-          writer.merge(toUIMessageStream({ stream: r.stream, sendStart: false, sendFinish: false, onError: () => FAILED, redactToolErrors: false }))
+          send(toUIMessageStream({ stream: r.stream, sendStart: false, sendFinish: false, onError: () => FAILED, redactToolErrors: false }))
           return r
         }
+        const text0 = text   // the user's message, before `text` below starts holding the reply
         let result = run(modelMessages)
         const results = [result]
         try {
@@ -494,7 +525,7 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
               timeout: { chunkMs: timeouts.chunkMs, totalMs: timeouts.totalMs },
             })
             results.push(again)
-            writer.merge(toUIMessageStream({ stream: again.stream, sendStart: false, sendFinish: false, onError: () => NO_ANSWER, redactToolErrors: false }))
+            send(toUIMessageStream({ stream: again.stream, sendStart: false, sendFinish: false, onError: () => NO_ANSWER, redactToolErrors: false }))
             text = await Promise.resolve(again.text).catch(() => NO_ANSWER)
             // Still nothing (Gemini can end even this one with no words, e.g. UNEXPECTED_TOOL_CALL): a plain sentence,
             // never a blank reply.
@@ -504,6 +535,35 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
               writer.write({ type: 'text-delta', id, delta: NO_ANSWER })
               writer.write({ type: 'text-end', id })
               text = NO_ANSWER
+            }
+          }
+          if (checks.length) {
+            const retries = config.checkRetries ?? 1
+            for (let attempt = 0; ; attempt++) {
+              await Promise.all(reading)   // every held word of this try has arrived
+              if (req.signal.aborted) { for (const c of held) writer.write(c); break }   // a stopped reply keeps what it had
+              const words = held.filter((c) => c.type === 'text-delta').map((c) => (c as { delta: string }).delta).join('')
+              const toolCalls = (await Promise.all(results.map((r) => Promise.resolve(r.steps).catch(() => [])))).flat()
+                .flatMap((st) => st.toolCalls.map((tc) => ({ name: tc.toolName, input: tc.input })))
+              const found = await firstProblem(checks, { text: words, question: text0, cards: runCards, toolCalls, attempt }, { identity: identity!, db, page }, (e) => config.on?.error?.(e, { identity, threadId: thread.id }))
+              if (!found) { for (const c of held) writer.write(c); break }
+              const final = attempt >= retries
+              config.on?.check?.({ runId, name: found.name, problem: found.problem, attempt, final }, identity!)
+              held = []
+              if (final) {
+                const id = `checked-${runId}`
+                writer.write({ type: 'text-start', id })
+                writer.write({ type: 'text-delta', id, delta: CHECK_FAILED })
+                writer.write({ type: 'text-end', id })
+                text = CHECK_FAILED
+                break
+              }
+              const note: ModelMessage = { role: 'user', content: refusedNote(found.problem) }
+              sofar = [...sofar, note]
+              result = run(sofar)
+              results.push(result)
+              text = await result.text
+              sofar = [...sofar, ...(await result.responseMessages)]
             }
           }
           if (links.size) writer.write({ type: 'data-sources', id: `sources-${runId}`, data: { links: [...links.values()] } })

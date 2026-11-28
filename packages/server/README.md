@@ -5,7 +5,7 @@ chat's tool loop, cards the user confirms (with undo), readers that fill forms f
 voice to text, model fallback, per-tenant and per-user limits, usage and logs.
 
 ```ts
-import { createAssistant, defineTool, defineReader, builtinViews } from '@teovo/server'
+import { createAssistant, defineTool, defineReader, builtinViews, noClaimedChanges } from '@teovo/server'
 
 export const teovo = createAssistant({
   identify: async (req) => ({ tenantId, userId, role }),   // null → 401
@@ -16,6 +16,7 @@ export const teovo = createAssistant({
   views: builtinViews,
   tools: [/* defineTool({ name, kind: 'read' | 'propose' | 'action', input, run }) */],
   readers: [/* defineReader({ name, accepts, schema, instructions, after }) */],
+  checks: [noClaimedChanges],                              // rules a reply must pass before the user sees it
 })
 
 // Mount on any route prefix: a web Request in, a Response out.
