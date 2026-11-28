@@ -125,6 +125,7 @@ useAssistantContext({ path: '/orders/142', title: 'Order', record: { type: 'orde
 | Changes the app applies in the browser | `cards: { kind: { inApp: true } }` | `onCard` on the provider |
 | Forms in chat | `forms: { submitKind: … }` | Works with the built-in views |
 | Limits | `limits: { user: { messages: 200 } }` | The panel shows how many messages are left |
+| Done-checks (rules a reply must pass before the user sees it) | `checks: [noClaimedChanges, defineCheck({ name, check })]`, `checkRetries` | Nothing: the panel gets only the reply that passed |
 | Dates and money | `formats: { locale, currency, timeZone }` | Applied automatically |
 | Cheap model for simple questions | `route: (ctx) => models \| undefined` | Nothing needed |
 | Monitoring | `on: { error, usage, miss, rating, … }`, `promptVersion` | Nothing needed |
