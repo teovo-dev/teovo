@@ -108,7 +108,7 @@ export interface Storage {
 /** What a queued run carries, so any server can run it: who asked, which message, from which screen, on which models. */
 export interface RunJob { identity: Identity; messageId: string; page?: Page; models: string[] }
 export interface ClaimedRun { id: string; threadId: string; tenantId: string; userId: string; attempts: number; job: RunJob; stopRequested: boolean }
-export interface RunState { id: string; threadId: string; tenantId: string; userId: string; status: RunStatus; attempts: number }
+export interface RunState { id: string; threadId: string; tenantId: string; userId: string; status: RunStatus; attempts: number; job?: RunJob }
 /** A batch of a reply's stream, as the panel reads it; seq counts batches from 0 within one try. */
 export interface RunEvents { seq: number; chunks: unknown[] }
 
@@ -353,7 +353,7 @@ export function memoryStorage() {
       },
       async state(id) {
         const r = runs.get(id)
-        return r ? { id, threadId: r.threadId, tenantId: r.tenantId, userId: r.userId, status: r.status, attempts: r.attempts ?? 0 } : null
+        return r ? { id, threadId: r.threadId, tenantId: r.tenantId, userId: r.userId, status: r.status, attempts: r.attempts ?? 0, ...(r.job ? { job: structuredClone(r.job) } : {}) } : null
       },
       async active(threadId) {
         return [...runs.values()].filter((r) => r.threadId === threadId && (r.status === 'queued' || r.status === 'running'))

@@ -36,7 +36,7 @@ export const stepRecord = (x: any): StepRecord => ({
 })
 
 export const claimed = (r: any): ClaimedRun => ({ id: r.id, threadId: r.thread_id, tenantId: r.tenant_id, userId: r.user_id, attempts: r.attempts, job: r.job, stopRequested: Boolean(r.stop_requested_at) })
-export const runState = (r: any): RunState => ({ id: r.id, threadId: r.thread_id, tenantId: r.tenant_id, userId: r.user_id, status: r.status, attempts: r.attempts })
+export const runState = (r: any): RunState => ({ id: r.id, threadId: r.thread_id, tenantId: r.tenant_id, userId: r.user_id, status: r.status, attempts: r.attempts, ...(r.job ? { job: r.job } : {}) })
 
 const thread = (r: any): Thread => ({ id: r.id, tenantId: r.tenant_id, userId: r.user_id, title: r.title, createdAt: new Date(r.created_at).toISOString() })
 
@@ -257,7 +257,7 @@ export function postgresStorage(query: Query): Storage {
       },
       async state(id) {
         if (!/^[0-9a-f-]{36}$/i.test(id)) return null
-        const r = await query('select id, thread_id, tenant_id, user_id, status, attempts from tv_runs where id = $1', [id])
+        const r = await query('select id, thread_id, tenant_id, user_id, status, attempts, job from tv_runs where id = $1', [id])
         return r.rows[0] ? runState(r.rows[0]) : null
       },
       async active(threadId) {

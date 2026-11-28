@@ -93,7 +93,7 @@ cover it but nobody has tried it by hand. A feature counts as done only when thi
 | Search across past conversations, with automatic titles | v2 |  |  | not checked | kit tables |
 | Dashboard of usage, top questions, misses and ratings | v2 |  |  | not checked | kit tables |
 | A tenant brings its own model key and pays for its own AI use | v2 |  |  | not checked | kit tables |
-| Spend check before a run, and a hold that can be raised mid-run | v2 |  |  | scobly, parityai | kit hook |
+| Spend check before a run, and a hold that can be raised mid-run: `spend: { hold, reserve, settle, cost?, step? }`. The app's own wallet does the holding (Teovo keeps no balance): a reply is refused with the app's sentence before anything is saved, a tool raises the hold with `ctx.reserve(amount)` before costly work, `cost` raises it as tokens add up and ends the reply with a sentence when refused, and `settle` gets the status and what was used. Works with long runs (a resumed reply is not held again; one stopped while queued is settled) | v2 | Built (#62) | Yes: Little Oven with Gemini 2.5 Flash and a 3-credit demo wallet: a reply held 1, was raised twice as it passed 10,000 tokens and charged 3; the next message was refused with the shop's sentence; with 2 credits a reply kept its table, ended with the sentence and got both back | scobly, parityai | kit hook |
 | Planned model switch inside one run, such as analyst to designer | v2 |  |  | parityai, scobly | kit |
 | Runs started with no user present, such as scheduled or heartbeat runs | v2 |  |  | scobly, parityai | kit |
 | Long-poll transport for hosts that hold back streams | v2 |  |  | scobly | kit |

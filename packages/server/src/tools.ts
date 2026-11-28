@@ -62,6 +62,11 @@ export interface ToolContext<DB = unknown> {
   /** Wrap text that came from outside the app (customer notes, screenshots, web pages). See untrusted.ts. */
   untrusted: (text: string, source: string) => string
   /**
+   * With `spend` set: set more aside for this reply before costly work (e.g. a report), in the app's unit. False when
+   * it can't be: then don't do the costly part, and say so. Undefined when the app has no spend rules.
+   */
+  reserve?: (amount: number, reason?: string) => Promise<boolean>
+  /**
    * The pictures on the message this reply answers (only while chatting, and only when the assistant keeps files).
    * A propose tool can put an id in its card's payload, e.g. the bill a "save this expense" card came from.
    */
