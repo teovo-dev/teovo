@@ -318,8 +318,8 @@ function Message({ message, ask, stopped, last, busy, ...props }: { message: Teo
         return null
       })}
       {props.showSteps === false ? running.map((p) => {
-        const name = (p.data as Step).name
-        return <div key={p.id} className="tv-step">{props.stepLabels?.[name] ?? `Using ${name.replace(/_/g, ' ')}`}…</div>
+        const { name, label } = p.data as Step
+        return <div key={p.id} className="tv-step">{props.stepLabels?.[name] ?? label ?? `Using ${name.replace(/_/g, ' ')}`}…</div>
       }) : null}
       {stopped ? <div className="tv-stopped">Stopped</div> : null}
       {!busy && message.role === 'user' && ownText ? (
@@ -332,7 +332,7 @@ function Message({ message, ask, stopped, last, busy, ...props }: { message: Teo
   )
 }
 
-interface StepView { id: string; name: string; kind?: Step['kind']; state: 'running' | 'done'; ms?: number; error?: string; input?: unknown; output?: unknown; thinking?: string }
+interface StepView { id: string; name: string; label?: string; kind?: Step['kind']; state: 'running' | 'done'; ms?: number; error?: string; input?: unknown; output?: unknown; thinking?: string }
 
 /** What the assistant did for one reply, from its step parts, its tool parts (input and result) and its thinking. */
 function stepsOf(message: TeovoMessage): StepView[] {
@@ -350,7 +350,7 @@ function stepsOf(message: TeovoMessage): StepView[] {
     if (p.type !== 'data-step') continue
     const st = p.data as Step
     const t = tools.get(p.id ?? '')
-    out.push({ id: p.id ?? st.name, name: st.name, kind: st.kind, state: st.state, ms: st.ms, error: st.error ?? t?.errorText, input: t?.input, output: t?.output })
+    out.push({ id: p.id ?? st.name, name: st.name, ...(st.label ? { label: st.label } : {}), kind: st.kind, state: st.state, ms: st.ms, error: st.error ?? t?.errorText, input: t?.input, output: t?.output })
   }
   return out
 }
@@ -372,7 +372,7 @@ function StepsList({ message, live, open, labels, details }: { message: TeovoMes
   const [shown, setShown] = useState(open)
   if (!steps.length) return null
   const label = (s: StepView) => s.name === 'thinking' ? 'Thought it through'
-    : labels?.[s.name] ?? (s.kind === 'propose' ? `Prepared a change (${plain(s.name)})` : s.kind === 'action' ? `Offered a button (${plain(s.name)})` : `Looked up ${plain(s.name)}`)
+    : labels?.[s.name] ?? s.label ?? (s.kind === 'propose' ? `Prepared a change (${plain(s.name)})` : s.kind === 'action' ? `Offered a button (${plain(s.name)})` : `Looked up ${plain(s.name)}`)
   const failed = steps.filter((s) => s.error).length
   const list = (
     <ol className="tv-steps-list">

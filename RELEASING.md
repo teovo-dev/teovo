@@ -2,8 +2,8 @@
 
 The four packages (`@teovo/server`, `@teovo/react`, `@teovo/db`, `teovo`) always share one version number. They are
 published from GitHub Actions (`.github/workflows/publish.yml`) through npm **trusted publishing**: npm trusts that
-workflow directly, so there is no npm token anywhere. Each release is **staged**: it reaches npm but stays hidden until
-a maintainer approves it with two-factor authentication.
+workflow directly, so there is no npm token anywhere. Pushing a version tag publishes it: there is no second approval
+on npmjs.com, so only people trusted to release may push `v*` tags.
 
 ## Once
 
@@ -17,7 +17,7 @@ a maintainer approves it with two-factor authentication.
 
 3. **Trusted publishing, for each of the four packages** on npmjs.com → the package → Settings → Trusted publishing →
    GitHub Actions: organization `teovo-dev`, repository `teovo`, workflow `publish.yml`, no environment, allowed
-   action: stage publish. Then Settings → Publishing access → "Require two-factor authentication and disallow tokens".
+   actions: tick "Allow npm publish" (stage publish is always allowed). Then Settings → Publishing access → "Require two-factor authentication and disallow tokens".
    A new trusted publisher must be used for a publish within 2 days, or it expires and has to be made again.
 
 ## Each release
@@ -36,10 +36,8 @@ a maintainer approves it with two-factor authentication.
    git tag v0.2.0 && git push origin v0.2.0
    ```
 
-   The workflow checks the tag matches every package's version, runs the type-check and all tests, and stages the
-   packages in order (server, db, react, cli), with provenance.
-4. Approve each staged package on npmjs.com (your account → Staged Packages) or with `npm stage list` and
-   `npm stage approve <stage-id>`, using your security key. Only then does the version go public.
+   The workflow checks the tag matches every package's version, runs the type-check and all tests, and publishes the
+   packages in order (server, db, react, cli), with provenance. They are public as soon as the workflow finishes.
 
 ## What each package ships
 

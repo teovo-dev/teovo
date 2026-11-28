@@ -9,5 +9,6 @@ export { defaultViews, formatValue, type CellFormat, type ViewComponent, type Vi
 export { readFile, shrinkPicture, SHRINK_BYTES, SHRINK_SIDE, useRecorder, useVoice, type PendingFile } from './input.js'
 export { Markdown } from './markdown.js'
 export { AssistantSheet, SHEET_WIDTH, themeStyle, type AssistantSheetProps, type Theme } from './sheet.js'
+export { AllowanceMeter, type AllowanceMeterProps } from './allowance.js'
 export { AssistantPanel, complete, pageText, type AssistantPanelProps, type CardState } from './panel.js'
 export type { Action, AllowanceItem, Card, CardDecision, Formats, View, Page, Policy, Sources, Suggestions, ThreadSummary, Step, TeovoData, TeovoMessage } from './types.js'
