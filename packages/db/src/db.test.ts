@@ -123,7 +123,7 @@ suite('@teovo/db on Postgres', () => {
     const s = postgresStorage(query)
     const t = await s.createThread('shop-1', 'u1')
     const id = crypto.randomUUID()
-    await s.saveCard({ id, threadId: t.id, runId: crypto.randomUUID(), kind: 'pay', title: 'Pay', before: { paid: 0 }, payload: { a: 1 }, status: 'shown', untrustedSources: ['customer note'], lines: ['2 × Belgian', 'Paid by GPay'] })
+    await s.saveCard({ id, threadId: t.id, runId: crypto.randomUUID(), kind: 'pay', title: 'Pay', before: { paid: 0 }, payload: { a: 1 }, status: 'shown', untrustedSources: ['customer note'], lines: ['2 × Belgian', 'Paid by GPay'], recordVersion: '{"paid":0}' })
     expect(await s.getCard('shop-1', 'u2', id)).toBeNull()
     expect(await s.getCard('shop-2', 'u1', id)).toBeNull()
     expect(await s.getCard('shop-1', 'u1', id)).toMatchObject({ id, status: 'shown', before: { paid: 0 }, payload: { a: 1 }, untrustedSources: ['customer note'], lines: ['2 × Belgian', 'Paid by GPay'] })
@@ -131,7 +131,8 @@ suite('@teovo/db on Postgres', () => {
     const at = new Date().toISOString()
     const both = await Promise.all([s.updateCard(id, ['shown'], { status: 'confirmed', decidedBy: 'u1', decidedAt: at }), s.updateCard(id, ['shown'], { status: 'confirmed', decidedBy: 'u1', decidedAt: at })])
     expect(both.filter(Boolean)).toHaveLength(1)
-    expect(await s.updateCard(id, ['confirmed'], { reversible: true, undo: { paymentId: 'p9' } })).toMatchObject({ status: 'confirmed', decidedBy: 'u1', decidedAt: at, reversible: true, undo: { paymentId: 'p9' } })
+    expect((await s.getCard('shop-1', 'u1', id))?.recordVersion).toBe('{"paid":0}')
+    expect(await s.updateCard(id, ['confirmed'], { reversible: true, undo: { paymentId: 'p9' }, recordVersion: '{"paid":200}' })).toMatchObject({ status: 'confirmed', decidedBy: 'u1', decidedAt: at, reversible: true, undo: { paymentId: 'p9' }, recordVersion: '{"paid":200}' })
     expect(await s.updateCard(id, ['confirmed'], { status: 'shown', decidedBy: undefined, decidedAt: undefined })).not.toHaveProperty('decidedBy')
     expect((await s.listCards(t.id)).map((c) => c.status)).toEqual(['shown'])
 

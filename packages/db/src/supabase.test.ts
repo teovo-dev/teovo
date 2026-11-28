@@ -66,10 +66,11 @@ suite('@teovo/db on Supabase (supabaseStorage)', () => {
     const t = tenant()
     const th = await s.createThread(t, 'u1')
     const id = crypto.randomUUID()
-    await s.saveCard({ id, threadId: th.id, runId: crypto.randomUUID(), kind: 'pay', title: 'Pay', after: { paid: 200 }, payload: { a: 1 }, status: 'shown', fields: [{ key: 'paid', format: 'money' }], lines: ['Paid by GPay'] })
+    await s.saveCard({ id, threadId: th.id, runId: crypto.randomUUID(), kind: 'pay', title: 'Pay', after: { paid: 200 }, payload: { a: 1 }, status: 'shown', fields: [{ key: 'paid', format: 'money' }], lines: ['Paid by GPay'], recordVersion: '{"paid":0}' })
     expect(await s.getCard(t, 'u2', id)).toBeNull()
     expect(await s.getCard(t, 'u1', id)).toMatchObject({ id, kind: 'pay', status: 'shown', after: { paid: 200 }, fields: [{ key: 'paid', format: 'money' }], lines: ['Paid by GPay'] })
-    const won = await s.updateCard(id, ['shown'], { status: 'confirmed', decidedBy: 'u1', decidedAt: new Date().toISOString(), reversible: true })
+    const won = await s.updateCard(id, ['shown'], { status: 'confirmed', decidedBy: 'u1', decidedAt: new Date().toISOString(), reversible: true, recordVersion: '{"paid":200}' })
+    expect(won?.recordVersion).toBe('{"paid":200}')
     expect(won).toMatchObject({ status: 'confirmed', reversible: true, decidedBy: 'u1' })
     expect(await s.updateCard(id, ['shown'], { status: 'skipped' })).toBeNull()   // a second tap loses
     expect((await s.listCards(th.id)).map((c) => c.status)).toEqual(['confirmed'])

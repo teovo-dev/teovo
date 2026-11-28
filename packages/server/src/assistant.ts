@@ -3,7 +3,7 @@ import { convertToModelMessages, createUIMessageStream, createUIMessageStreamRes
 import { CHECK_FAILED, firstProblem, refusedNote, type DoneCheck } from './checks.js'
 import { runTrace } from './trace.js'
 import { fallbackModel } from './fallback.js'
-import { CardError, cardForModel, decide, publicCard, type CardHandler, type CardRules, type Decision } from './cards.js'
+import { CardError, cardForModel, decide, publicCard, type CardHandler, type CardRules, type Decision, fingerprint } from './cards.js'
 import type { CardEventKind, Miss } from './storage.js'
 import { allowance, checkLimits, limitMessage, type LimitHit, type Limits } from './limits.js'
 import type { ClaimedRun, Storage, StoredCard, Thread, Totals, UsageRow } from './storage.js'
@@ -397,6 +397,11 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
   for (const v of config.views ?? []) {
     if (config.tools.some((t) => t.name === `show_${v.name}`)) throw new Error(`createAssistant: tool show_${v.name} clashes with the view ${v.name}`)
   }
+  /** The fingerprint of the record a new card changes, when its applier says how to read that record (`current`). */
+  const recordVersionOf = async (p: Proposal, ctx: ToolContext<DB>): Promise<string | undefined> => {
+    const h = config.cards?.[p.kind]
+    return h && 'current' in h && h.current ? fingerprint(await h.current(p.payload, ctx)) : undefined
+  }
 
   const redact = makeRedactor(config.redact)
 
@@ -625,7 +630,8 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
                 await storage.saveStep({ ...step, input: logged.value, output: result.value, truncated: logged.truncated || result.truncated, durationMs: Date.now() - started })
                 if (t.kind === 'propose') {
                   const p = out as Proposal
-                  const card: StoredCard = { ...p, ...(t.version ? { version: t.version } : {}), id: crypto.randomUUID(), threadId: thread.id, runId, status: 'shown', ...(seen.size ? { untrustedSources: [...seen] } : {}) }
+                  const recordVersion = await recordVersionOf(p, ctx)
+                  const card: StoredCard = { ...p, ...(t.version ? { version: t.version } : {}), id: crypto.randomUUID(), threadId: thread.id, runId, status: 'shown', ...(seen.size ? { untrustedSources: [...seen] } : {}), ...(recordVersion !== undefined ? { recordVersion } : {}) }
                   await storage.saveCard(card)
                   runCards.push({ kind: card.kind, title: card.title })
                   await logEvent(card, 'proposed', identity!)
@@ -1254,7 +1260,8 @@ export function createAssistant<DB>(config: AssistantConfig<DB>) {
     const fields = proposal.fields ?? part.data.data.fields.map((f) => ({ key: f.name, label: f.label, format: f.type === 'date' ? 'date' as const : f.type === 'number' ? 'number' as const : 'text' as const }))
     // One card per form: its id comes from the conversation and the form, so a double tap (or two tabs) that both
     // get past the "already sent" check above save the same card, not two.
-    const card: StoredCard = { ...proposal, fields, id: await stableId(`${thread.id}:${viewId}`), threadId: thread.id, runId, status: 'shown' }
+    const recordVersion = await recordVersionOf(proposal, ctx)
+    const card: StoredCard = { ...proposal, fields, id: await stableId(`${thread.id}:${viewId}`), threadId: thread.id, runId, status: 'shown', ...(recordVersion !== undefined ? { recordVersion } : {}) }
     await storage.saveCard(card)
     await logEvent(card, 'proposed', identity)
     config.on?.card?.(card)

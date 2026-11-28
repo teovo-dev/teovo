@@ -1,6 +1,6 @@
 {
   "name": "teovo",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Teovo command line: set up, migrate and prune the assistant's tables",
   "license": "MIT",
   "type": "module",
@@ -34,7 +34,7 @@
     "access": "public"
   },
   "dependencies": {
-    "@teovo/db": "^0.1.3",
+    "@teovo/db": "^0.1.4",
     "pg": "^8.23.1"
   },
   "devDependencies": {
